@@ -2,7 +2,7 @@
 
 **Done:** implemented and verified.\
 **Partial:** some behavior works (see details).\
-**Unsupported:** not implemented yet. All features below are planned.
+**Unsupported:** not implemented yet.
 
 ## Phase 1: MVP
 
@@ -21,12 +21,12 @@
 
 | Implementation | Brief description |
 | --- | --- |
-| Unsupported | Predictable commands, help, and examples. |
-| Unsupported | Export the entire CLI argument schema for AI consumption. [*](#cli-schema) |
-| Unsupported | Stable exit statuses and actionable error codes. |
-| Unsupported | Default interactive prompts and explicit noninteractive operation. [*](#interaction) |
-| Unsupported | Deterministic stack files, plans, and structured output. |
-| Unsupported | Human-readable output and structured JSON results; diagnostics on stderr. |
+| Partial | Predictable commands, help, and examples; import/export pending. |
+| Done | Export the entire CLI argument schema for AI consumption. [*](#cli-schema) |
+| Partial | Stable exit statuses and actionable error codes; CLI errors implemented. |
+| Partial | Explicit noninteractive operation; default interactive prompts pending. [*](#interaction) |
+| Partial | Deterministic CLI output; stack files and plans pending. |
+| Done | Human-readable output and structured JSON results; diagnostics on stderr. |
 | Unsupported | Define a versioned stack format with harness compatibility ranges. |
 | Unsupported | Validate schema versions, server definitions, names, and secret references. |
 | Unsupported | Export Codex servers with credentials replaced by references. [*](#phase-1-boundaries) |
@@ -101,10 +101,10 @@ Existing export files require explicit overwrite.
 
 ### CLI schema
 
-[*] `--schema` will emit a versioned JSON description of every implemented command,
+[*] `--schema` emits a versioned JSON description of every implemented command,
 argument, option, type, default, requirement, constraint, and example. An AI can
 read it without scraping help text. Generate it from the command definitions to
-avoid drift. `--json` will emit structured results/errors; `--non-interactive` will disable prompts.
+avoid drift. `--json` emits structured results/errors; `--non-interactive` disables prompts.
 
 ### Interaction
 

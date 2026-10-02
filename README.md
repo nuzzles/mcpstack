@@ -12,6 +12,30 @@ stacks, and share setups across teams.
 cargo run
 ```
 
+## Agent interface
+
+```sh
+cargo run -- --schema
+cargo run -- --json --non-interactive
+cargo run -- --help
+```
+
+`--schema` emits schema version 1 as JSON, generated from the argument definitions
+used for parsing and help. It includes commands, flags, types, defaults,
+constraints, examples, and exit statuses. Its version is independent of stack
+file versions. Import/export commands are not implemented yet.
+
+`--json` emits one result (`{"ok":true,"result":...}`) or error
+(`{"ok":false,"error":{"code":...,"message":...}}`) on stdout, including help
+and version requests. `--schema` always emits JSON; invalid schema requests use
+the error envelope. `--non-interactive` disables prompts; current operations do
+not prompt in either mode.
+
+Exit statuses: **0** success/help/version, **1** output failure (`OUTPUT_ERROR` on
+stderr), **2** invalid arguments (`INVALID_ARGUMENT` in JSON mode). Output failures
+cannot guarantee a JSON result because stdout may be unavailable. Machine-readable
+argument errors omit input values to avoid exposing credentials.
+
 ## MSRV
 
 This crate's [Minimum Supported Rust Version (MSRV)][MSRV] is currently **1.98**.
