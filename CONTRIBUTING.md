@@ -1,8 +1,43 @@
 # Contributing
 
-Branch from `main`, keep changes focused, and open a pull request against `main`.
-Use a descriptive branch name and a conventional commit/PR title, such as
-`feat: export a stack` or `fix: preserve existing configuration`.
+## Git Workflow
+
+Never commit directly to `main`. Branch from `main` and open a pull request against
+`main`, including for small changes.
+
+### Branch Naming Convention
+
+All branches use `username/brief-description`: a lowercase GitHub handle and a
+lowercase kebab-case description. Agent branches use the `codex/` prefix.
+
+Examples:
+
+- `nuzzles/export-stack`
+- `nuzzles/preserve-codex-settings`
+- `codex/export-stack`
+
+### Pull Requests
+
+PR titles follow Conventional Commits: `type: description`, with an optional
+scope (`type(scope): description`). Use a lowercase description, such as
+`feat: export a stack` or `fix(codex): preserve existing configuration`.
+Allowed types are `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`,
+`build`, `ci`, `chore`, and `revert`.
+
+CI lints titles and descriptions in [.github/workflows/pr-lint.yml](.github/workflows/pr-lint.yml),
+including after edits.
+
+Use the [PR template](.github/PULL_REQUEST_TEMPLATE.md).
+Keep each PR focused on one coherent change and link any
+relevant issue. Describe the resulting behavior, important design decisions,
+exact checks and manual scenarios run, and known limitations or follow-up work.
+CI requires the template's sections in order with content in each section;
+comments and empty checkboxes do not count. Write `None` for sections that do not
+apply. This check also reruns after PR description edits.
+Resolve review feedback and rerun affected checks after the final change.
+Report the PR link when handing off completed work.
+
+## Checks
 
 Before opening a PR, run the same checks as CI:
 

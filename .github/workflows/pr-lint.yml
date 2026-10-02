@@ -1,0 +1,88 @@
+name: Lint PR
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lint-body:
+    name: PR template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Lint | PR description
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          template = Path(".github/PULL_REQUEST_TEMPLATE.md").read_text()
+          body = re.sub(r"<!--.*?-->", "", os.environ.get("PR_BODY", ""), flags=re.S)
+          heading_pattern = r"^##[ \t]+(.+?)[ \t]*$"
+          expected = re.findall(heading_pattern, template, flags=re.M)
+          headings = list(re.finditer(heading_pattern, body, flags=re.M))
+          errors = []
+          if not expected:
+              errors.append("The base branch PR template has no sections.")
+          if [match.group(1) for match in headings] != expected:
+              errors.append("Use the template sections in order: " + ", ".join(expected))
+          else:
+              for index, heading in enumerate(headings):
+                  end = headings[index + 1].start() if index + 1 < len(headings) else len(body)
+                  content = body[heading.end():end]
+                  content = re.sub(r"^[ \t]*[-*][ \t]+\[[ xX]\][ \t]*$", "", content, flags=re.M)
+                  if not content.strip():
+                      errors.append(f"Fill in '{heading.group(1)}'; use 'None' if it does not apply.")
+          if errors:
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                  summary.write("### PR description does not match the template\n\n")
+                  summary.writelines(f"- {error}\n" for error in errors)
+              raise SystemExit("\n".join(errors))
+          print("PR description matches the template.")
+          PY
+
+  lint-title:
+    name: conventional commit PR title
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install | commitlint
+        run: npm install --global @commitlint/cli@18 @commitlint/config-conventional@18.6.0
+
+      - name: Lint | PR title
+        shell: bash
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          CONFIG_FILE: ${{ runner.temp }}/commitlint.config.js
+          CONFIG: |
+            module.exports = { extends: ["@commitlint/config-conventional"] };
+        run: |
+          echo "$CONFIG" > "$CONFIG_FILE"
+          echo "$TITLE" | commitlint --config "$CONFIG_FILE" 2>&1 | tee "$RUNNER_TEMP/lint-output.txt"
+
+      - name: Report | Helpful error
+        if: failure()
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          echo "### PR title did not pass conventional commit linting" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          echo "$TITLE" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$RUNNER_TEMP/lint-output.txt" ]; then
+            cat "$RUNNER_TEMP/lint-output.txt" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "Use: type: lowercase description (optional scope: type(scope): description)." >> "$GITHUB_STEP_SUMMARY"
