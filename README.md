@@ -9,16 +9,17 @@ stacks, and share setups across teams.
 cargo run
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for checks and contribution guidelines.
-CI runs on pushes and pull requests. There is no release or deployment workflow.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
 
 ## MSRV
 
-This crate's [Minimum Supported Rust Version (MSRV)][MSRV] is declared by
-`package.rust-version` in Cargo.toml.
+This crate's [Minimum Supported Rust Version (MSRV)][MSRV] is currently **1.98**.
 
-CI checks compilation with this toolchain separately from the latest stable Rust
-checks. See [CONTRIBUTING.md](CONTRIBUTING.md#changing-the-msrv) for how to change
+| mcpstack | Minimum Rust version |
+| --- | --- |
+| 0.0.0 (unpublished) | 1.98 |
+
+See [CONTRIBUTING.md](CONTRIBUTING.md#changing-the-msrv) for how to change
 the MSRV.
 
 [MSRV]: Cargo.toml

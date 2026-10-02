@@ -19,9 +19,11 @@ Do not commit real client configurations or credentials as fixtures.
 
 ## Changing the MSRV
 
-Update only `package.rust-version` in Cargo.toml. The README refers to that field,
-and the dedicated MSRV CI job reads it automatically and runs `cargo check --locked`
-with the declared toolchain.
+Update `package.rust-version` in Cargo.toml, the README's current MSRV statement,
+and the current version's row in its compatibility table. Preserve rows for
+previous released versions when adding a new version. The dedicated MSRV CI job
+reads Cargo.toml automatically and runs `cargo check --locked` with the declared
+toolchain.
 
 Unless explicitly stated otherwise, contributions are dual licensed under
 MIT OR Apache-2.0, without additional terms or conditions.
