@@ -9,8 +9,6 @@ stacks, and share setups across teams.
 cargo run
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
-
 ## MSRV
 
 This crate's [Minimum Supported Rust Version (MSRV)][MSRV] is currently **1.98**.
@@ -23,6 +21,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md#changing-the-msrv) for how to change
 the MSRV.
 
 [MSRV]: Cargo.toml
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
 
 ## License
 
