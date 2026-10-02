@@ -21,6 +21,12 @@
 
 | Implementation | Brief description |
 | --- | --- |
+| Unsupported | Predictable commands, help, and examples. |
+| Unsupported | Export the entire CLI argument schema for AI consumption. [*](#cli-schema) |
+| Unsupported | Stable exit statuses and actionable error codes. |
+| Unsupported | Default interactive prompts and explicit noninteractive operation. [*](#interaction) |
+| Unsupported | Deterministic stack files, plans, and structured output. |
+| Unsupported | Human-readable output and structured JSON results; diagnostics on stderr. |
 | Unsupported | Define a versioned stack format with harness compatibility ranges. |
 | Unsupported | Validate schema versions, server definitions, names, and secret references. |
 | Unsupported | Export Codex servers with credentials replaced by references. [*](#phase-1-boundaries) |
@@ -43,12 +49,6 @@
 
 | Implementation | Brief description |
 | --- | --- |
-| Unsupported | Predictable commands, help, and examples. |
-| Unsupported | Export the entire CLI argument schema for AI consumption. [*](#cli-schema) |
-| Unsupported | Stable exit statuses and actionable error codes. |
-| Unsupported | Default interactive prompts and explicit noninteractive operation. [*](#interaction) |
-| Unsupported | Deterministic stack files, plans, and structured output. |
-| Unsupported | Human-readable output and structured JSON results; diagnostics on stderr. |
 | Unsupported | List server names, transports, commands/endpoints, and enabled state. |
 | Unsupported | Select servers by name; reject unknown selections. |
 | Unsupported | Diagnose missing, empty, malformed, and unsupported configs. |
@@ -101,10 +101,10 @@ Existing export files require explicit overwrite.
 
 ### CLI schema
 
-[*] Provide a CLI flag that emits a versioned JSON description of every command,
+[*] `--schema` will emit a versioned JSON description of every implemented command,
 argument, option, type, default, requirement, constraint, and example. An AI can
 read it without scraping help text. Generate it from the command definitions to
-avoid drift; exact flag naming remains to be decided.
+avoid drift. `--json` will emit structured results/errors; `--non-interactive` will disable prompts.
 
 ### Interaction
 
