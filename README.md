@@ -3,6 +3,9 @@
 A Rust CLI for humans and agents to install multiple MCP servers, version-control
 stacks, and share setups across teams.
 
+> [!WARNING]
+> mcpstack is in early development. See [FUNCTIONAL_REQUIREMENTS.md](FUNCTIONAL_REQUIREMENTS.md) for the feature checklist.
+
 ## Development
 
 ```sh
