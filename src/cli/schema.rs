@@ -48,6 +48,9 @@ struct ArgumentSchema {
     conflicts_with: Vec<String>,
 }
 
+// FIXME: Replace the custom CLI description with upstream JSON export when available.
+// https://github.com/clap-rs/clap/issues/918
+// https://github.com/clap-rs/clap/issues/6299
 pub fn describe(mut command: Command) -> CliSchema {
     command.build();
     CliSchema {
@@ -69,6 +72,9 @@ pub fn describe(mut command: Command) -> CliSchema {
     }
 }
 
+// FIXME: Delegate command-tree serialization to Clap when JSON/Serde support lands.
+// https://github.com/clap-rs/clap/issues/918
+// https://github.com/clap-rs/clap/issues/6299
 fn describe_command(command: &Command) -> CommandSchema {
     let mut arguments: Vec<_> = command.get_arguments().collect();
     arguments.sort_by_key(|arg| (arg.get_index(), arg.get_id().as_str()));
@@ -95,6 +101,9 @@ fn describe_command(command: &Command) -> CommandSchema {
     }
 }
 
+// FIXME: Use upstream argument serialization to avoid maintaining a partial metadata mapping.
+// https://github.com/clap-rs/clap/issues/918
+// https://github.com/clap-rs/clap/issues/6299
 fn describe_arg(command: &Command, arg: &Arg) -> ArgumentSchema {
     let possible_values: Vec<_> = arg
         .get_possible_values()
