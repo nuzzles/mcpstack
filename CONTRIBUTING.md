@@ -37,6 +37,12 @@ apply. This check also reruns after PR description edits.
 Resolve review feedback and rerun affected checks after the final change.
 Report the PR link when handing off completed work.
 
+## README policy
+
+Keep README.md very concise. README edits and additions must be made by a human
+or be targeted changes explicitly requested by a human. Agents must not expand
+or update the README as part of routine implementation or documentation work.
+
 ## Checks
 
 Before opening a PR, run the same checks as CI:
