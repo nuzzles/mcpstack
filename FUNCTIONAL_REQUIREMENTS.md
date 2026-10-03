@@ -1,8 +1,9 @@
 # Functional requirements
 
 **Done:** implemented and verified.\
-**Partial:** some behavior works (see details).\
-**Unsupported:** not implemented yet. All features below are planned.
+**Partial:** some behavior works; always add a linked asterisk beside the status
+to its entry in Current status at the bottom.\
+**Unsupported:** not implemented yet.
 
 ## Phase 1: MVP
 
@@ -21,6 +22,12 @@
 
 | Implementation | Brief description |
 | --- | --- |
+| Partial [*](#commands-and-help) | Predictable commands, help, and examples. |
+| Done | Export the entire CLI argument schema for AI consumption. [*](#cli-schema) |
+| Partial [*](#exit-statuses-and-error-codes) | Stable exit statuses and actionable error codes. |
+| Unsupported | Default interactive prompts and explicit noninteractive operation. [*](#interaction) |
+| Partial [*](#deterministic-output) | Deterministic stack files, plans, and structured output. |
+| Partial [*](#output-formats) | Human-readable output and structured JSON results; diagnostics on stderr. |
 | Unsupported | Define a versioned stack format with harness compatibility ranges. |
 | Unsupported | Validate schema versions, server definitions, names, and secret references. |
 | Unsupported | Export Codex servers with credentials replaced by references. [*](#phase-1-boundaries) |
@@ -43,12 +50,6 @@
 
 | Implementation | Brief description |
 | --- | --- |
-| Unsupported | Predictable commands, help, and examples. |
-| Unsupported | Export the entire CLI argument schema for AI consumption. [*](#cli-schema) |
-| Unsupported | Stable exit statuses and actionable error codes. |
-| Unsupported | Default interactive prompts and explicit noninteractive operation. [*](#interaction) |
-| Unsupported | Deterministic stack files, plans, and structured output. |
-| Unsupported | Human-readable output and structured JSON results; diagnostics on stderr. |
 | Unsupported | List server names, transports, commands/endpoints, and enabled state. |
 | Unsupported | Select servers by name; reject unknown selections. |
 | Unsupported | Diagnose missing, empty, malformed, and unsupported configs. |
@@ -101,10 +102,11 @@ Existing export files require explicit overwrite.
 
 ### CLI schema
 
-[*] Provide a CLI flag that emits a versioned JSON description of every command,
+[*] `--schema` emits a versioned JSON description of every implemented command,
 argument, option, type, default, requirement, constraint, and example. An AI can
 read it without scraping help text. Generate it from the command definitions to
-avoid drift; exact flag naming remains to be decided.
+avoid drift. Schema output is independent of future structured operation results
+and interactive controls.
 
 ### Interaction
 
@@ -151,3 +153,27 @@ installation mechanisms, and backup retention/recovery.
 
 Remote catalogs, team access controls, and automatic synchronization are later
 scope. Publishing and release/deployment automation require explicit authorization.
+
+## Current status
+
+### Commands and help
+
+Help, version, `--schema`, and runnable examples are implemented. Import/export
+commands are pending.
+
+### Exit statuses and error codes
+
+CLI exit statuses are 0 for success/help/version, 1 for output failures
+(`OUTPUT_ERROR`), and 2 for invalid arguments (`INVALID_ARGUMENT`). Errors for
+stack and harness operations are pending.
+
+### Deterministic output
+
+The CLI schema is generated deterministically from command definitions.
+Stack files, plans, and structured operation results are pending.
+
+### Output formats
+
+Help, version, and development status use text output; `--schema` emits JSON.
+Diagnostics go to stderr without echoing argument values. Structured JSON
+operation results are pending.
