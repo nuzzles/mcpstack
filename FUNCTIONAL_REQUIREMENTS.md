@@ -135,11 +135,12 @@ and interactive controls.
 redirected input must never prompt or hang; missing inputs produce actionable
 errors. Machine-readable results must remain parseable during interactive use.
 Codex export now prompts for each detected credential when stdin and stderr are
-terminals. The selection defaults to masking. `--non-interactive` and redirected
-input mask all detected credentials; `--expose-secrets` includes them without
-prompts. Prompt labels contain field paths, never values. Cancelling a selection
-aborts export before anything is printed on stdout. Other commands do not yet
-need interactive input.
+terminals, showing the current selection and total. The selection defaults to
+masking, with Yes/No to all choices for the current and remaining credentials.
+`--non-interactive` and redirected input mask all detected credentials;
+`--expose-secrets` includes them without prompts. Prompt labels contain field
+paths, never values. Cancelling a selection aborts export before anything is
+printed on stdout. Other commands do not yet need interactive input.
 
 ### Claude support
 
@@ -245,10 +246,11 @@ Export never reads or sets environment variables. For an inline credential argum
 the referenced environment value must contain the complete `--token=VALUE` argument.
 
 In an interactive terminal, `export codex` asks whether to mask or include each
-detected credential, with masking selected by default. `--non-interactive` masks
-all detected credentials without prompting, including when standard input is
-redirected. `export codex --expose-secrets` preserves literal values, including
-credentials, without prompting.
+detected credential, showing progress such as `Secret 1/12`. Masking is selected
+by default; Yes/No to all applies the chosen action to the current and remaining
+credentials. `--non-interactive` masks all detected credentials without prompting,
+including when standard input is redirected. `export codex --expose-secrets`
+preserves literal values, including credentials, without prompting.
 No export mode changes the source file or logs its values. Server names and field
 keys remain visible. Explicit config paths and imports are pending.
 

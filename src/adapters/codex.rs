@@ -115,7 +115,7 @@ impl CodexAdapter {
     pub fn export_with_decisions(
         &self,
         document: &str,
-        expose: impl FnMut(&str) -> Result<bool, ExportError>,
+        expose: impl FnMut(&str, usize, usize) -> Result<bool, ExportError>,
     ) -> Result<StackV1, ExportError> {
         export_with_decisions(document, expose)
     }

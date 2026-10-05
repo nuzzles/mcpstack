@@ -20,14 +20,14 @@ pub enum ExportError {
 /// Export one native entry per server. This reads data only: it does not resolve
 /// credentials, run helpers, or infer installed-client compatibility.
 pub fn export(document: &str, expose_secrets: bool) -> Result<StackV1, ExportError> {
-    export_with_decisions(document, |_| Ok(expose_secrets))
+    export_with_decisions(document, |_, _, _| Ok(expose_secrets))
 }
 
 /// Decide whether to expose each detected credential. The callback receives
-/// only a field path, never the credential value.
+/// only a field path and its one-based position and total, never the value.
 pub fn export_with_decisions(
     document: &str,
-    mut expose: impl FnMut(&str) -> Result<bool, ExportError>,
+    mut expose: impl FnMut(&str, usize, usize) -> Result<bool, ExportError>,
 ) -> Result<StackV1, ExportError> {
     let config: toml::Value = toml::from_str(document).map_err(|_| ExportError::Config)?;
     let servers = match config.get("mcp_servers") {
@@ -63,6 +63,24 @@ pub fn export_with_decisions(
             }
         }
     }
+    let mut total = 0;
+    visit_credentials(&mut stack, &mut names, &mut |_| {
+        total += 1;
+        Ok(true)
+    })?;
+    let mut current = 0;
+    visit_credentials(&mut stack, &mut names, &mut |path| {
+        current += 1;
+        expose(path, current, total)
+    })?;
+    Ok(stack)
+}
+
+fn visit_credentials(
+    stack: &mut StackV1,
+    names: &mut BTreeSet<String>,
+    expose: &mut impl FnMut(&str) -> Result<bool, ExportError>,
+) -> Result<(), ExportError> {
     for (server_name, server) in &mut stack.servers {
         if let Server::ClientSpecific { config, .. } = server {
             for (key, value) in config {
@@ -75,13 +93,13 @@ pub fn export_with_decisions(
                     &format!("{server_name}.{key}"),
                     secret_key(key),
                     key == "args",
-                    &mut names,
-                    &mut expose,
+                    names,
+                    expose,
                 )?;
             }
         }
     }
-    Ok(stack)
+    Ok(())
 }
 
 fn collect_references(value: &ClientValue, names: &mut BTreeSet<String>) {
@@ -423,16 +441,20 @@ command = "example"
 [mcp_servers.example.env]
 FIRST_TOKEN = "first-synthetic-secret"
 SECOND_TOKEN = "second-synthetic-secret"
+THIRD_TOKEN = { "$env" = "EXISTING_TOKEN" }
 "#;
         let mut seen = Vec::new();
-        let stack = export_with_decisions(document, |path| {
-            seen.push(path.to_owned());
+        let stack = export_with_decisions(document, |path, current, total| {
+            seen.push((path.to_owned(), current, total));
             Ok(path == "example.env.SECOND_TOKEN")
         })
         .unwrap();
         assert_eq!(
             seen,
-            ["example.env.FIRST_TOKEN", "example.env.SECOND_TOKEN"]
+            [
+                ("example.env.FIRST_TOKEN".to_owned(), 1, 2),
+                ("example.env.SECOND_TOKEN".to_owned(), 2, 2)
+            ]
         );
         let value = serde_json::to_value(&stack).unwrap();
         assert_eq!(
@@ -443,13 +465,17 @@ SECOND_TOKEN = "second-synthetic-secret"
             value["servers"]["example"]["config"]["env"]["SECOND_TOKEN"],
             "second-synthetic-secret"
         );
-        assert!(!seen.join(" ").contains("synthetic-secret"));
+        assert_eq!(
+            value["servers"]["example"]["config"]["env"]["THIRD_TOKEN"],
+            serde_json::json!({"$env":"EXISTING_TOKEN"})
+        );
+        assert!(!format!("{seen:?}").contains("synthetic-secret"));
     }
 
     #[test]
     fn cancelled_selection_returns_no_stack_or_secret_in_error() {
         let document = "[mcp_servers.example]\ncommand='example'\n[mcp_servers.example.env]\nTOKEN='synthetic-secret'\n";
-        let result = export_with_decisions(document, |_| Err(ExportError::Prompt));
+        let result = export_with_decisions(document, |_, _, _| Err(ExportError::Prompt));
         let error = result.err().unwrap();
         assert!(!error.to_string().contains("synthetic-secret"));
     }

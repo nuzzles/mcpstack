@@ -40,15 +40,30 @@ impl Export {
                 } else if non_interactive || !stdin().is_terminal() || !stderr().is_terminal() {
                     adapter.export(&document, false)?
                 } else {
-                    adapter.export_with_decisions(&document, |path| {
+                    let mut remaining_choice = None;
+                    adapter.export_with_decisions(&document, |path, current, total| {
+                        if let Some(choice) = remaining_choice {
+                            return Ok(choice);
+                        }
                         let selected = Select::new()
-                            .with_prompt(format!("Export {path}"))
-                            .items(["Mask with environment reference", "Include literal value"])
+                            .with_prompt(format!(
+                                "Secret {current}/{total}: Include {path} as a literal?"
+                            ))
+                            .items([
+                                "No, mask with environment reference",
+                                "Yes, include literal value",
+                                "No to all, mask this and remaining secrets",
+                                "Yes to all, include this and remaining secrets",
+                            ])
                             .default(0)
                             .report(false)
                             .interact_opt()
-                            .map_err(|_| ExportError::Prompt)?;
-                        selected.map(|index| index == 1).ok_or(ExportError::Prompt)
+                            .map_err(|_| ExportError::Prompt)?
+                            .ok_or(ExportError::Prompt)?;
+                        if selected >= 2 {
+                            remaining_choice = Some(selected == 3);
+                        }
+                        Ok(selected == 1 || selected == 3)
                     })?
                 };
                 // Prepare the complete result before exposing any content on stdout.
