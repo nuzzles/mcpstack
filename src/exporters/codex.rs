@@ -95,13 +95,15 @@ fn collect_references(value: &ClientValue, names: &mut BTreeSet<String>) {
 
 fn secret_key(key: &str) -> bool {
     let mut normalized = String::new();
-    for c in key.chars() {
+    let characters: Vec<_> = key.chars().collect();
+    for (index, &c) in characters.iter().enumerate() {
         if c.is_ascii_uppercase()
-            && normalized
-                .chars()
-                .last()
-                .is_some_and(|previous| previous.is_ascii_lowercase())
-            && key.chars().any(|character| character.is_ascii_lowercase())
+            && index > 0
+            && (characters[index - 1].is_ascii_lowercase()
+                || (characters[index - 1].is_ascii_uppercase()
+                    && characters
+                        .get(index + 1)
+                        .is_some_and(char::is_ascii_lowercase)))
         {
             normalized.push('_');
         }
@@ -150,6 +152,25 @@ fn secret_key(key: &str) -> bool {
         || normalized
             .split('_')
             .any(|part| matches!(part, "secret" | "password" | "passwd"))
+        || {
+            let parts: Vec<_> = normalized
+                .split('_')
+                .filter(|part| !part.is_empty())
+                .collect();
+            (parts.contains(&"token")
+                && !parts.iter().any(|part| {
+                    matches!(
+                        *part,
+                        "limit" | "count" | "budget" | "usage" | "length" | "size"
+                    )
+                }))
+                || parts.windows(2).any(|pair| {
+                    matches!(
+                        pair,
+                        ["api", "key"] | ["access", "key"] | ["private", "key"]
+                    )
+                })
+        }
 }
 
 fn protect(
@@ -175,8 +196,15 @@ fn protect(
         }
         ClientValue::Array(values) => {
             let mut next_secret = false;
+            let mut options = arguments;
             for (index, value) in values.iter_mut().enumerate() {
-                let (inline_secret, following_secret) = if arguments {
+                if options
+                    && !next_secret
+                    && matches!(value, ClientValue::String(text) if text == "--")
+                {
+                    options = false;
+                }
+                let (inline_secret, following_secret) = if options && !next_secret {
                     match value {
                         ClientValue::String(text) if text.starts_with('-') => {
                             let (flag, inline) = text
@@ -308,6 +336,62 @@ enabled = true
         assert_eq!(config["pin"], 1234);
         assert_eq!(config["enabled"], true);
         assert!(!value.to_string().contains("secret"));
+    }
+
+    #[test]
+    fn credential_qualifiers_are_masked_without_masking_token_settings() {
+        let document = r#"
+[mcp_servers.example]
+command = "example"
+url = "https://example.com/mcp"
+bearer_token_env_var = "SERVICE_TOKEN"
+output_token_limit = 512
+tokenCount = 12
+tokenBudget = 2048
+[mcp_servers.example.env]
+TOKEN_VALUE = "first-synthetic-secret"
+tokenValue = "second-synthetic-secret"
+GITHUB_TOKEN_RAW = "third-synthetic-secret"
+API_KEY_VALUE = "fourth-synthetic-secret"
+AWS_ACCESS_KEY_ID = "synthetic-key-id"
+"#;
+        let stack = export(document, false).unwrap();
+        let value = serde_json::to_value(&stack).unwrap();
+        let config = &value["servers"]["example"]["config"];
+        for key in [
+            "TOKEN_VALUE",
+            "tokenValue",
+            "GITHUB_TOKEN_RAW",
+            "API_KEY_VALUE",
+            "AWS_ACCESS_KEY_ID",
+        ] {
+            assert!(config["env"][key]["$env"].is_string(), "{key}");
+        }
+        assert_eq!(config["command"], "example");
+        assert_eq!(config["url"], "https://example.com/mcp");
+        assert_eq!(config["bearer_token_env_var"], "SERVICE_TOKEN");
+        assert_eq!(config["output_token_limit"], 512);
+        assert_eq!(config["tokenCount"], 12);
+        assert_eq!(config["tokenBudget"], 2048);
+        assert!(!to_yaml(&stack).unwrap().contains("synthetic"));
+    }
+
+    #[test]
+    fn argument_detection_stops_at_terminator_and_consumes_values_once() {
+        let document = r#"
+[mcp_servers.example]
+command = "example"
+args = ["--token", "--password", "ordinary", "--api-key=synthetic-secret", "--", "--token", "positional", "--password=ordinary"]
+"#;
+        let value = serde_json::to_value(export(document, false).unwrap()).unwrap();
+        let args = &value["servers"]["example"]["config"]["args"];
+        assert!(args[1]["$env"].is_string());
+        assert_eq!(args[2], "ordinary");
+        assert!(args[3]["$env"].is_string());
+        assert_eq!(args[4], "--");
+        assert_eq!(args[5], "--token");
+        assert_eq!(args[6], "positional");
+        assert_eq!(args[7], "--password=ordinary");
     }
 
     #[test]
