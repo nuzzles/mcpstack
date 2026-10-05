@@ -14,10 +14,17 @@ pub enum AdapterError {
     Detection,
     #[error("Codex 1.0.0 and later, including prereleases, require an explicit supported adapter.")]
     UnsupportedMajor,
+    #[error("Import supports only the checked stable Codex version 0.160.0.")]
+    UnsupportedImportVersion,
 }
 
 /// Select an adapter without reading or modifying client configuration.
 pub fn detect() -> Result<CodexAdapter, AdapterError> {
+    let version = detect_version()?;
+    CodexAdapter::select(&version)
+}
+
+fn detect_version() -> Result<Version, AdapterError> {
     let output = codex_command()?
         .arg("--version")
         .stdin(Stdio::null())
@@ -26,8 +33,7 @@ pub fn detect() -> Result<CodexAdapter, AdapterError> {
     if !output.status.success() {
         return Err(AdapterError::Detection);
     }
-    let version = parse_version(&output.stdout)?;
-    CodexAdapter::select(&version)
+    parse_version(&output.stdout)
 }
 
 #[cfg(not(windows))]
@@ -69,6 +75,33 @@ fn parse_version(output: &[u8]) -> Result<Version, AdapterError> {
         return Err(AdapterError::Detection);
     }
     Version::parse(version).map_err(|_| AdapterError::Detection)
+}
+
+/// An adapter validated for writes, constructed only after exact-version detection.
+pub struct CodexImportAdapter(());
+
+#[allow(dead_code, reason = "foundation for the stacked import CLI PR")]
+pub fn detect_import() -> Result<CodexImportAdapter, AdapterError> {
+    CodexImportAdapter::select(&detect_version()?)
+}
+
+impl CodexImportAdapter {
+    fn select(version: &Version) -> Result<Self, AdapterError> {
+        if version != &CURRENT_STABLE {
+            return Err(AdapterError::UnsupportedImportVersion);
+        }
+        Ok(Self(()))
+    }
+
+    #[allow(dead_code, reason = "foundation for the stacked import CLI PR")]
+    pub fn prepare(
+        &self,
+        stack: &StackV1,
+        lookup: impl FnMut(&str) -> Option<String>,
+    ) -> Result<std::collections::BTreeMap<String, toml::Table>, crate::importers::codex::ImportError>
+    {
+        crate::importers::codex::prepare(stack, lookup)
+    }
 }
 
 /// Latest stable release checked against the native MCP TOML layout.
@@ -124,6 +157,19 @@ impl CodexAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn import_requires_checked_version() {
+        let adapter = CodexImportAdapter::select(&CURRENT_STABLE).unwrap();
+        let stack = StackV1::from_yaml("schema_version: 1\nservers: {}\n").unwrap();
+        assert!(adapter.prepare(&stack, |_| None).unwrap().is_empty());
+        for version in ["0.159.0", "0.160.1", "0.160.0-alpha.1", "1.0.0"] {
+            assert!(matches!(
+                CodexImportAdapter::select(&Version::parse(version).unwrap()),
+                Err(AdapterError::UnsupportedImportVersion)
+            ));
+        }
+    }
 
     #[test]
     fn resolves_windows_launchers_in_path_order() {

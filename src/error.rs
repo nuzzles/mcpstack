@@ -83,9 +83,10 @@ impl AppError {
             Self::Adapter(crate::adapters::codex::AdapterError::Detection) => {
                 ErrorCode::ClientVersionError
             }
-            Self::Adapter(crate::adapters::codex::AdapterError::UnsupportedMajor) => {
-                ErrorCode::UnsupportedClientVersion
-            }
+            Self::Adapter(
+                crate::adapters::codex::AdapterError::UnsupportedMajor
+                | crate::adapters::codex::AdapterError::UnsupportedImportVersion,
+            ) => ErrorCode::UnsupportedClientVersion,
         }
     }
 }
