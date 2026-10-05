@@ -1,7 +1,10 @@
-use std::io::IsTerminal;
+use std::env::var_os;
+use std::io::{IsTerminal, stderr};
 
-use clap::{Args, ValueEnum};
-use tracing_subscriber::EnvFilter;
+use clap::{ArgAction, Args, ValueEnum};
+#[cfg(windows)]
+use nu_ansi_term::enable_ansi_support;
+use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::error::AppError;
 
@@ -9,7 +12,7 @@ use crate::error::AppError;
 #[derive(Args)]
 pub struct Logging {
     /// Increase logging verbosity (-v for debug, -vv for trace).
-    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
+    #[arg(short, long, global = true, action = ArgAction::Count)]
     verbose: u8,
     /// Limit application logs to warnings and errors.
     #[arg(short, long, global = true, conflicts_with = "verbose")]
@@ -35,6 +38,13 @@ enum ColorMode {
 
 impl Logging {
     pub fn init(&self) -> Result<(), AppError> {
+        // Clap checks conflicts within each command level, but global options
+        // can be supplied on opposite sides of a subcommand.
+        if (self.verbose != 0 && self.quiet)
+            || (self.log.is_some() && (self.verbose != 0 || self.quiet))
+        {
+            return Err(AppError::Arguments);
+        }
         let directives = self
             .log
             .as_deref()
@@ -45,18 +55,17 @@ impl Logging {
                 _ => "error,mcpstack=trace",
             });
         let filter = EnvFilter::try_new(directives).map_err(|_| AppError::Logging)?;
-        let no_color =
-            self.no_color || std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
-        let colored = ansi_enabled(self.color, no_color, std::io::stderr().is_terminal());
+        let no_color = self.no_color || var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
+        let colored = ansi_enabled(self.color, no_color, stderr().is_terminal());
         #[cfg(windows)]
         if colored {
             // Explicit always mode must still emit ANSI when redirected or when
             // no Windows console is attached. Console setup is best-effort.
-            let _ = nu_ansi_term::enable_ansi_support();
+            let _ = enable_ansi_support();
         }
-        tracing_subscriber::fmt()
+        fmt()
             .with_env_filter(filter)
-            .with_writer(std::io::stderr)
+            .with_writer(stderr)
             .with_ansi(colored)
             .with_target(false)
             .compact()

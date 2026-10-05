@@ -458,6 +458,26 @@ fn windows_npm_launcher_exports_and_reports_detection_failures() {
 }
 
 #[test]
+fn logging_conflicts_are_rejected_across_subcommand_levels() {
+    for args in [
+        vec!["-v", "validate", "/missing", "-q"],
+        vec!["-q", "validate", "/missing", "-v"],
+        vec!["--log", "off", "validate", "/missing", "-v"],
+        vec!["-v", "validate", "/missing", "--log", "off"],
+        vec!["--log", "off", "validate", "/missing", "-q"],
+        vec!["-q", "validate", "/missing", "--log", "off"],
+        vec!["-v", "export", "codex", "-q"],
+        vec!["export", "--log", "off", "codex", "-v"],
+        vec!["-q", "export", "codex", "--log", "off"],
+    ] {
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).starts_with("INVALID_ARGUMENT:"));
+    }
+}
+
+#[test]
 fn logging_filters_and_ansi_controls_keep_results_on_stdout() {
     let fixture = StackFixture::new("schema_version: 1\nservers: {}");
     let path = fixture.file.to_str().unwrap();

@@ -4,6 +4,7 @@ use crate::cmd::export::Export;
 use crate::cmd::schema::Schema;
 use crate::cmd::validate::Validate;
 use crate::error::AppError;
+use crate::logging::Logging;
 use clap::{CommandFactory, Parser, Subcommand};
 use std::io::Write;
 
@@ -24,7 +25,7 @@ pub const EXAMPLES: &[&str] = &[
 )]
 pub struct Cli {
     #[command(flatten)]
-    pub logging: crate::logging::Logging,
+    pub logging: Logging,
     /// Print the complete CLI interface as versioned JSON.
     #[arg(long)]
     schema: bool,
