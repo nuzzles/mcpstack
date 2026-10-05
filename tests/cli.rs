@@ -323,8 +323,14 @@ fn mock_codex(root: &std::path::Path, version: &str, status: u8) -> std::path::P
 
 #[cfg(unix)]
 #[test]
-fn export_rejects_detection_failures_before_reading_config() {
-    for (version, status, expected) in [("fixture-secret", 0, 7), ("codex-cli 0.149.0", 1, 7)] {
+fn export_rejects_detection_failures_and_major_versions_before_reading_config() {
+    for (version, status, expected) in [
+        ("codex-cli 1.0.0", 0, 8),
+        ("codex-cli 1.0.0-alpha.1", 0, 8),
+        ("codex-cli 2.0.0", 0, 8),
+        ("fixture-secret", 0, 7),
+        ("codex-cli 0.149.0", 1, 7),
+    ] {
         let fixture = StackFixture::new("unchanged");
         let bin = mock_codex(fixture.directory.path(), version, status);
         // No config.toml: version failure must precede config discovery/reads.
@@ -360,7 +366,6 @@ fn older_versions_export_and_newer_versions_warn_only_on_stderr() {
         "0.160.0",
         "0.160.1",
         "0.161.0-alpha.1",
-        "1.0.0",
     ] {
         let fixture = StackFixture::new("unchanged");
         let config = "[mcp_servers.example]\ncommand='example'\nstartup_timeout_ms=1000\n";
@@ -379,7 +384,7 @@ fn older_versions_export_and_newer_versions_warn_only_on_stderr() {
             1000
         );
         assert!(!String::from_utf8_lossy(&output.stdout).contains("WARNING"));
-        let newer = matches!(version, "0.160.1" | "0.161.0-alpha.1" | "1.0.0");
+        let newer = matches!(version, "0.160.1" | "0.161.0-alpha.1");
         assert_eq!(!output.stderr.is_empty(), newer);
         if newer {
             assert!(String::from_utf8_lossy(&output.stderr).contains("WARNING"));
@@ -419,6 +424,17 @@ fn windows_npm_launcher_exports_and_reports_detection_failures() {
     assert!(output.stderr.is_empty());
     let value: Value = yaml_serde::from_slice(&output.stdout).unwrap();
     assert_eq!(value["servers"]["example"]["config"]["command"], "example");
+    for version in ["1.0.0", "1.0.0-alpha.1"] {
+        std::fs::write(
+            &launcher,
+            format!("@echo off\r\necho codex-cli {version}\r\n"),
+        )
+        .unwrap();
+        let rejected = execute();
+        assert_eq!(rejected.status.code(), Some(8));
+        assert!(rejected.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&rejected.stderr).contains("UNSUPPORTED_CLIENT_VERSION"));
+    }
     std::fs::write(
         &launcher,
         "@echo off\r\necho codex-cli 0.149.0\r\nexit /b 1\r\n",

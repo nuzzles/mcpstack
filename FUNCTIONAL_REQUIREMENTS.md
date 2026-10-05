@@ -182,8 +182,8 @@ CLI exit statuses are 0 for success/help/version, 1 for output failures
 failures (`STACK_READ_ERROR`), and 4 for invalid stacks (`INVALID_STACK`).
 Config read failures use 5 (`CONFIG_READ_ERROR`); export failures use 6
 (`EXPORT_ERROR`). Codex detection failures use 7 (`CLIENT_VERSION_ERROR`);
-versions newer than the checked stable release warn on stderr and continue
-export. Import errors are pending.
+newer 0.x versions warn on stderr and continue export. Codex 1.x and later,
+including prereleases, fail with exit 8 (`UNSUPPORTED_CLIENT_VERSION`). Import errors are pending.
 
 ### Deterministic output
 
@@ -220,8 +220,9 @@ the source file. Explicit config paths, secret handling, and imports are pending
 `export codex` runs `codex --version` and selects an adapter before reading the
 configuration. The native TOML adapter covers versions from 0.0.0 through the
 checked stable release 0.160.0, retaining historical field names and values.
-Versions newer than 0.160.0 (including future prereleases and 1.x) warn on stderr
-and export using the existing adapter. This range describes the reader's policy,
+Newer 0.x versions (including future 0.x prereleases) warn on stderr and export
+using the existing adapter. Codex 1.0.0 and later, including major-version
+prereleases, require an explicit adapter and fail before configuration reads. This range describes the reader's policy,
 not runtime testing of every historical release; it reads only the configured
 TOML file, not legacy non-TOML or effective layered configuration.
 Detection failures use exit 7 (`CLIENT_VERSION_ERROR`). Tests use a fake Codex

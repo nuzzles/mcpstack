@@ -12,6 +12,8 @@ pub enum AdapterError {
         "Unable to detect Codex version. Ensure codex is installed and codex --version succeeds."
     )]
     Detection,
+    #[error("Codex 1.0.0 and later, including prereleases, require an explicit supported adapter.")]
+    UnsupportedMajor,
 }
 
 /// Select an adapter without reading or modifying client configuration.
@@ -25,7 +27,7 @@ pub fn detect() -> Result<CodexAdapter, AdapterError> {
         return Err(AdapterError::Detection);
     }
     let version = parse_version(&output.stdout)?;
-    Ok(CodexAdapter::select(&version))
+    CodexAdapter::select(&version)
 }
 
 #[cfg(not(windows))]
@@ -80,17 +82,20 @@ pub enum CodexAdapter {
 }
 
 impl CodexAdapter {
-    pub fn select(version: &Version) -> Self {
+    pub fn select(version: &Version) -> Result<Self, AdapterError> {
+        if version.major >= 1 {
+            return Err(AdapterError::UnsupportedMajor);
+        }
         // Historical stdio/HTTP/auth field changes stay inside mcp_servers;
         // native export preserves their spellings and values without translation.
         // https://github.com/openai/codex/commit/3a1be084f911
         // https://github.com/openai/codex/commit/a43ae86b6c07
         if version.cmp_precedence(&CURRENT_STABLE).is_gt() {
-            Self::Newer {
+            Ok(Self::Newer {
                 version: version.clone(),
-            }
+            })
         } else {
-            Self::Pre1
+            Ok(Self::Pre1)
         }
     }
 
@@ -158,7 +163,7 @@ mod tests {
     fn covers_every_pre1_version_through_current_stable() {
         for minor in 0..=160 {
             let version = Version::new(0, minor, 0);
-            assert_eq!(CodexAdapter::select(&version), CodexAdapter::Pre1);
+            assert_eq!(CodexAdapter::select(&version).unwrap(), CodexAdapter::Pre1);
         }
         for version in [
             "0.0.0",
@@ -170,6 +175,7 @@ mod tests {
         ] {
             assert!(
                 CodexAdapter::select(&Version::parse(version).unwrap())
+                    .unwrap()
                     .warning()
                     .is_none()
             );
@@ -178,8 +184,8 @@ mod tests {
 
     #[test]
     fn newer_versions_warn_but_can_export() {
-        for version in ["0.160.1", "0.161.0-alpha.1", "0.161.0", "1.0.0"] {
-            let adapter = CodexAdapter::select(&Version::parse(version).unwrap());
+        for version in ["0.160.1", "0.161.0-alpha.1", "0.161.0"] {
+            let adapter = CodexAdapter::select(&Version::parse(version).unwrap()).unwrap();
             let warning = adapter.warning().unwrap();
             assert!(warning.contains(version));
             assert!(warning.contains("0.160.0"));
@@ -187,6 +193,21 @@ mod tests {
                 adapter
                     .export("[mcp_servers.example]\ncommand='example'")
                     .is_ok()
+            );
+        }
+    }
+    #[test]
+    fn rejects_major_releases_and_their_prereleases() {
+        for version in [
+            "1.0.0-alpha.1",
+            "1.0.0",
+            "1.0.0+build.1",
+            "2.0.0-beta.1",
+            "2.0.0",
+        ] {
+            assert_eq!(
+                CodexAdapter::select(&Version::parse(version).unwrap()).unwrap_err(),
+                AdapterError::UnsupportedMajor
             );
         }
     }

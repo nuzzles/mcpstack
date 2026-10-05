@@ -25,6 +25,8 @@ pub enum ErrorCode {
     ExportError = 6,
     #[error("Unable to detect the installed client version.")]
     ClientVersionError = 7,
+    #[error("No adapter supports the installed client major version.")]
+    UnsupportedClientVersion = 8,
 }
 
 impl ErrorCode {
@@ -72,6 +74,9 @@ impl AppError {
             Self::Export(_) => ErrorCode::ExportError,
             Self::Adapter(crate::adapters::codex::AdapterError::Detection) => {
                 ErrorCode::ClientVersionError
+            }
+            Self::Adapter(crate::adapters::codex::AdapterError::UnsupportedMajor) => {
+                ErrorCode::UnsupportedClientVersion
             }
         }
     }
