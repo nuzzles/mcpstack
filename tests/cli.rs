@@ -5,6 +5,9 @@ use serde_json::Value;
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mcpstack"))
         .args(args)
+        .env_remove("RUST_LOG")
+        .env_remove("MCPSTACK_COLOR")
+        .env_remove("NO_COLOR")
         .stdin(Stdio::null())
         .output()
         .expect("CLI should start")
@@ -33,13 +36,16 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
         .unwrap();
     assert_eq!(validate["arguments"][0]["name"], "file");
     assert_eq!(validate["arguments"][0]["required"], true);
-    assert_eq!(schema["command"]["args_conflicts_with_subcommands"], true);
+    assert_eq!(schema["command"]["args_conflicts_with_subcommands"], false);
 
     let help = run(&["--help"]);
     let help = String::from_utf8(help.stdout).unwrap();
     let options = schema["command"]["options"].as_array().unwrap();
-    assert_eq!(options.len(), 3);
-    for option in options {
+    assert_eq!(options.len(), 8);
+    for option in options
+        .iter()
+        .filter(|option| matches!(option["name"].as_str(), Some("help" | "version" | "schema")))
+    {
         let flag = option["long"].as_str().unwrap();
         assert!(help.contains(flag), "{flag} missing from help");
         assert_eq!(option["value_type"], "boolean");
@@ -53,6 +59,7 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
         .find(|option| option["name"] == "schema")
         .unwrap();
     assert_eq!(schema_flag["default"], serde_json::json!([false]));
+    assert_eq!(schema["command"]["schema_conflicts_with_subcommands"], true);
 }
 
 #[test]
@@ -115,8 +122,7 @@ fn advertised_error_codes_match_process_failures() {
         invalid["status"].as_u64().unwrap()
     );
     assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .starts_with(invalid["error_code"].as_str().unwrap())
+        String::from_utf8_lossy(&output.stderr).contains(invalid["error_code"].as_str().unwrap())
     );
     let output_error = statuses
         .iter()
@@ -128,6 +134,8 @@ fn advertised_error_codes_match_process_failures() {
     let writer: std::os::fd::OwnedFd = writer.into();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
         .arg("--schema")
+        .env_remove("RUST_LOG")
+        .env_remove("MCPSTACK_COLOR")
         .stdout(Stdio::from(writer))
         .stderr(Stdio::piped())
         .output()
@@ -138,7 +146,7 @@ fn advertised_error_codes_match_process_failures() {
     );
     assert!(
         String::from_utf8_lossy(&output.stderr)
-            .starts_with(output_error["error_code"].as_str().unwrap())
+            .contains(output_error["error_code"].as_str().unwrap())
     );
 }
 
@@ -211,7 +219,7 @@ fn validation_reports_safe_typed_errors_and_missing_arguments() {
         assert_eq!(output.status.code(), Some(4));
         assert!(output.stdout.is_empty());
         let diagnostic = String::from_utf8_lossy(&output.stderr);
-        assert!(diagnostic.starts_with("INVALID_STACK:"));
+        assert!(diagnostic.contains("INVALID_STACK:"));
         assert!(diagnostic.contains(expected));
         assert!(!diagnostic.contains("fixture-secret"));
         assert_eq!(std::fs::read_to_string(&fixture.file).unwrap(), document);
@@ -221,7 +229,7 @@ fn validation_reports_safe_typed_errors_and_missing_arguments() {
     let output = fixture.validate();
     assert_eq!(output.status.code(), Some(3));
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).starts_with("STACK_READ_ERROR:"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("STACK_READ_ERROR:"));
     for args in [vec!["validate"], vec!["--schema", "validate", "stack.json"]] {
         let output = run(&args);
         assert_eq!(output.status.code(), Some(2));
@@ -383,11 +391,11 @@ fn older_versions_export_and_newer_versions_warn_only_on_stderr() {
             stack["servers"]["example"]["config"]["startup_timeout_ms"],
             1000
         );
-        assert!(!String::from_utf8_lossy(&output.stdout).contains("WARNING"));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("WARN"));
         let newer = matches!(version, "0.160.1" | "0.161.0-alpha.1");
         assert_eq!(!output.stderr.is_empty(), newer);
         if newer {
-            assert!(String::from_utf8_lossy(&output.stderr).contains("WARNING"));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("WARN"));
         }
         assert_eq!(
             std::fs::read_to_string(fixture.directory.path().join("config.toml")).unwrap(),
@@ -447,4 +455,130 @@ fn windows_npm_launcher_exports_and_reports_detection_failures() {
         std::fs::read_to_string(fixture.directory.path().join("config.toml")).unwrap(),
         config
     );
+}
+
+#[test]
+fn logging_filters_and_ansi_controls_keep_results_on_stdout() {
+    let fixture = StackFixture::new("schema_version: 1\nservers: {}");
+    let path = fixture.file.to_str().unwrap();
+    for (color, ansi) in [("auto", false), ("never", false), ("always", true)] {
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["--color", color, "validate", "/mcpstack-missing-test-stack"])
+            .env_remove("RUST_LOG")
+            .env_remove("NO_COLOR")
+            .env_remove("MCPSTACK_COLOR")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(3));
+        assert!(output.stdout.is_empty());
+        assert_eq!(output.stderr.contains(&0x1b), ansi);
+        assert!(String::from_utf8_lossy(&output.stderr).contains("STACK_READ_ERROR"));
+    }
+    for args in [
+        vec!["-v", "validate", path],
+        vec!["validate", path, "-vv"],
+        vec!["--quiet", "validate", path],
+        vec!["--log", "off", "validate", path],
+    ] {
+        let output = run(&args);
+        assert!(output.status.success(), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Valid stack"));
+        assert!(!output.stdout.contains(&0x1b));
+    }
+    let no_color = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args([
+            "--color",
+            "always",
+            "validate",
+            "/mcpstack-missing-test-stack",
+        ])
+        .env("NO_COLOR", "1")
+        .env_remove("RUST_LOG")
+        .output()
+        .unwrap();
+    assert!(!no_color.stderr.contains(&0x1b));
+    let flag = run(&[
+        "--color",
+        "always",
+        "--no-color",
+        "validate",
+        "/mcpstack-missing-test-stack",
+    ]);
+    assert_eq!(flag.status.code(), Some(3));
+    assert!(!flag.stderr.contains(&0x1b));
+    for args in [vec!["--log", "[", "validate", path], vec!["-v", "-q"]] {
+        let output = run(&args);
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+    }
+    let schema = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .arg("--schema")
+        .env("MCPSTACK_COLOR", "always")
+        .env_remove("RUST_LOG")
+        .output()
+        .unwrap();
+    assert!(schema.status.success());
+    assert!(serde_json::from_slice::<Value>(&schema.stdout).is_ok());
+    assert!(!schema.stdout.contains(&0x1b));
+}
+
+#[cfg(unix)]
+#[test]
+fn export_logs_respect_verbosity_filters_and_color() {
+    let fixture = StackFixture::new("unchanged");
+    let bin = mock_codex(fixture.directory.path(), "codex-cli 0.161.0", 0);
+    std::fs::write(
+        fixture.directory.path().join("config.toml"),
+        "[mcp_servers.example]\ncommand='example'\nenv={TOKEN='fixture-secret'}",
+    )
+    .unwrap();
+    for (args, filter, debug, warning, ansi) in [
+        (
+            vec!["-v", "--color", "always", "export", "codex"],
+            None,
+            true,
+            true,
+            true,
+        ),
+        (vec!["export", "codex", "--quiet"], None, false, true, false),
+        (
+            vec!["--log", "error", "export", "codex"],
+            None,
+            false,
+            false,
+            false,
+        ),
+        (
+            vec!["export", "codex"],
+            Some("mcpstack=debug"),
+            true,
+            true,
+            false,
+        ),
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
+        command
+            .args(args)
+            .env("PATH", &bin)
+            .env("CODEX_HOME", fixture.directory.path())
+            .env_remove("RUST_LOG")
+            .env_remove("NO_COLOR")
+            .env_remove("MCPSTACK_COLOR");
+        if let Some(filter) = filter {
+            command.env("RUST_LOG", filter);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let value: Value = yaml_serde::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            value["servers"]["example"]["config"]["env"]["TOKEN"],
+            "fixture-secret"
+        );
+        assert!(!output.stdout.contains(&0x1b));
+        let log = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(log.contains("DEBUG"), debug);
+        assert_eq!(log.contains("WARN"), warning);
+        assert_eq!(output.stderr.contains(&0x1b), ansi);
+        assert!(!log.contains("fixture-secret"));
+    }
 }

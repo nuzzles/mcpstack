@@ -4,6 +4,7 @@ mod cmd;
 mod error;
 mod exporters;
 mod importers;
+mod logging;
 mod schema;
 
 use std::io::{self, Write};
@@ -31,6 +32,7 @@ fn run() -> Result<ExitCode, AppError> {
         }
     };
 
+    cli.logging.init()?;
     cli.run(&mut io::stdout().lock())?;
     Ok(ExitCode::SUCCESS)
 }
@@ -40,7 +42,11 @@ fn main() -> ExitCode {
         Ok(code) => code,
         Err(error) => {
             let code = error.code();
-            let _ = writeln!(io::stderr().lock(), "{}: {error}", code.as_ref());
+            if tracing::dispatcher::has_been_set() {
+                tracing::error!("{}: {error}", code.as_ref());
+            } else {
+                let _ = writeln!(io::stderr().lock(), "{}: {error}", code.as_ref());
+            }
             code.as_exit_code()
         }
     }

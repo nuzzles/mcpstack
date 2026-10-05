@@ -103,7 +103,7 @@ impl CodexAdapter {
         match self {
             Self::Pre1 => None,
             Self::Newer { version } => Some(format!(
-                "WARNING: Codex {version} is newer than the checked stable release {CURRENT_STABLE}; exporting with the existing native TOML adapter."
+                "Codex {version} is newer than the checked stable release {CURRENT_STABLE}; exporting with the existing native TOML adapter."
             )),
         }
     }

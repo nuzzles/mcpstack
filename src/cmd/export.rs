@@ -22,9 +22,10 @@ impl Export {
     pub fn run(self, output: &mut impl Write) -> Result<(), AppError> {
         match self.client {
             Client::Codex => {
+                tracing::debug!("Exporting Codex MCP configuration");
                 let adapter = crate::adapters::codex::detect()?;
                 if let Some(warning) = adapter.warning() {
-                    writeln!(std::io::stderr().lock(), "{warning}")?;
+                    tracing::warn!("{warning}");
                 }
                 let path = default_config().ok_or(AppError::ConfigPath)?;
                 let document = std::fs::read_to_string(path).map_err(AppError::ConfigRead)?;
