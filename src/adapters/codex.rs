@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 use semver::Version;
 use thiserror::Error;
 
-use crate::exporters::codex::{ExportError, export};
+use crate::exporters::codex::{ExportError, export, export_with_decisions};
 use crate::schema::StackV1;
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -110,6 +110,14 @@ impl CodexAdapter {
 
     pub fn export(&self, document: &str, expose_secrets: bool) -> Result<StackV1, ExportError> {
         export(document, expose_secrets)
+    }
+
+    pub fn export_with_decisions(
+        &self,
+        document: &str,
+        expose: impl FnMut(&str) -> Result<bool, ExportError>,
+    ) -> Result<StackV1, ExportError> {
+        export_with_decisions(document, expose)
     }
 }
 

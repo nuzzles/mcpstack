@@ -41,7 +41,12 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
     let help = run(&["--help"]);
     let help = String::from_utf8(help.stdout).unwrap();
     let options = schema["command"]["options"].as_array().unwrap();
-    assert_eq!(options.len(), 8);
+    assert_eq!(options.len(), 9);
+    let non_interactive = options
+        .iter()
+        .find(|option| option["name"] == "non_interactive")
+        .unwrap();
+    assert_eq!(non_interactive["long"], "--non-interactive");
     for option in options
         .iter()
         .filter(|option| matches!(option["name"].as_str(), Some("help" | "version" | "schema")))
@@ -91,7 +96,6 @@ fn help_and_version_use_text_output() {
 fn invalid_arguments_use_stderr_without_echoing_values() {
     for args in [
         vec!["--json"],
-        vec!["--non-interactive"],
         vec!["--schema=true"],
         vec!["--schema", "--schema"],
         vec!["--schema", "--synthetic-secret=fixture-secret"],
@@ -273,8 +277,11 @@ fn export_exposes_secrets_only_when_explicitly_requested() {
     let bin = mock_codex(fixture.directory.path(), "codex-cli 0.149.0", 0);
     for args in [
         vec!["export", "codex"],
+        vec!["--non-interactive", "export", "codex"],
+        vec!["export", "codex", "--non-interactive"],
         vec!["export", "codex", "--expose-secrets"],
         vec!["export", "--expose-secrets", "codex"],
+        vec!["--non-interactive", "export", "codex", "--expose-secrets"],
     ] {
         let exposed = args.contains(&"--expose-secrets");
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
@@ -285,6 +292,7 @@ fn export_exposes_secrets_only_when_explicitly_requested() {
             .env_remove("RUST_LOG")
             .env_remove("MCPSTACK_COLOR")
             .env_remove("NO_COLOR")
+            .stdin(Stdio::null())
             .output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");

@@ -37,13 +37,13 @@ to its entry in Current status at the bottom.\
 | Partial [*](#commands-and-help) | Predictable commands, help, and examples. |
 | Done | Export the entire CLI argument schema for AI consumption. [*](#cli-schema) |
 | Partial [*](#exit-statuses-and-error-codes) | Stable exit statuses and actionable error codes. |
-| Unsupported | Default interactive prompts and explicit noninteractive operation. [*](#interaction) |
+| Partial [*](#interaction) | Default interactive prompts and explicit noninteractive operation. |
 | Partial [*](#deterministic-output) | Deterministic stack files, plans, and structured output. |
 | Partial [*](#output-formats) | Human-readable output and structured JSON results; diagnostics on stderr. |
 | Done | Define a versioned, client-independent stack format. |
 | Done | Validate schema versions, server definitions, names, and secret references. |
 | Done | Export Codex server entries as a YAML stack to stdout with safe defaults. [*](#codex-export) |
-| Done | Replace recognized credentials with secret references by default; expose values only with `--expose-secrets`. |
+| Done | Replace recognized credentials with secret references by default; allow interactive selections or `--expose-secrets` to include values. |
 | Unsupported | Import/merge a stack into Codex without losing supported fields. [*](#phase-1-boundaries) |
 | Unsupported | Resolve secret references from environment variables; reject missing values. [*](#secrets) |
 | Unsupported | Create a `.bak` copy of the target config before beginning import; abort if backup creation fails. |
@@ -134,6 +134,12 @@ and interactive controls.
 [*] Prompt by default in interactive terminals. Explicit noninteractive mode and
 redirected input must never prompt or hang; missing inputs produce actionable
 errors. Machine-readable results must remain parseable during interactive use.
+Codex export now prompts for each detected credential when stdin and stderr are
+terminals. The selection defaults to masking. `--non-interactive` and redirected
+input mask all detected credentials; `--expose-secrets` includes them without
+prompts. Prompt labels contain field paths, never values. Cancelling a selection
+aborts export before anything is printed on stdout. Other commands do not yet
+need interactive input.
 
 ### Claude support
 
@@ -223,7 +229,7 @@ write failures are pending.
 ### Codex export
 
 `export codex` reads the default Codex TOML config and prints native server
-entries as a YAML stack to stdout. By default, credential values become
+entries as a YAML stack to stdout. In noninteractive use, credential values become
 `{"$env":"MCPSTACK_SERVER_FIELD"}`. Recognition uses credential field names
 (token, secret, password, API/access/private key), authorization/cookie headers,
 and named token arguments (`--token VALUE` or `--token=VALUE`). Nested credential
@@ -238,8 +244,12 @@ numeric suffixes. Existing references are preserved and their names reserved.
 Export never reads or sets environment variables. For an inline credential argument,
 the referenced environment value must contain the complete `--token=VALUE` argument.
 
-`export codex --expose-secrets` preserves literal values, including credentials.
-Neither mode changes the source file or logs its values. Server names and field
+In an interactive terminal, `export codex` asks whether to mask or include each
+detected credential, with masking selected by default. `--non-interactive` masks
+all detected credentials without prompting, including when standard input is
+redirected. `export codex --expose-secrets` preserves literal values, including
+credentials, without prompting.
+No export mode changes the source file or logs its values. Server names and field
 keys remain visible. Explicit config paths and imports are pending.
 
 

@@ -1,8 +1,9 @@
-use std::io::Write;
+use std::io::{IsTerminal, Write, stderr, stdin};
 use std::path::PathBuf;
 use std::{env, fs};
 
 use clap::{Args, Subcommand};
+use dialoguer::Select;
 
 use crate::adapters::codex::detect;
 use crate::error::AppError;
@@ -24,7 +25,7 @@ enum Client {
 }
 
 impl Export {
-    pub fn run(self, output: &mut impl Write) -> Result<(), AppError> {
+    pub fn run(self, output: &mut impl Write, non_interactive: bool) -> Result<(), AppError> {
         match self.client {
             Client::Codex => {
                 tracing::debug!("Exporting Codex MCP configuration");
@@ -34,7 +35,22 @@ impl Export {
                 }
                 let path = default_config().ok_or(AppError::ConfigPath)?;
                 let document = fs::read_to_string(path).map_err(AppError::ConfigRead)?;
-                let stack = adapter.export(&document, self.expose_secrets)?;
+                let stack = if self.expose_secrets {
+                    adapter.export(&document, true)?
+                } else if non_interactive || !stdin().is_terminal() || !stderr().is_terminal() {
+                    adapter.export(&document, false)?
+                } else {
+                    adapter.export_with_decisions(&document, |path| {
+                        let selected = Select::new()
+                            .with_prompt(format!("Export {path}"))
+                            .items(["Mask with environment reference", "Include literal value"])
+                            .default(0)
+                            .report(false)
+                            .interact_opt()
+                            .map_err(|_| ExportError::Prompt)?;
+                        selected.map(|index| index == 1).ok_or(ExportError::Prompt)
+                    })?
+                };
                 // Prepare the complete result before exposing any content on stdout.
                 let yaml = to_yaml(&stack).map_err(|_| ExportError::Stack)?;
                 write!(output, "{yaml}")?;

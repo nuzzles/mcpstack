@@ -13,11 +13,22 @@ pub enum ExportError {
     Servers,
     #[error("Exported configuration cannot be represented by stack schema v1.")]
     Stack,
+    #[error("Secret selection was cancelled or could not be completed. No stack was exported.")]
+    Prompt,
 }
 
 /// Export one native entry per server. This reads data only: it does not resolve
 /// credentials, run helpers, or infer installed-client compatibility.
 pub fn export(document: &str, expose_secrets: bool) -> Result<StackV1, ExportError> {
+    export_with_decisions(document, |_| Ok(expose_secrets))
+}
+
+/// Decide whether to expose each detected credential. The callback receives
+/// only a field path, never the credential value.
+pub fn export_with_decisions(
+    document: &str,
+    mut expose: impl FnMut(&str) -> Result<bool, ExportError>,
+) -> Result<StackV1, ExportError> {
     let config: toml::Value = toml::from_str(document).map_err(|_| ExportError::Config)?;
     let servers = match config.get("mcp_servers") {
         None => serde_json::Map::new(),
@@ -44,29 +55,29 @@ pub fn export(document: &str, expose_secrets: bool) -> Result<StackV1, ExportErr
     let document = serde_json::json!({"schema_version":SCHEMA_VERSION,"servers":definitions});
     let mut stack: StackV1 = serde_json::from_value(document).map_err(|_| ExportError::Stack)?;
     stack.validate().map_err(|_| ExportError::Stack)?;
-    if !expose_secrets {
-        let mut names = BTreeSet::new();
-        for server in stack.servers.values() {
-            if let Server::ClientSpecific { config, .. } = server {
-                for value in config.values() {
-                    collect_references(value, &mut names);
-                }
+    let mut names = BTreeSet::new();
+    for server in stack.servers.values() {
+        if let Server::ClientSpecific { config, .. } = server {
+            for value in config.values() {
+                collect_references(value, &mut names);
             }
         }
-        for (server_name, server) in &mut stack.servers {
-            if let Server::ClientSpecific { config, .. } = server {
-                for (key, value) in config {
-                    if key == "env_http_headers" {
-                        continue;
-                    }
-                    protect(
-                        value,
-                        &format!("{server_name}_{key}"),
-                        secret_key(key),
-                        key == "args",
-                        &mut names,
-                    );
+    }
+    for (server_name, server) in &mut stack.servers {
+        if let Server::ClientSpecific { config, .. } = server {
+            for (key, value) in config {
+                if key == "env_http_headers" {
+                    continue;
                 }
+                protect(
+                    value,
+                    &format!("{server_name}_{key}"),
+                    &format!("{server_name}.{key}"),
+                    secret_key(key),
+                    key == "args",
+                    &mut names,
+                    &mut expose,
+                )?;
             }
         }
     }
@@ -176,10 +187,12 @@ fn secret_key(key: &str) -> bool {
 fn protect(
     value: &mut ClientValue,
     path: &str,
+    display_path: &str,
     sensitive: bool,
     arguments: bool,
     names: &mut BTreeSet<String>,
-) {
+    expose: &mut impl FnMut(&str) -> Result<bool, ExportError>,
+) -> Result<(), ExportError> {
     match value {
         ClientValue::Object(values) => {
             if !values.contains_key("$env") {
@@ -187,10 +200,12 @@ fn protect(
                     protect(
                         value,
                         &format!("{path}_{key}"),
+                        &format!("{display_path}.{key}"),
                         sensitive || secret_key(key),
                         key == "args",
                         names,
-                    );
+                        expose,
+                    )?;
                 }
             }
         }
@@ -221,14 +236,19 @@ fn protect(
                 protect(
                     value,
                     &format!("{path}_{index}"),
+                    &format!("{display_path}[{index}]"),
                     sensitive || next_secret || inline_secret,
                     false,
                     names,
-                );
+                    expose,
+                )?;
                 next_secret = following_secret;
             }
         }
         ClientValue::String(_) | ClientValue::Number(_) if sensitive => {
+            if expose(display_path)? {
+                return Ok(());
+            }
             // Never derive names from values or read the process environment.
             let suffix: String = path
                 .chars()
@@ -254,6 +274,7 @@ fn protect(
         }
         _ => {}
     }
+    Ok(())
 }
 
 fn contains_unsupported_value(value: &toml::Value) -> bool {
@@ -392,6 +413,45 @@ args = ["--token", "--password", "ordinary", "--api-key=synthetic-secret", "--",
         assert_eq!(args[5], "--token");
         assert_eq!(args[6], "positional");
         assert_eq!(args[7], "--password=ordinary");
+    }
+
+    #[test]
+    fn per_secret_decisions_expose_only_selected_values() {
+        let document = r#"
+[mcp_servers.example]
+command = "example"
+[mcp_servers.example.env]
+FIRST_TOKEN = "first-synthetic-secret"
+SECOND_TOKEN = "second-synthetic-secret"
+"#;
+        let mut seen = Vec::new();
+        let stack = export_with_decisions(document, |path| {
+            seen.push(path.to_owned());
+            Ok(path == "example.env.SECOND_TOKEN")
+        })
+        .unwrap();
+        assert_eq!(
+            seen,
+            ["example.env.FIRST_TOKEN", "example.env.SECOND_TOKEN"]
+        );
+        let value = serde_json::to_value(&stack).unwrap();
+        assert_eq!(
+            value["servers"]["example"]["config"]["env"]["FIRST_TOKEN"],
+            serde_json::json!({"$env":"MCPSTACK_EXAMPLE_ENV_FIRST_TOKEN"})
+        );
+        assert_eq!(
+            value["servers"]["example"]["config"]["env"]["SECOND_TOKEN"],
+            "second-synthetic-secret"
+        );
+        assert!(!seen.join(" ").contains("synthetic-secret"));
+    }
+
+    #[test]
+    fn cancelled_selection_returns_no_stack_or_secret_in_error() {
+        let document = "[mcp_servers.example]\ncommand='example'\n[mcp_servers.example.env]\nTOKEN='synthetic-secret'\n";
+        let result = export_with_decisions(document, |_| Err(ExportError::Prompt));
+        let error = result.err().unwrap();
+        assert!(!error.to_string().contains("synthetic-secret"));
     }
 
     #[test]
