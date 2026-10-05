@@ -1,15 +1,18 @@
 mod cli;
 mod cmd;
 mod error;
+mod exporters;
+mod importers;
+mod schema;
 
 use std::io::{self, Write};
 use std::process::ExitCode;
 
 use clap::{Parser, error::ErrorKind};
 use cli::Cli;
-use error::ErrorCode;
+use error::{AppError, ErrorCode};
 
-fn run() -> io::Result<ExitCode> {
+fn run() -> Result<ExitCode, AppError> {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => {
@@ -34,9 +37,9 @@ fn run() -> io::Result<ExitCode> {
 fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
-        Err(_) => {
-            let code = ErrorCode::OutputError;
-            let _ = writeln!(io::stderr().lock(), "{}: {code}", code.as_ref());
+        Err(error) => {
+            let code = error.code();
+            let _ = writeln!(io::stderr().lock(), "{}: {error}", code.as_ref());
             code.as_exit_code()
         }
     }

@@ -1,16 +1,25 @@
 pub(crate) mod schema;
 
+use crate::cmd::export::Export;
 use crate::cmd::schema::Schema;
-use clap::Parser;
-use std::io::{self, Write};
+use crate::cmd::validate::Validate;
+use crate::error::AppError;
+use clap::{CommandFactory, Parser, Subcommand};
+use std::io::Write;
 
-pub const EXAMPLES: &[&str] = &["mcpstack --schema", "mcpstack --help"];
+pub const EXAMPLES: &[&str] = &[
+    "mcpstack --schema",
+    "mcpstack --help",
+    "mcpstack validate --help",
+    "mcpstack export codex --help",
+];
 
 /// Install MCP servers, version-control stacks, and share setups across teams.
 #[derive(Parser)]
 #[command(
     name = "mcpstack",
     version,
+    args_conflicts_with_subcommands = true,
     about = env!("CARGO_PKG_DESCRIPTION"),
     after_help = format!("Examples:\n  {}", EXAMPLES.join("\n  "))
 )]
@@ -18,18 +27,29 @@ pub struct Cli {
     /// Print the complete CLI interface as versioned JSON.
     #[arg(long)]
     schema: bool,
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Validate(Validate),
+    Export(Export),
 }
 
 impl Cli {
-    pub fn run(self, output: &mut impl Write) -> io::Result<()> {
+    pub fn run(self, output: &mut impl Write) -> Result<(), AppError> {
         if self.schema {
-            Schema.run(output)
+            Schema.run(output)?;
+            Ok(())
+        } else if let Some(command) = self.command {
+            match command {
+                Commands::Validate(inner) => inner.run(output),
+                Commands::Export(inner) => inner.run(output),
+            }
         } else {
-            writeln!(
-                output,
-                "mcpstack {} — work in progress",
-                env!("CARGO_PKG_VERSION")
-            )
+            Self::command().write_long_help(output)?;
+            Ok(())
         }
     }
 }

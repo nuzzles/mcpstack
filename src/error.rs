@@ -1,3 +1,5 @@
+use crate::schema::ValidationError;
+use std::io;
 use std::process::ExitCode;
 
 use serde::{Serialize, Serializer};
@@ -13,6 +15,14 @@ pub enum ErrorCode {
     OutputError = 1,
     #[error("Invalid CLI arguments. Run mcpstack --help for usage.")]
     InvalidArgument = 2,
+    #[error("Unable to read the stack file. Check its path, permissions, and UTF-8 encoding.")]
+    StackReadError = 3,
+    #[error("Invalid stack. Check the schema format.")]
+    InvalidStack = 4,
+    #[error("Unable to read the client configuration. Check its path and permissions.")]
+    ConfigReadError = 5,
+    #[error("Unable to export client configuration.")]
+    ExportError = 6,
 }
 
 impl ErrorCode {
@@ -28,6 +38,35 @@ impl ErrorCode {
 impl Serialize for ErrorCode {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(self.as_ref())
+    }
+}
+
+/// Execution errors preserve typed causes but expose only safe diagnostics.
+#[derive(Debug, Error)]
+pub enum AppError {
+    #[error("{code}", code = ErrorCode::OutputError)]
+    Output(#[from] io::Error),
+    #[error("{code}", code = ErrorCode::StackReadError)]
+    StackRead(#[source] io::Error),
+    #[error("{0}")]
+    Stack(#[from] ValidationError),
+    #[error("{code}", code = ErrorCode::ConfigReadError)]
+    ConfigRead(#[source] io::Error),
+    #[error("Cannot determine the Codex config path. Set CODEX_HOME.")]
+    ConfigPath,
+    #[error("{0}")]
+    Export(#[from] crate::exporters::codex::ExportError),
+}
+
+impl AppError {
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            Self::Output(_) => ErrorCode::OutputError,
+            Self::StackRead(_) => ErrorCode::StackReadError,
+            Self::Stack(_) => ErrorCode::InvalidStack,
+            Self::ConfigRead(_) | Self::ConfigPath => ErrorCode::ConfigReadError,
+            Self::Export(_) => ErrorCode::ExportError,
+        }
     }
 }
 
