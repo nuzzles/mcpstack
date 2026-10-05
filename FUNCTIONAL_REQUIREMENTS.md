@@ -16,8 +16,8 @@ to its entry in Current status at the bottom.\
 | Done | Read MCP server entries from the default Codex config for export. [*](#codex-export) |
 | Unsupported | Read MCP config at an explicit path for export. |
 | Unsupported | Write MCP config at the default or an explicit path for import. |
-| Unsupported | Detect the installed Codex version. |
-| Unsupported | Select a Codex adapter supporting the installed version; reject missing adapters or unsupported fields before writes. [*](#version-compatibility) |
+| Done | Detect the installed Codex version. |
+| Partial [*](#codex-version-adapters) | Select a Codex adapter supporting the installed version; reject missing adapters or unsupported fields before writes. [*](#version-compatibility) |
 | Unsupported | On import, preserve unrelated settings/servers; skip identical entries and reject differing ones. |
 
 ### CLI
@@ -36,6 +36,7 @@ to its entry in Current status at the bottom.\
 | Unsupported | Replace exported credentials with secret references. |
 | Unsupported | Import/merge a stack into Codex without losing supported fields. [*](#phase-1-boundaries) |
 | Unsupported | Resolve secret references from environment variables; reject missing values. [*](#secrets) |
+| Unsupported | Create a `.bak` copy of the target config before beginning import; abort if backup creation fails. |
 | Unsupported | Atomic config writes with restrictive permissions; preserve originals on failure. |
 | Partial [*](#stack-workflow-tests) | Test round trips, repeat imports, version compatibility, missing secrets, and write failures. |
 
@@ -95,7 +96,12 @@ for export and preserving unrelated client settings during import.
 
 ### Phase 1 boundaries
 
-[*] Import means merging server definitions into Codex config, not installing or
+[*] After locating the target config, create a sibling `config.toml.bak` before
+any import processing or changes. If backup creation fails, abort the import.
+Do not overwrite an existing backup silently. This requirement applies to import;
+read-only export does not create backups.
+
+Import means merging server definitions into Codex config, not installing or
 starting server software. Validate before writing and leave the config unchanged
 on invalid input, unsupported fields, unresolved references, or differing entries
 with the same name. Compare parsed definitions after resolving references; skip
@@ -175,7 +181,9 @@ CLI exit statuses are 0 for success/help/version, 1 for output failures
 (`OUTPUT_ERROR`), 2 for invalid arguments (`INVALID_ARGUMENT`), 3 for stack read
 failures (`STACK_READ_ERROR`), and 4 for invalid stacks (`INVALID_STACK`).
 Config read failures use 5 (`CONFIG_READ_ERROR`); export failures use 6
-(`EXPORT_ERROR`). Import and harness compatibility errors are pending.
+(`EXPORT_ERROR`). Codex detection failures use 7 (`CLIENT_VERSION_ERROR`);
+versions newer than the checked stable release warn on stderr and continue
+export. Import errors are pending.
 
 ### Deterministic output
 
@@ -195,8 +203,9 @@ operation results are pending.
 Stack serialization round trips, client-independent documents, reference syntax,
 unsupported shared fields, native client fields and secret references, transport
 URL schemes, validation file preservation, and CLI output failures are
-covered. Repeat imports, client-version detection and adapter selection, missing
-secret resolution, and atomic configuration write failures are pending.
+covered. Codex version parsing, detection failures, and adapter selection are
+also covered. Repeat imports, missing secret resolution, and atomic configuration
+write failures are pending.
 
 
 ### Codex export
@@ -204,3 +213,18 @@ secret resolution, and atomic configuration write failures are pending.
 `export codex` reads the default Codex TOML config and prints native server
 entries as a YAML stack to stdout, preserving values as-is. It does not change
 the source file. Explicit config paths, secret handling, and imports are pending.
+
+
+### Codex version adapters
+
+`export codex` runs `codex --version` and selects an adapter before reading the
+configuration. The native TOML adapter covers versions from 0.0.0 through the
+checked stable release 0.160.0, retaining historical field names and values.
+Versions newer than 0.160.0 (including future prereleases and 1.x) warn on stderr
+and export using the existing adapter. This range describes the reader's policy,
+not runtime testing of every historical release; it reads only the configured
+TOML file, not legacy non-TOML or effective layered configuration.
+Detection failures use exit 7 (`CLIENT_VERSION_ERROR`). Tests use a fake Codex
+executable and cover older/current/newer versions, warnings, and detection failures. Version-aware import field validation
+and config writes remain pending. Backup creation is required for the future
+importer and is not implemented in this step.

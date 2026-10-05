@@ -1,0 +1,143 @@
+use std::process::{Command, Stdio};
+
+use semver::Version;
+use thiserror::Error;
+
+use crate::exporters::codex::ExportError;
+use crate::schema::StackV1;
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum AdapterError {
+    #[error(
+        "Unable to detect Codex version. Ensure codex is installed and codex --version succeeds."
+    )]
+    Detection,
+}
+
+/// Select an adapter without reading or modifying client configuration.
+pub fn detect() -> Result<CodexAdapter, AdapterError> {
+    let output = Command::new("codex")
+        .arg("--version")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|_| AdapterError::Detection)?;
+    if !output.status.success() {
+        return Err(AdapterError::Detection);
+    }
+    let version = parse_version(&output.stdout)?;
+    Ok(CodexAdapter::select(&version))
+}
+
+fn parse_version(output: &[u8]) -> Result<Version, AdapterError> {
+    let output = std::str::from_utf8(output).map_err(|_| AdapterError::Detection)?;
+    let mut words = output.split_whitespace();
+    if words.next() != Some("codex-cli") {
+        return Err(AdapterError::Detection);
+    }
+    let version = words.next().ok_or(AdapterError::Detection)?;
+    if words.next().is_some() {
+        return Err(AdapterError::Detection);
+    }
+    Version::parse(version).map_err(|_| AdapterError::Detection)
+}
+
+/// Latest stable release checked against the native MCP TOML layout.
+/// https://github.com/openai/codex/releases/tag/rust-v0.160.0
+pub const CURRENT_STABLE: Version = Version::new(0, 160, 0);
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum CodexAdapter {
+    Pre1,
+    Newer { version: Version },
+}
+
+impl CodexAdapter {
+    pub fn select(version: &Version) -> Self {
+        // Historical stdio/HTTP/auth field changes stay inside mcp_servers;
+        // native export preserves their spellings and values without translation.
+        // https://github.com/openai/codex/commit/3a1be084f911
+        // https://github.com/openai/codex/commit/a43ae86b6c07
+        if version.cmp_precedence(&CURRENT_STABLE).is_gt() {
+            Self::Newer {
+                version: version.clone(),
+            }
+        } else {
+            Self::Pre1
+        }
+    }
+
+    pub fn warning(&self) -> Option<String> {
+        match self {
+            Self::Pre1 => None,
+            Self::Newer { version } => Some(format!(
+                "WARNING: Codex {version} is newer than the checked stable release {CURRENT_STABLE}; exporting with the existing native TOML adapter."
+            )),
+        }
+    }
+
+    pub fn export(&self, document: &str) -> Result<StackV1, ExportError> {
+        crate::exporters::codex::export(document)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_codex_version_without_exposing_bad_output() {
+        assert_eq!(
+            parse_version(b"codex-cli 0.149.0\r\n").unwrap(),
+            Version::new(0, 149, 0)
+        );
+        for output in [
+            b"".as_slice(),
+            b"0.149.0",
+            b"other 0.149.0",
+            b"codex-cli fixture-secret",
+            b"codex-cli 0.149.0 extra",
+            b"\xff",
+        ] {
+            let error = parse_version(output).unwrap_err();
+            assert_eq!(error, AdapterError::Detection);
+            assert!(!error.to_string().contains("fixture-secret"));
+        }
+    }
+
+    #[test]
+    fn covers_every_pre1_version_through_current_stable() {
+        for minor in 0..=160 {
+            let version = Version::new(0, minor, 0);
+            assert_eq!(CodexAdapter::select(&version), CodexAdapter::Pre1);
+        }
+        for version in [
+            "0.0.0",
+            "0.1.99",
+            "0.149.1",
+            "0.159.999",
+            "0.160.0-alpha.1",
+            "0.160.0+build.1",
+        ] {
+            assert!(
+                CodexAdapter::select(&Version::parse(version).unwrap())
+                    .warning()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn newer_versions_warn_but_can_export() {
+        for version in ["0.160.1", "0.161.0-alpha.1", "0.161.0", "1.0.0"] {
+            let adapter = CodexAdapter::select(&Version::parse(version).unwrap());
+            let warning = adapter.warning().unwrap();
+            assert!(warning.contains(version));
+            assert!(warning.contains("0.160.0"));
+            assert!(
+                adapter
+                    .export("[mcp_servers.example]\ncommand='example'")
+                    .is_ok()
+            );
+        }
+    }
+}
