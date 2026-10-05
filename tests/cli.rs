@@ -255,16 +255,19 @@ fn native_validation_reports_adapter_boundary_without_executing_helpers() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn codex_export_prints_a_stack_without_changing_values_or_files() {
     let document = "model='unrelated'\n[mcp_servers.local]\ncommand='example'\n[mcp_servers.local.env]\nTOKEN='fixture-secret'\n";
     let fixture = StackFixture::new(document);
     let config = fixture.directory.path().join("config.toml");
+    let bin = mock_codex(fixture.directory.path(), "codex-cli 0.149.0", 0);
     std::fs::write(&config, document).unwrap();
     let execute = || {
         Command::new(env!("CARGO_BIN_EXE_mcpstack"))
             .args(["export", "codex"])
             .env("CODEX_HOME", fixture.directory.path())
+            .env("PATH", &bin)
             .stdin(Stdio::null())
             .output()
             .unwrap()
@@ -298,10 +301,150 @@ fn codex_export_prints_a_stack_without_changing_values_or_files() {
             .args(["export", "codex"])
             .env_remove("CODEX_HOME")
             .env("HOME", home)
+            .env("PATH", &bin)
             .stdin(Stdio::null())
             .output()
             .unwrap();
         assert!(fallback.status.success());
         assert_eq!(fallback.stdout, first.stdout);
     }
+}
+
+#[cfg(unix)]
+fn mock_codex(root: &std::path::Path, version: &str, status: u8) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let executable = bin.join("codex");
+    std::fs::write(&executable, format!("#!/bin/sh\n[ \"$1\" = \"--version\" ] || exit 99\nprintf '%s\\n' '{version}'\nexit {status}\n")).unwrap();
+    std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    bin
+}
+
+#[cfg(unix)]
+#[test]
+fn export_rejects_detection_failures_and_major_versions_before_reading_config() {
+    for (version, status, expected) in [
+        ("codex-cli 1.0.0", 0, 8),
+        ("codex-cli 1.0.0-alpha.1", 0, 8),
+        ("codex-cli 2.0.0", 0, 8),
+        ("fixture-secret", 0, 7),
+        ("codex-cli 0.149.0", 1, 7),
+    ] {
+        let fixture = StackFixture::new("unchanged");
+        let bin = mock_codex(fixture.directory.path(), version, status);
+        // No config.toml: version failure must precede config discovery/reads.
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["export", "codex"])
+            .env("PATH", bin)
+            .env("CODEX_HOME", fixture.directory.path())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(expected));
+        assert!(output.stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("fixture-secret"));
+        assert_eq!(std::fs::read_to_string(&fixture.file).unwrap(), "unchanged");
+        assert!(!fixture.directory.path().join("config.toml.bak").exists());
+    }
+    let fixture = StackFixture::new("unchanged");
+    let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["export", "codex"])
+        .env("PATH", fixture.directory.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(7));
+    assert!(output.stdout.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn older_versions_export_and_newer_versions_warn_only_on_stderr() {
+    for version in [
+        "0.0.0",
+        "0.50.0",
+        "0.149.1",
+        "0.160.0",
+        "0.160.1",
+        "0.161.0-alpha.1",
+    ] {
+        let fixture = StackFixture::new("unchanged");
+        let config = "[mcp_servers.example]\ncommand='example'\nstartup_timeout_ms=1000\n";
+        std::fs::write(fixture.directory.path().join("config.toml"), config).unwrap();
+        let bin = mock_codex(fixture.directory.path(), &format!("codex-cli {version}"), 0);
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["export", "codex"])
+            .env("PATH", bin)
+            .env("CODEX_HOME", fixture.directory.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let stack: Value = yaml_serde::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            stack["servers"]["example"]["config"]["startup_timeout_ms"],
+            1000
+        );
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("WARNING"));
+        let newer = matches!(version, "0.160.1" | "0.161.0-alpha.1");
+        assert_eq!(!output.stderr.is_empty(), newer);
+        if newer {
+            assert!(String::from_utf8_lossy(&output.stderr).contains("WARNING"));
+        }
+        assert_eq!(
+            std::fs::read_to_string(fixture.directory.path().join("config.toml")).unwrap(),
+            config
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_npm_launcher_exports_and_reports_detection_failures() {
+    let fixture = StackFixture::new("unchanged");
+    let bin = fixture.directory.path().join("npm tools & spaces");
+    std::fs::create_dir_all(&bin).unwrap();
+    let launcher = bin.join("codex.cmd");
+    let config = "[mcp_servers.example]\ncommand='example'\n";
+    std::fs::write(fixture.directory.path().join("config.toml"), config).unwrap();
+    let execute = || {
+        Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["export", "codex"])
+            .env("PATH", &bin)
+            .env("CODEX_HOME", fixture.directory.path())
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    std::fs::write(
+        &launcher,
+        "@echo off\r\nif not \"%~1\"==\"--version\" exit /b 99\r\necho codex-cli 0.149.0\r\n",
+    )
+    .unwrap();
+    let output = execute();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let value: Value = yaml_serde::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["servers"]["example"]["config"]["command"], "example");
+    for version in ["1.0.0", "1.0.0-alpha.1"] {
+        std::fs::write(
+            &launcher,
+            format!("@echo off\r\necho codex-cli {version}\r\n"),
+        )
+        .unwrap();
+        let rejected = execute();
+        assert_eq!(rejected.status.code(), Some(8));
+        assert!(rejected.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&rejected.stderr).contains("UNSUPPORTED_CLIENT_VERSION"));
+    }
+    std::fs::write(
+        &launcher,
+        "@echo off\r\necho codex-cli 0.149.0\r\nexit /b 1\r\n",
+    )
+    .unwrap();
+    let failed = execute();
+    assert_eq!(failed.status.code(), Some(7));
+    assert!(failed.stdout.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(fixture.directory.path().join("config.toml")).unwrap(),
+        config
+    );
 }
