@@ -42,8 +42,8 @@ to its entry in Current status at the bottom.\
 | Partial [*](#output-formats) | Human-readable output and structured JSON results; diagnostics on stderr. |
 | Done | Define a versioned, client-independent stack format. |
 | Done | Validate schema versions, server definitions, names, and secret references. |
-| Done | Export Codex server entries as a YAML stack to stdout, preserving values as-is. [*](#codex-export) |
-| Unsupported | Replace exported credentials with secret references. |
+| Done | Export Codex server entries as a YAML stack to stdout with safe defaults. [*](#codex-export) |
+| Done | Replace recognized credentials with secret references by default; expose values only with `--expose-secrets`. |
 | Unsupported | Import/merge a stack into Codex without losing supported fields. [*](#phase-1-boundaries) |
 | Unsupported | Resolve secret references from environment variables; reject missing values. [*](#secrets) |
 | Unsupported | Create a `.bak` copy of the target config before beginning import; abort if backup creation fails. |
@@ -163,9 +163,11 @@ Transactional mode must not silently commit a partially installed stack.
 ### Secrets
 
 [*] Phase 1 resolves references from environment variables; Phase 2 adds providers.
-Document reference syntax. Export must require explicit
-classification of ambiguous sensitive values. Shared stacks never contain resolved
-credentials; private client configs and recovery copies use restrictive permissions.
+Document reference syntax. Export replaces recognized credential fields and values
+with environment references; commands, URLs, and ordinary settings stay literal.
+`--expose-secrets` explicitly opts into exporting credential literals; its output
+may contain credentials and is intended for private use. Private client configs
+and recovery copies use restrictive permissions.
 
 ## Open decisions
 
@@ -221,8 +223,24 @@ write failures are pending.
 ### Codex export
 
 `export codex` reads the default Codex TOML config and prints native server
-entries as a YAML stack to stdout, preserving values as-is. It does not change
-the source file. Explicit config paths, secret handling, and imports are pending.
+entries as a YAML stack to stdout. By default, credential values become
+`{"$env":"MCPSTACK_SERVER_FIELD"}`. Recognition uses credential field names
+(token, secret, password, API/access/private key), authorization/cookie headers,
+and named token arguments (`--token VALUE` or `--token=VALUE`). Nested credential
+fields and matching environment variable names are covered. Commands, URLs,
+ordinary arguments, timeouts, booleans, and existing environment-name settings
+remain unchanged. This is name-based detection, not a guarantee that arbitrary
+unnamed values or credentials embedded in URLs will be recognized.
+
+Nested fields and array indices contribute to reference names. Names are uppercase
+ASCII with punctuation replaced by underscores; collisions receive deterministic
+numeric suffixes. Existing references are preserved and their names reserved.
+Export never reads or sets environment variables. For an inline credential argument,
+the referenced environment value must contain the complete `--token=VALUE` argument.
+
+`export codex --expose-secrets` preserves literal values, including credentials.
+Neither mode changes the source file or logs its values. Server names and field
+keys remain visible. Explicit config paths and imports are pending.
 
 
 ### Codex version adapters

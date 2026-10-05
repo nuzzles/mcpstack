@@ -1,8 +1,8 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use thiserror::Error;
 
-use crate::schema::{SCHEMA_VERSION, StackV1};
+use crate::schema::{SCHEMA_VERSION, Server, StackV1, v1::ClientValue};
 
 /// Diagnostics deliberately omit parser contents, field values.
 #[derive(Debug, Error)]
@@ -17,7 +17,7 @@ pub enum ExportError {
 
 /// Export one native entry per server. This reads data only: it does not resolve
 /// credentials, run helpers, or infer installed-client compatibility.
-pub fn export(document: &str) -> Result<StackV1, ExportError> {
+pub fn export(document: &str, expose_secrets: bool) -> Result<StackV1, ExportError> {
     let config: toml::Value = toml::from_str(document).map_err(|_| ExportError::Config)?;
     let servers = match config.get("mcp_servers") {
         None => serde_json::Map::new(),
@@ -42,9 +42,218 @@ pub fn export(document: &str) -> Result<StackV1, ExportError> {
         .map(|(name, config)| (name, serde_json::json!({"client":"codex", "config":config})))
         .collect();
     let document = serde_json::json!({"schema_version":SCHEMA_VERSION,"servers":definitions});
-    let stack: StackV1 = serde_json::from_value(document).map_err(|_| ExportError::Stack)?;
+    let mut stack: StackV1 = serde_json::from_value(document).map_err(|_| ExportError::Stack)?;
     stack.validate().map_err(|_| ExportError::Stack)?;
+    if !expose_secrets {
+        let mut names = BTreeSet::new();
+        for server in stack.servers.values() {
+            if let Server::ClientSpecific { config, .. } = server {
+                for value in config.values() {
+                    collect_references(value, &mut names);
+                }
+            }
+        }
+        for (server_name, server) in &mut stack.servers {
+            if let Server::ClientSpecific { config, .. } = server {
+                for (key, value) in config {
+                    if key == "env_http_headers" {
+                        continue;
+                    }
+                    protect(
+                        value,
+                        &format!("{server_name}_{key}"),
+                        secret_key(key),
+                        key == "args",
+                        &mut names,
+                    );
+                }
+            }
+        }
+    }
     Ok(stack)
+}
+
+fn collect_references(value: &ClientValue, names: &mut BTreeSet<String>) {
+    match value {
+        ClientValue::Object(values) => {
+            if let Some(ClientValue::String(name)) = values.get("$env") {
+                names.insert(name.clone());
+            } else {
+                for value in values.values() {
+                    collect_references(value, names);
+                }
+            }
+        }
+        ClientValue::Array(values) => {
+            for value in values {
+                collect_references(value, names);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn secret_key(key: &str) -> bool {
+    let mut normalized = String::new();
+    let characters: Vec<_> = key.chars().collect();
+    for (index, &c) in characters.iter().enumerate() {
+        if c.is_ascii_uppercase()
+            && index > 0
+            && (characters[index - 1].is_ascii_lowercase()
+                || (characters[index - 1].is_ascii_uppercase()
+                    && characters
+                        .get(index + 1)
+                        .is_some_and(char::is_ascii_lowercase)))
+        {
+            normalized.push('_');
+        }
+        normalized.push(if c.is_ascii_alphanumeric() {
+            c.to_ascii_lowercase()
+        } else {
+            '_'
+        });
+    }
+    // Uppercase environment/header names are common; collapse their separators.
+    let compact: String = key
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect();
+    if ["envvar", "envvars", "filename", "filepath", "file", "path"]
+        .iter()
+        .any(|suffix| compact.ends_with(suffix))
+    {
+        return false;
+    }
+    matches!(
+        compact.as_str(),
+        "authorization"
+            | "proxyauthorization"
+            | "cookie"
+            | "setcookie"
+            | "password"
+            | "passwd"
+            | "secret"
+            | "token"
+            | "apikey"
+            | "accesskey"
+            | "privatekey"
+    ) || [
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "apikey",
+        "accesskey",
+        "privatekey",
+    ]
+    .iter()
+    .any(|suffix| compact.ends_with(suffix))
+        || normalized
+            .split('_')
+            .any(|part| matches!(part, "secret" | "password" | "passwd"))
+        || {
+            let parts: Vec<_> = normalized
+                .split('_')
+                .filter(|part| !part.is_empty())
+                .collect();
+            (parts.contains(&"token")
+                && !parts.iter().any(|part| {
+                    matches!(
+                        *part,
+                        "limit" | "count" | "budget" | "usage" | "length" | "size"
+                    )
+                }))
+                || parts.windows(2).any(|pair| {
+                    matches!(
+                        pair,
+                        ["api", "key"] | ["access", "key"] | ["private", "key"]
+                    )
+                })
+        }
+}
+
+fn protect(
+    value: &mut ClientValue,
+    path: &str,
+    sensitive: bool,
+    arguments: bool,
+    names: &mut BTreeSet<String>,
+) {
+    match value {
+        ClientValue::Object(values) => {
+            if !values.contains_key("$env") {
+                for (key, value) in values {
+                    protect(
+                        value,
+                        &format!("{path}_{key}"),
+                        sensitive || secret_key(key),
+                        key == "args",
+                        names,
+                    );
+                }
+            }
+        }
+        ClientValue::Array(values) => {
+            let mut next_secret = false;
+            let mut options = arguments;
+            for (index, value) in values.iter_mut().enumerate() {
+                if options
+                    && !next_secret
+                    && matches!(value, ClientValue::String(text) if text == "--")
+                {
+                    options = false;
+                }
+                let (inline_secret, following_secret) = if options && !next_secret {
+                    match value {
+                        ClientValue::String(text) if text.starts_with('-') => {
+                            let (flag, inline) = text
+                                .split_once('=')
+                                .map_or((text.as_str(), false), |(flag, _)| (flag, true));
+                            let credential = secret_key(flag.trim_start_matches('-'));
+                            (credential && inline, credential && !inline)
+                        }
+                        _ => (false, false),
+                    }
+                } else {
+                    (false, false)
+                };
+                protect(
+                    value,
+                    &format!("{path}_{index}"),
+                    sensitive || next_secret || inline_secret,
+                    false,
+                    names,
+                );
+                next_secret = following_secret;
+            }
+        }
+        ClientValue::String(_) | ClientValue::Number(_) if sensitive => {
+            // Never derive names from values or read the process environment.
+            let suffix: String = path
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() {
+                        c.to_ascii_uppercase()
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let base = format!("MCPSTACK_{suffix}");
+            let mut name = base.clone();
+            let mut index = 2;
+            while !names.insert(name.clone()) {
+                name = format!("{base}_{index}");
+                index += 1;
+            }
+            *value = ClientValue::Object(BTreeMap::from([(
+                "$env".to_owned(),
+                ClientValue::String(name),
+            )]));
+        }
+        _ => {}
+    }
 }
 
 fn contains_unsupported_value(value: &toml::Value) -> bool {
@@ -60,6 +269,7 @@ fn contains_unsupported_value(value: &toml::Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exporters::to_yaml;
 
     const CONFIG: &str = r#"
 model = "unrelated"
@@ -73,7 +283,7 @@ client_secret = "another-fixture-secret"
 
     #[test]
     fn preserves_native_values_without_transforming_them() {
-        let value = serde_json::to_value(export(CONFIG).unwrap()).unwrap();
+        let value = serde_json::to_value(export(CONFIG, true).unwrap()).unwrap();
         assert_eq!(value["servers"]["local"]["config"]["startup_timeout_ms"], 0);
         assert_eq!(
             value["servers"]["local"]["config"]["args"][1],
@@ -87,6 +297,104 @@ client_secret = "another-fixture-secret"
     }
 
     #[test]
+    fn default_export_masks_credentials_and_round_trips() {
+        let stack = export(CONFIG, false).unwrap();
+        let value = serde_json::to_value(&stack).unwrap();
+        assert_eq!(
+            value["servers"]["local"]["config"]["args"][1],
+            serde_json::json!({"$env":"MCPSTACK_LOCAL_ARGS_1"})
+        );
+        assert_eq!(
+            value["servers"]["local"]["config"]["oauth"]["client_secret"],
+            serde_json::json!({"$env":"MCPSTACK_LOCAL_OAUTH_CLIENT_SECRET"})
+        );
+        assert_eq!(value["servers"]["local"]["config"]["startup_timeout_ms"], 0);
+        let yaml = to_yaml(&stack).unwrap();
+        assert!(!yaml.contains("fixture-secret"));
+        assert!(yaml.contains("example"));
+        assert_eq!(yaml, to_yaml(&export(CONFIG, false).unwrap()).unwrap());
+        let restored = StackV1::from_yaml(&yaml).unwrap();
+        assert_eq!(serde_json::to_value(restored).unwrap(), value);
+    }
+
+    #[test]
+    fn preserves_references_and_disambiguates_generated_names() {
+        let config = r#"
+[mcp_servers.x]
+"api-key" = "first-secret"
+"api_key" = "second-secret"
+pin = 1234
+enabled = true
+[mcp_servers.x.existing]
+"$env" = "MCPSTACK_X_API_KEY"
+"#;
+        let value = serde_json::to_value(export(config, false).unwrap()).unwrap();
+        let config = &value["servers"]["x"]["config"];
+        assert_eq!(config["existing"]["$env"], "MCPSTACK_X_API_KEY");
+        assert_eq!(config["api-key"]["$env"], "MCPSTACK_X_API_KEY_2");
+        assert_eq!(config["api_key"]["$env"], "MCPSTACK_X_API_KEY_3");
+        assert_eq!(config["pin"], 1234);
+        assert_eq!(config["enabled"], true);
+        assert!(!value.to_string().contains("secret"));
+    }
+
+    #[test]
+    fn credential_qualifiers_are_masked_without_masking_token_settings() {
+        let document = r#"
+[mcp_servers.example]
+command = "example"
+url = "https://example.com/mcp"
+bearer_token_env_var = "SERVICE_TOKEN"
+output_token_limit = 512
+tokenCount = 12
+tokenBudget = 2048
+[mcp_servers.example.env]
+TOKEN_VALUE = "first-synthetic-secret"
+tokenValue = "second-synthetic-secret"
+GITHUB_TOKEN_RAW = "third-synthetic-secret"
+API_KEY_VALUE = "fourth-synthetic-secret"
+AWS_ACCESS_KEY_ID = "synthetic-key-id"
+"#;
+        let stack = export(document, false).unwrap();
+        let value = serde_json::to_value(&stack).unwrap();
+        let config = &value["servers"]["example"]["config"];
+        for key in [
+            "TOKEN_VALUE",
+            "tokenValue",
+            "GITHUB_TOKEN_RAW",
+            "API_KEY_VALUE",
+            "AWS_ACCESS_KEY_ID",
+        ] {
+            assert!(config["env"][key]["$env"].is_string(), "{key}");
+        }
+        assert_eq!(config["command"], "example");
+        assert_eq!(config["url"], "https://example.com/mcp");
+        assert_eq!(config["bearer_token_env_var"], "SERVICE_TOKEN");
+        assert_eq!(config["output_token_limit"], 512);
+        assert_eq!(config["tokenCount"], 12);
+        assert_eq!(config["tokenBudget"], 2048);
+        assert!(!to_yaml(&stack).unwrap().contains("synthetic"));
+    }
+
+    #[test]
+    fn argument_detection_stops_at_terminator_and_consumes_values_once() {
+        let document = r#"
+[mcp_servers.example]
+command = "example"
+args = ["--token", "--password", "ordinary", "--api-key=synthetic-secret", "--", "--token", "positional", "--password=ordinary"]
+"#;
+        let value = serde_json::to_value(export(document, false).unwrap()).unwrap();
+        let args = &value["servers"]["example"]["config"]["args"];
+        assert!(args[1]["$env"].is_string());
+        assert_eq!(args[2], "ordinary");
+        assert!(args[3]["$env"].is_string());
+        assert_eq!(args[4], "--");
+        assert_eq!(args[5], "--token");
+        assert_eq!(args[6], "positional");
+        assert_eq!(args[7], "--password=ordinary");
+    }
+
+    #[test]
     fn rejects_invalid_tables_duplicates_and_unsupported_values() {
         for config in [
             "mcp_servers = 1",
@@ -95,9 +403,9 @@ client_secret = "another-fixture-secret"
             "[mcp_servers.x]\ntime=1979-05-27T07:32:00Z",
             "[mcp_servers.x]\nvalue=nan",
         ] {
-            assert!(export(config).is_err());
+            assert!(export(config, false).is_err());
         }
-        let stack = export("model='unrelated'").unwrap();
+        let stack = export("model='unrelated'", false).unwrap();
         assert!(stack.servers.is_empty());
     }
 }

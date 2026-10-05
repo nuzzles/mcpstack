@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 use semver::Version;
 use thiserror::Error;
 
-use crate::exporters::codex::ExportError;
+use crate::exporters::codex::{ExportError, export};
 use crate::schema::StackV1;
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -108,8 +108,8 @@ impl CodexAdapter {
         }
     }
 
-    pub fn export(&self, document: &str) -> Result<StackV1, ExportError> {
-        crate::exporters::codex::export(document)
+    pub fn export(&self, document: &str, expose_secrets: bool) -> Result<StackV1, ExportError> {
+        export(document, expose_secrets)
     }
 }
 
@@ -191,7 +191,7 @@ mod tests {
             assert!(warning.contains("0.160.0"));
             assert!(
                 adapter
-                    .export("[mcp_servers.example]\ncommand='example'")
+                    .export("[mcp_servers.example]\ncommand='example'", false)
                     .is_ok()
             );
         }

@@ -11,6 +11,9 @@ use crate::exporters::{codex::ExportError, to_yaml};
 /// Export client server definitions as a YAML stack on stdout.
 #[derive(Args)]
 pub struct Export {
+    /// Preserve literal credentials in the exported stack.
+    #[arg(long, global = true)]
+    expose_secrets: bool,
     #[command(subcommand)]
     client: Client,
 }
@@ -31,7 +34,7 @@ impl Export {
                 }
                 let path = default_config().ok_or(AppError::ConfigPath)?;
                 let document = fs::read_to_string(path).map_err(AppError::ConfigRead)?;
-                let stack = adapter.export(&document)?;
+                let stack = adapter.export(&document, self.expose_secrets)?;
                 // Prepare the complete result before exposing any content on stdout.
                 let yaml = to_yaml(&stack).map_err(|_| ExportError::Stack)?;
                 write!(output, "{yaml}")?;
