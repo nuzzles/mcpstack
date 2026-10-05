@@ -390,3 +390,45 @@ fn older_versions_export_and_newer_versions_warn_only_on_stderr() {
         );
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn windows_npm_launcher_exports_and_reports_detection_failures() {
+    let fixture = StackFixture::new("unchanged");
+    let bin = fixture.directory.path().join("npm tools & spaces");
+    std::fs::create_dir_all(&bin).unwrap();
+    let launcher = bin.join("codex.cmd");
+    let config = "[mcp_servers.example]\ncommand='example'\n";
+    std::fs::write(fixture.directory.path().join("config.toml"), config).unwrap();
+    let execute = || {
+        Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["export", "codex"])
+            .env("PATH", &bin)
+            .env("CODEX_HOME", fixture.directory.path())
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    std::fs::write(
+        &launcher,
+        "@echo off\r\nif not \"%~1\"==\"--version\" exit /b 99\r\necho codex-cli 0.149.0\r\n",
+    )
+    .unwrap();
+    let output = execute();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let value: Value = yaml_serde::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["servers"]["example"]["config"]["command"], "example");
+    std::fs::write(
+        &launcher,
+        "@echo off\r\necho codex-cli 0.149.0\r\nexit /b 1\r\n",
+    )
+    .unwrap();
+    let failed = execute();
+    assert_eq!(failed.status.code(), Some(7));
+    assert!(failed.stdout.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(fixture.directory.path().join("config.toml")).unwrap(),
+        config
+    );
+}

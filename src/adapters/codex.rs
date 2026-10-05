@@ -16,7 +16,7 @@ pub enum AdapterError {
 
 /// Select an adapter without reading or modifying client configuration.
 pub fn detect() -> Result<CodexAdapter, AdapterError> {
-    let output = Command::new("codex")
+    let output = codex_command()?
         .arg("--version")
         .stdin(Stdio::null())
         .output()
@@ -26,6 +26,34 @@ pub fn detect() -> Result<CodexAdapter, AdapterError> {
     }
     let version = parse_version(&output.stdout)?;
     Ok(CodexAdapter::select(&version))
+}
+
+#[cfg(not(windows))]
+fn codex_command() -> Result<Command, AdapterError> {
+    Ok(Command::new("codex"))
+}
+
+#[cfg(windows)]
+fn codex_command() -> Result<Command, AdapterError> {
+    let path = std::env::var_os("PATH").ok_or(AdapterError::Detection)?;
+    let launcher = windows_launcher(&path).ok_or(AdapterError::Detection)?;
+    // Rust's Command handles an explicitly resolved .cmd via cmd.exe. Let it
+    // quote the path and arguments rather than building a shell command string.
+    Ok(Command::new(launcher))
+}
+
+#[cfg(any(windows, test))]
+fn windows_launcher(path: &std::ffi::OsStr) -> Option<std::path::PathBuf> {
+    for directory in std::env::split_paths(path) {
+        // Match PATH order, preferring a native executable within each directory.
+        for name in ["codex.exe", "codex.cmd"] {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return std::path::absolute(candidate).ok();
+            }
+        }
+    }
+    None
 }
 
 fn parse_version(output: &[u8]) -> Result<Version, AdapterError> {
@@ -83,6 +111,28 @@ impl CodexAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolves_windows_launchers_in_path_order() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("npm tools with spaces");
+        let second = root.path().join("native tools");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        let path = std::env::join_paths([&first, &second]).unwrap();
+        assert!(windows_launcher(&path).is_none());
+        std::fs::write(first.join("codex.cmd"), "fixture").unwrap();
+        std::fs::write(second.join("codex.exe"), "fixture").unwrap();
+        assert_eq!(
+            windows_launcher(&path).unwrap(),
+            std::path::absolute(first.join("codex.cmd")).unwrap()
+        );
+        std::fs::write(first.join("codex.exe"), "fixture").unwrap();
+        assert_eq!(
+            windows_launcher(&path).unwrap(),
+            std::path::absolute(first.join("codex.exe")).unwrap()
+        );
+    }
 
     #[test]
     fn parses_codex_version_without_exposing_bad_output() {
