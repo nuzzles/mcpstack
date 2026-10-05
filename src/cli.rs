@@ -26,6 +26,9 @@ pub const EXAMPLES: &[&str] = &[
 pub struct Cli {
     #[command(flatten)]
     pub logging: Logging,
+    /// Disable prompts and mask detected secrets unless --expose-secrets is supplied.
+    #[arg(long, global = true)]
+    non_interactive: bool,
     /// Print the complete CLI interface as versioned JSON.
     #[arg(long)]
     schema: bool,
@@ -50,7 +53,7 @@ impl Cli {
         } else if let Some(command) = self.command {
             match command {
                 Commands::Validate(inner) => inner.run(output),
-                Commands::Export(inner) => inner.run(output),
+                Commands::Export(inner) => inner.run(output, self.non_interactive),
             }
         } else {
             Self::command().write_long_help(output)?;
