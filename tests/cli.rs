@@ -25,7 +25,15 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
     assert_eq!(schema["schema_version"], 1);
     assert_eq!(schema["cli_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(schema["command"]["name"], "mcpstack");
-    assert_eq!(schema["command"]["commands"], serde_json::json!([]));
+    let commands = schema["command"]["commands"].as_array().unwrap();
+    assert_eq!(commands.len(), 3); // validate, export, and generated help
+    let validate = commands
+        .iter()
+        .find(|command| command["name"] == "validate")
+        .unwrap();
+    assert_eq!(validate["arguments"][0]["name"], "file");
+    assert_eq!(validate["arguments"][0]["required"], true);
+    assert_eq!(schema["command"]["args_conflicts_with_subcommands"], true);
 
     let help = run(&["--help"]);
     let help = String::from_utf8(help.stdout).unwrap();
@@ -132,4 +140,168 @@ fn advertised_error_codes_match_process_failures() {
         String::from_utf8_lossy(&output.stderr)
             .starts_with(output_error["error_code"].as_str().unwrap())
     );
+}
+
+struct StackFixture {
+    directory: tempfile::TempDir,
+    file: std::path::PathBuf,
+}
+
+impl StackFixture {
+    fn new(document: &str) -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("stack.yaml");
+        std::fs::write(&file, document).unwrap();
+        Self { directory, file }
+    }
+
+    fn validate(&self) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .arg("validate")
+            .arg(&self.file)
+            .env_remove("MCPSTACK_MISSING_TEST_TOKEN")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    }
+}
+
+#[test]
+fn validation_preserves_files_and_does_not_resolve_secrets_or_start_servers() {
+    let document = r#"{
+        "schema_version":1,
+        "servers":{"local":{"transport":{
+            "type":"stdio","command":"mcpstack-nonexistent-test-executable",
+            "env":{"TOKEN":{"env":"MCPSTACK_MISSING_TEST_TOKEN"}}
+        }}}
+    }"#;
+    let fixture = StackFixture::new(document);
+    let output = fixture.validate();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "Valid stack (schema 1, 1 servers).\n"
+    );
+    assert_eq!(std::fs::read_to_string(&fixture.file).unwrap(), document);
+    assert_eq!(
+        std::fs::read_dir(fixture.directory.path()).unwrap().count(),
+        1
+    );
+}
+
+#[test]
+fn validation_reports_safe_typed_errors_and_missing_arguments() {
+    for (document, expected) in [
+        (
+            r#"{"schema_version":2}"#,
+            "Unsupported stack schema version",
+        ),
+        (
+            r#"{"schema_version":1,"servers":"fixture-secret"}"#,
+            "Malformed stack",
+        ),
+        (
+            r#"{"schema_version":1,"servers":{" bad name":{"transport":{"type":"stdio","command":"example"}}}}"#,
+            "Server names",
+        ),
+    ] {
+        let fixture = StackFixture::new(document);
+        let output = fixture.validate();
+        assert_eq!(output.status.code(), Some(4));
+        assert!(output.stdout.is_empty());
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(diagnostic.starts_with("INVALID_STACK:"));
+        assert!(diagnostic.contains(expected));
+        assert!(!diagnostic.contains("fixture-secret"));
+        assert_eq!(std::fs::read_to_string(&fixture.file).unwrap(), document);
+    }
+    let fixture = StackFixture::new("{}");
+    std::fs::remove_file(&fixture.file).unwrap();
+    let output = fixture.validate();
+    assert_eq!(output.status.code(), Some(3));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).starts_with("STACK_READ_ERROR:"));
+    for args in [vec!["validate"], vec!["--schema", "validate", "stack.json"]] {
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+    }
+}
+
+#[test]
+fn native_validation_reports_adapter_boundary_without_executing_helpers() {
+    let document = r#"{
+        "schema_version":1,
+        "servers":{"native":{
+            "client":"claude_code",
+            "config":{
+                "type":"http", "url":"https://${HOST}/mcp",
+                "headersHelper":"mcpstack-nonexistent-test-executable",
+                "headers":{"Authorization":{"$env":"MCPSTACK_MISSING_TEST_TOKEN"}}
+            }
+        }}
+    }"#;
+    let fixture = StackFixture::new(document);
+    let output = fixture.validate();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("require client adapter validation"));
+    assert!(!text.contains("MCPSTACK_MISSING_TEST_TOKEN"));
+    assert_eq!(std::fs::read_to_string(&fixture.file).unwrap(), document);
+    assert_eq!(
+        std::fs::read_dir(fixture.directory.path()).unwrap().count(),
+        1
+    );
+}
+
+#[test]
+fn codex_export_prints_a_stack_without_changing_values_or_files() {
+    let document = "model='unrelated'\n[mcp_servers.local]\ncommand='example'\n[mcp_servers.local.env]\nTOKEN='fixture-secret'\n";
+    let fixture = StackFixture::new(document);
+    let config = fixture.directory.path().join("config.toml");
+    std::fs::write(&config, document).unwrap();
+    let execute = || {
+        Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["export", "codex"])
+            .env("CODEX_HOME", fixture.directory.path())
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let first = execute();
+    assert!(first.status.success());
+    assert!(first.stderr.is_empty());
+    assert!(String::from_utf8_lossy(&first.stdout).starts_with("schema_version: 1\n"));
+    assert_eq!(first.stdout, execute().stdout);
+    std::fs::write(&fixture.file, &first.stdout).unwrap();
+    assert!(fixture.validate().status.success());
+    let value: Value = yaml_serde::from_slice(&first.stdout).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(
+        value["servers"]["local"]["config"]["env"]["TOKEN"],
+        "fixture-secret"
+    );
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), document);
+    std::fs::write(&config, "invalid TOML fixture-secret").unwrap();
+    let failed = execute();
+    assert_eq!(failed.status.code(), Some(6));
+    assert!(failed.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&failed.stderr).contains("fixture-secret"));
+    // On Unix BaseDirs honors HOME; Windows uses the native known-folder API.
+    #[cfg(unix)]
+    {
+        let home = fixture.directory.path().join("home");
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(home.join(".codex/config.toml"), document).unwrap();
+        let fallback = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["export", "codex"])
+            .env_remove("CODEX_HOME")
+            .env("HOME", home)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(fallback.status.success());
+        assert_eq!(fallback.stdout, first.stdout);
+    }
 }

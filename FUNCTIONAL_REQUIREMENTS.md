@@ -13,10 +13,12 @@ to its entry in Current status at the bottom.\
 
 | Implementation | Brief description |
 | --- | --- |
-| Unsupported | Read/write MCP config at the default or an explicit path. |
+| Done | Read MCP server entries from the default Codex config for export. [*](#codex-export) |
+| Unsupported | Read MCP config at an explicit path for export. |
+| Unsupported | Write MCP config at the default or an explicit path for import. |
 | Unsupported | Detect the installed Codex version. |
-| Unsupported | Enforce the stack's Codex compatibility range before import/merge. [*](#version-compatibility) |
-| Unsupported | Preserve unrelated settings/servers; skip identical entries and reject differing ones. |
+| Unsupported | Select a Codex adapter supporting the installed version; reject missing adapters or unsupported fields before writes. [*](#version-compatibility) |
+| Unsupported | On import, preserve unrelated settings/servers; skip identical entries and reject differing ones. |
 
 ### CLI
 
@@ -28,13 +30,14 @@ to its entry in Current status at the bottom.\
 | Unsupported | Default interactive prompts and explicit noninteractive operation. [*](#interaction) |
 | Partial [*](#deterministic-output) | Deterministic stack files, plans, and structured output. |
 | Partial [*](#output-formats) | Human-readable output and structured JSON results; diagnostics on stderr. |
-| Unsupported | Define a versioned stack format with harness compatibility ranges. |
-| Unsupported | Validate schema versions, server definitions, names, and secret references. |
-| Unsupported | Export Codex servers with credentials replaced by references. [*](#phase-1-boundaries) |
+| Done | Define a versioned, client-independent stack format. |
+| Done | Validate schema versions, server definitions, names, and secret references. |
+| Done | Export Codex server entries as a YAML stack to stdout, preserving values as-is. [*](#codex-export) |
+| Unsupported | Replace exported credentials with secret references. |
 | Unsupported | Import/merge a stack into Codex without losing supported fields. [*](#phase-1-boundaries) |
 | Unsupported | Resolve secret references from environment variables; reject missing values. [*](#secrets) |
 | Unsupported | Atomic config writes with restrictive permissions; preserve originals on failure. |
-| Unsupported | Test round trips, repeat imports, version compatibility, missing secrets, and write failures. |
+| Partial [*](#stack-workflow-tests) | Test round trips, repeat imports, version compatibility, missing secrets, and write failures. |
 
 ## Phase 2
 
@@ -81,11 +84,14 @@ to its entry in Current status at the bottom.\
 
 ### Version compatibility
 
-[*] Stack schema versions and harness versions are independent. A schema-v2 stack
-can import/merge into Codex v6 when its declared Codex range includes v6 (e.g.
-`>=6.0.0 <7.0.0`) and mcpstack supports schema v2. Reject unsupported schemas,
-out-of-range versions, or undetectable harness versions before writing. Versions
-here are illustrative; define range syntax before implementation.
+[*] Stack schema versions and harness versions are independent. Shared stacks
+carry only their schema version; client compatibility is owned by mcpstack's
+adapters. Before import/merge, detect the target client and installed version and
+delegate to an adapter supporting that version. Adapters can support a range of
+versions when the client's configuration format is stable. Reject unsupported
+stack schemas, undetectable client versions, missing adapters, or fields the
+selected adapter cannot represent before writing. The adapter also owns reading
+for export and preserving unrelated client settings during import.
 
 ### Phase 1 boundaries
 
@@ -95,7 +101,6 @@ on invalid input, unsupported fields, unresolved references, or differing entrie
 with the same name. Compare parsed definitions after resolving references; skip
 identical entries without rewriting an unchanged config. Write changes atomically
 with restrictive permissions. Keep credentials out of exports and diagnostics.
-Choose reference syntax, file format, and supported Codex fields before implementation.
 Existing export files require explicit overwrite.
 
 ---
@@ -148,8 +153,11 @@ credentials; private client configs and recovery copies use restrictive permissi
 
 ## Open decisions
 
-Stack format, exact command/flag syntax, supported transports, additional secret providers,
-installation mechanisms, and backup retention/recovery.
+Additional command/flag syntax, client adapter support, additional
+secret providers, installation mechanisms, and backup retention/recovery.
+Stack format v1 defines YAML, STDIO/HTTP/SSE/WebSocket, native client definitions,
+environment reference syntax,
+and client-independent server definitions.
 
 Remote catalogs, team access controls, and automatic synchronization are later
 scope. Publishing and release/deployment automation require explicit authorization.
@@ -158,22 +166,41 @@ scope. Publishing and release/deployment automation require explicit authorizati
 
 ### Commands and help
 
-Help, version, `--schema`, and runnable examples are implemented. Import/export
-commands are pending.
+Help, version, `--schema`, `validate <file>`, `export codex`, and runnable help
+examples are implemented. Import commands are pending.
 
 ### Exit statuses and error codes
 
 CLI exit statuses are 0 for success/help/version, 1 for output failures
-(`OUTPUT_ERROR`), and 2 for invalid arguments (`INVALID_ARGUMENT`). Errors for
-stack and harness operations are pending.
+(`OUTPUT_ERROR`), 2 for invalid arguments (`INVALID_ARGUMENT`), 3 for stack read
+failures (`STACK_READ_ERROR`), and 4 for invalid stacks (`INVALID_STACK`).
+Config read failures use 5 (`CONFIG_READ_ERROR`); export failures use 6
+(`EXPORT_ERROR`). Import and harness compatibility errors are pending.
 
 ### Deterministic output
 
-The CLI schema is generated deterministically from command definitions.
-Stack files, plans, and structured operation results are pending.
+The CLI schema is generated deterministically from command definitions. Stack v1
+uses ordered maps and passes serialization round-trip tests. Codex export emits
+deterministic native YAML stacks. Plans and structured operation results are pending.
 
 ### Output formats
 
-Help, version, and development status use text output; `--schema` emits JSON.
+Help, version, and validation results use text output;
+`--schema` emits JSON; `export codex` emits YAML.
 Diagnostics go to stderr without echoing argument values. Structured JSON
 operation results are pending.
+
+### Stack workflow tests
+
+Stack serialization round trips, client-independent documents, reference syntax,
+unsupported shared fields, native client fields and secret references, transport
+URL schemes, validation file preservation, and CLI output failures are
+covered. Repeat imports, client-version detection and adapter selection, missing
+secret resolution, and atomic configuration write failures are pending.
+
+
+### Codex export
+
+`export codex` reads the default Codex TOML config and prints native server
+entries as a YAML stack to stdout, preserving values as-is. It does not change
+the source file. Explicit config paths, secret handling, and imports are pending.
