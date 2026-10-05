@@ -11,7 +11,7 @@ description = "A Rust CLI for humans and agents to install multiple MCP servers,
 readme = "README.md"
 
 [dependencies]
-clap = { version = "4.6.7", features = ["derive", "string"] }
+clap = { version = "4.6.7", features = ["derive", "string", "env"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 strum = { version = "0.28", features = ["derive"] }
@@ -21,6 +21,12 @@ toml = "0.9"
 yaml_serde = "0.10"
 directories = "6"
 semver = "1.0.28"
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(windows)'.dependencies]
+nu-ansi-term = "0.50"
 
 [dev-dependencies]
 tempfile = "3"

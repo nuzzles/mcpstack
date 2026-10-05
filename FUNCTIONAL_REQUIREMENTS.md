@@ -20,6 +20,16 @@ to its entry in Current status at the bottom.\
 | Partial [*](#codex-version-adapters) | Select a Codex adapter supporting the installed version; reject missing adapters or unsupported fields before writes. [*](#version-compatibility) |
 | Unsupported | On import, preserve unrelated settings/servers; skip identical entries and reject differing ones. |
 
+### Logging and ANSI
+
+| Implementation | Brief description |
+| --- | --- |
+| Done | Send compact tracing logs to stderr; keep YAML exports and CLI schema JSON clean on stdout. |
+| Done | Support `-v`/`-vv`, `--quiet`, and `--log`/`RUST_LOG` filtering. |
+| Done | Support `--color auto/always/never` and `MCPSTACK_COLOR`; auto checks stderr's terminal status. |
+| Done | Honor `--no-color` and nonempty `NO_COLOR`; enable ANSI support on Windows. |
+| Done | Keep configuration values out of logs; retain typed error codes and exit statuses. |
+
 ### CLI
 
 | Implementation | Brief description |
@@ -183,7 +193,7 @@ failures (`STACK_READ_ERROR`), and 4 for invalid stacks (`INVALID_STACK`).
 Config read failures use 5 (`CONFIG_READ_ERROR`); export failures use 6
 (`EXPORT_ERROR`). Codex detection failures use 7 (`CLIENT_VERSION_ERROR`);
 newer 0.x versions warn on stderr and continue export. Codex 1.x and later,
-including prereleases, fail with exit 8 (`UNSUPPORTED_CLIENT_VERSION`). Import errors are pending.
+including prereleases, fail with exit 8 (`UNSUPPORTED_CLIENT_VERSION`). Logging initialization/filter failures use exit 9 (`LOGGING_ERROR`). Import errors are pending.
 
 ### Deterministic output
 

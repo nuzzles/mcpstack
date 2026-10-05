@@ -27,6 +27,8 @@ pub enum ErrorCode {
     ClientVersionError = 7,
     #[error("No adapter supports the installed client major version.")]
     UnsupportedClientVersion = 8,
+    #[error("Unable to initialize logging. Check the log filter.")]
+    LoggingError = 9,
 }
 
 impl ErrorCode {
@@ -48,6 +50,10 @@ impl Serialize for ErrorCode {
 /// Execution errors preserve typed causes but expose only safe diagnostics.
 #[derive(Debug, Error)]
 pub enum AppError {
+    #[error("{code}", code = ErrorCode::InvalidArgument)]
+    Arguments,
+    #[error("{code}", code = ErrorCode::LoggingError)]
+    Logging,
     #[error("{code}", code = ErrorCode::OutputError)]
     Output(#[from] io::Error),
     #[error("{code}", code = ErrorCode::StackReadError)]
@@ -67,6 +73,8 @@ pub enum AppError {
 impl AppError {
     pub fn code(&self) -> ErrorCode {
         match self {
+            Self::Logging => ErrorCode::LoggingError,
+            Self::Arguments => ErrorCode::InvalidArgument,
             Self::Output(_) => ErrorCode::OutputError,
             Self::StackRead(_) => ErrorCode::StackReadError,
             Self::Stack(_) => ErrorCode::InvalidStack,

@@ -26,6 +26,7 @@ struct CommandSchema {
     description: String,
     subcommand_required: bool,
     args_conflicts_with_subcommands: bool,
+    schema_conflicts_with_subcommands: bool,
     arguments: Vec<ArgumentSchema>,
     options: Vec<ArgumentSchema>,
     commands: Vec<CommandSchema>,
@@ -89,6 +90,7 @@ fn describe_command(command: &Command) -> CommandSchema {
             .unwrap_or_default(),
         subcommand_required: command.is_subcommand_required_set(),
         args_conflicts_with_subcommands: command.is_args_conflicts_with_subcommands_set(),
+        schema_conflicts_with_subcommands: command.get_name() == "mcpstack",
         arguments: arguments
             .iter()
             .filter(|arg| arg.is_positional())

@@ -4,6 +4,7 @@ use crate::cmd::export::Export;
 use crate::cmd::schema::Schema;
 use crate::cmd::validate::Validate;
 use crate::error::AppError;
+use crate::logging::Logging;
 use clap::{CommandFactory, Parser, Subcommand};
 use std::io::Write;
 
@@ -19,11 +20,12 @@ pub const EXAMPLES: &[&str] = &[
 #[command(
     name = "mcpstack",
     version,
-    args_conflicts_with_subcommands = true,
     about = env!("CARGO_PKG_DESCRIPTION"),
     after_help = format!("Examples:\n  {}", EXAMPLES.join("\n  "))
 )]
 pub struct Cli {
+    #[command(flatten)]
+    pub logging: Logging,
     /// Print the complete CLI interface as versioned JSON.
     #[arg(long)]
     schema: bool,
@@ -39,6 +41,9 @@ enum Commands {
 
 impl Cli {
     pub fn run(self, output: &mut impl Write) -> Result<(), AppError> {
+        if self.schema && self.command.is_some() {
+            return Err(AppError::Arguments);
+        }
         if self.schema {
             Schema.run(output)?;
             Ok(())
