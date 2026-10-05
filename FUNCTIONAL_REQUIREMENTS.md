@@ -14,7 +14,7 @@ to its entry in Current status at the bottom.\
 | Implementation | Brief description |
 | --- | --- |
 | Done | Read MCP server entries from the default Codex config for export. [*](#codex-export) |
-| Unsupported | Read MCP config at an explicit path for export. |
+| Done | Read MCP config at an explicit path for export. |
 | Unsupported | Write MCP config at the default or an explicit path for import. |
 | Done | Detect the installed Codex version. |
 | Partial [*](#codex-version-adapters) | Select a Codex adapter supporting the installed version; reject missing adapters or unsupported fields before writes. [*](#version-compatibility) |
@@ -252,7 +252,8 @@ credentials. `--non-interactive` masks all detected credentials without promptin
 including when standard input is redirected. `export codex --expose-secrets`
 preserves literal values, including credentials, without prompting.
 No export mode changes the source file or logs its values. Server names and field
-keys remain visible. Explicit config paths and imports are pending.
+keys remain visible. `export codex --config <path>` reads an explicit TOML file instead of the default
+config. Relative paths resolve from the current working directory. Imports are pending.
 
 
 ### Codex version adapters

@@ -652,3 +652,60 @@ fn export_logs_respect_verbosity_filters_and_color() {
         assert!(!log.contains("fixture-secret"));
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn export_reads_explicit_config_and_preserves_inputs() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let default = "[mcp_servers.default]\ncommand='default'\n";
+    std::fs::write(root.join("config.toml"), default).unwrap();
+    let selected = root.join("alternate config.toml");
+    let valid = "[mcp_servers.selected]\ncommand='selected'\nenv={TOKEN='synthetic-secret'}\n";
+    let bin = mock_codex(root, "codex-cli 0.149.0", 0);
+    for (document, status) in [
+        (Some(valid), 0),
+        (Some("token='synthetic-secret"), 6),
+        (None, 5),
+    ] {
+        if let Some(document) = document {
+            std::fs::write(&selected, document).unwrap();
+        } else {
+            std::fs::remove_file(&selected).unwrap();
+        }
+        for path in [
+            selected.clone(),
+            std::path::PathBuf::from("alternate config.toml"),
+        ] {
+            let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+                .args(["--non-interactive", "export", "codex", "--config"])
+                .arg(path)
+                .current_dir(root)
+                .env("CODEX_HOME", root)
+                .env("PATH", &bin)
+                .env_remove("RUST_LOG")
+                .env_remove("MCPSTACK_COLOR")
+                .env_remove("NO_COLOR")
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(status), "{output:?}");
+            assert!(!String::from_utf8_lossy(&output.stderr).contains("synthetic-secret"));
+            if status == 0 {
+                let stack: Value = yaml_serde::from_slice(&output.stdout).unwrap();
+                assert!(stack["servers"].get("selected").is_some());
+                assert!(stack["servers"].get("default").is_none());
+                assert!(!String::from_utf8_lossy(&output.stdout).contains("synthetic-secret"));
+            } else {
+                assert!(output.stdout.is_empty());
+            }
+        }
+        assert_eq!(
+            std::fs::read_to_string(root.join("config.toml")).unwrap(),
+            default
+        );
+        if let Some(document) = document {
+            assert_eq!(std::fs::read_to_string(&selected).unwrap(), document);
+        }
+    }
+}

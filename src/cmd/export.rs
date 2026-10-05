@@ -21,19 +21,23 @@ pub struct Export {
 
 #[derive(Subcommand)]
 enum Client {
-    Codex,
+    Codex {
+        /// Read this Codex TOML file instead of the default configuration.
+        #[arg(long, value_name = "PATH")]
+        config: Option<PathBuf>,
+    },
 }
 
 impl Export {
     pub fn run(self, output: &mut impl Write, non_interactive: bool) -> Result<(), AppError> {
         match self.client {
-            Client::Codex => {
+            Client::Codex { config } => {
                 tracing::debug!("Exporting Codex MCP configuration");
                 let adapter = detect()?;
                 if let Some(warning) = adapter.warning() {
                     tracing::warn!("{warning}");
                 }
-                let path = default_config().ok_or(AppError::ConfigPath)?;
+                let path = config.or_else(default_config).ok_or(AppError::ConfigPath)?;
                 let document = fs::read_to_string(path).map_err(AppError::ConfigRead)?;
                 let stack = if self.expose_secrets {
                     adapter.export(&document, true)?
