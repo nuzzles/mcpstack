@@ -265,6 +265,48 @@ fn native_validation_reports_adapter_boundary_without_executing_helpers() {
 
 #[cfg(unix)]
 #[test]
+fn export_exposes_secrets_only_when_explicitly_requested() {
+    let document = "[mcp_servers.example]\ncommand='example'\nargs=['--token','argument-secret']\nurl='https://example.com/mcp'\nhttp_headers={Authorization='header-secret'}\nenv={TOKEN='environment-secret'}\n";
+    let fixture = StackFixture::new(document);
+    let config = fixture.directory.path().join("config.toml");
+    std::fs::write(&config, document).unwrap();
+    let bin = mock_codex(fixture.directory.path(), "codex-cli 0.149.0", 0);
+    for args in [
+        vec!["export", "codex"],
+        vec!["export", "codex", "--expose-secrets"],
+        vec!["export", "--expose-secrets", "codex"],
+    ] {
+        let exposed = args.contains(&"--expose-secrets");
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(args)
+            .arg("-vv")
+            .env("PATH", &bin)
+            .env("CODEX_HOME", fixture.directory.path())
+            .env_remove("RUST_LOG")
+            .env_remove("MCPSTACK_COLOR")
+            .env_remove("NO_COLOR")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let yaml = String::from_utf8(output.stdout).unwrap();
+        for secret in ["argument-secret", "header-secret", "environment-secret"] {
+            assert_eq!(yaml.contains(secret), exposed);
+            assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+        }
+        let value: Value = yaml_serde::from_str(&yaml).unwrap();
+        assert_eq!(value["servers"]["example"]["config"]["command"], "example");
+        assert_eq!(
+            value["servers"]["example"]["config"]["url"],
+            "https://example.com/mcp"
+        );
+        std::fs::write(&fixture.file, yaml).unwrap();
+        assert!(fixture.validate().status.success());
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), document);
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn codex_export_prints_a_stack_without_changing_values_or_files() {
     let document = "model='unrelated'\n[mcp_servers.local]\ncommand='example'\n[mcp_servers.local.env]\nTOKEN='fixture-secret'\n";
     let fixture = StackFixture::new(document);
@@ -291,7 +333,7 @@ fn codex_export_prints_a_stack_without_changing_values_or_files() {
     assert_eq!(value["schema_version"], 1);
     assert_eq!(
         value["servers"]["local"]["config"]["env"]["TOKEN"],
-        "fixture-secret"
+        serde_json::json!({"$env":"MCPSTACK_LOCAL_ENV_TOKEN"})
     );
     assert_eq!(std::fs::read_to_string(&config).unwrap(), document);
     std::fs::write(&config, "invalid TOML fixture-secret").unwrap();
@@ -592,7 +634,7 @@ fn export_logs_respect_verbosity_filters_and_color() {
         let value: Value = yaml_serde::from_slice(&output.stdout).unwrap();
         assert_eq!(
             value["servers"]["example"]["config"]["env"]["TOKEN"],
-            "fixture-secret"
+            serde_json::json!({"$env":"MCPSTACK_EXAMPLE_ENV_TOKEN"})
         );
         assert!(!output.stdout.contains(&0x1b));
         let log = String::from_utf8_lossy(&output.stderr);
