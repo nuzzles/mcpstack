@@ -58,7 +58,7 @@ impl Import {
                     if !self.auto_approve && !interactive {
                         return Err(AppError::ImportApprovalRequired);
                     }
-                    let default = snapshot.default_backup_path();
+                    let default = snapshot.default_backup_path()?;
                     let create_backup = self.auto_approve
                         || Confirm::new()
                             .with_prompt("Create a backup before importing?")

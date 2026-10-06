@@ -53,15 +53,48 @@ impl Snapshot {
         Ok(snapshot)
     }
 
-    pub fn default_backup_path(&self) -> PathBuf {
+    /// Use GNU-style numbered backups, retaining every existing generation.
+    pub fn default_backup_path(&self) -> Result<PathBuf, FileError> {
+        let parent = self
+            .path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let mut prefix = self
+            .path
+            .file_name()
+            .ok_or(FileError::Backup)?
+            .to_os_string();
+        prefix.push(".~");
+        let mut latest = 0_u64;
+        for entry in fs::read_dir(parent).map_err(|_| FileError::Backup)? {
+            let name = entry.map_err(|_| FileError::Backup)?.file_name();
+            let Some(suffix) = name
+                .as_encoded_bytes()
+                .strip_prefix(prefix.as_encoded_bytes())
+            else {
+                continue;
+            };
+            let Some(number) = suffix
+                .strip_suffix(b"~")
+                .and_then(|bytes| std::str::from_utf8(bytes).ok())
+                .filter(|number| {
+                    !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+                })
+            else {
+                continue;
+            };
+            latest = latest.max(number.parse::<u64>().map_err(|_| FileError::Backup)?);
+        }
+        let next = latest.checked_add(1).ok_or(FileError::Backup)?;
         let mut path = self.path.as_os_str().to_os_string();
-        path.push(".bak");
-        path.into()
+        path.push(format!(".~{next}~"));
+        Ok(path.into())
     }
 
     #[cfg(all(test, unix))]
     pub fn create_backup(&self) -> Result<(), FileError> {
-        self.create_backup_at(&self.default_backup_path())
+        self.create_backup_at(&self.default_backup_path()?)
     }
 
     /// Back up the original before reading the stack or resolving secrets.
@@ -269,6 +302,39 @@ mod tests {
     }
 
     #[test]
+    fn numbered_backups_preserve_generations_and_skip_occupied_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("codex.bak");
+        fs::write(&path, "first").unwrap();
+        let snapshot = Snapshot::read(&path).unwrap();
+        let first = snapshot.default_backup_path().unwrap();
+        assert_eq!(first, dir.path().join("codex.bak.~1~"));
+        snapshot.create_backup_at(&first).unwrap();
+        fs::write(&path, "second").unwrap();
+        let snapshot = Snapshot::read(&path).unwrap();
+        let second = snapshot.default_backup_path().unwrap();
+        assert_eq!(second, dir.path().join("codex.bak.~2~"));
+        snapshot.create_backup_at(&second).unwrap();
+        assert_eq!(fs::read_to_string(&first).unwrap(), "first");
+        assert_eq!(fs::read_to_string(&second).unwrap(), "second");
+        // Gaps, directories, and dangling symlinks must not cause reuse.
+        fs::remove_file(&first).unwrap();
+        fs::create_dir(dir.path().join("codex.bak.~9~")).unwrap();
+        symlink(
+            dir.path().join("missing"),
+            dir.path().join("codex.bak.~10~"),
+        )
+        .unwrap();
+        fs::write(dir.path().join("other.~99~"), "unrelated").unwrap();
+        let next = snapshot.default_backup_path().unwrap();
+        assert_eq!(next, dir.path().join("codex.bak.~11~"));
+        // An intervening creation still cannot be overwritten.
+        fs::write(&next, "concurrent backup").unwrap();
+        assert_eq!(snapshot.create_backup_at(&next), Err(FileError::Backup));
+        assert_eq!(fs::read_to_string(&next).unwrap(), "concurrent backup");
+    }
+
+    #[test]
     fn custom_backups_are_private_and_cannot_use_the_target_or_overwrite_files() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -285,7 +351,7 @@ mod tests {
             fs::metadata(&custom).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        assert!(!snapshot.default_backup_path().exists());
+        assert!(!snapshot.default_backup_path().unwrap().exists());
         assert_eq!(snapshot.create_backup_at(&custom), Err(FileError::Backup));
         assert_eq!(fs::read_to_string(&custom).unwrap(), "# private fixture");
     }
@@ -297,11 +363,11 @@ mod tests {
         fs::write(&path, "# original").unwrap();
         let snapshot = Snapshot::read(&path).unwrap();
         assert_eq!(snapshot.preview(&definitions("tool")).unwrap().len(), 1);
-        assert!(!path.with_extension("toml.bak").exists());
+        assert!(!path.with_extension("toml.~1~").exists());
         fs::write(&path, "# external edit").unwrap();
         assert_eq!(snapshot.create_backup(), Err(FileError::Changed));
         assert_eq!(fs::read_to_string(&path).unwrap(), "# external edit");
-        assert!(!path.with_extension("toml.bak").exists());
+        assert!(!path.with_extension("toml.~1~").exists());
     }
 
     #[test]
@@ -318,7 +384,7 @@ mod tests {
             1
         );
         assert_eq!(
-            fs::read(path.with_extension("toml.bak")).unwrap(),
+            fs::read(path.with_extension("toml.~1~")).unwrap(),
             original.as_bytes()
         );
         let written = fs::read_to_string(&path).unwrap();
@@ -326,7 +392,7 @@ mod tests {
         let metadata = fs::metadata(&path).unwrap();
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
         assert_eq!(
-            fs::metadata(path.with_extension("toml.bak"))
+            fs::metadata(path.with_extension("toml.~1~"))
                 .unwrap()
                 .permissions()
                 .mode()
@@ -334,7 +400,7 @@ mod tests {
             0o600
         );
         fs::rename(
-            path.with_extension("toml.bak"),
+            path.with_extension("toml.~1~"),
             dir.path().join("first-backup"),
         )
         .unwrap();
@@ -366,7 +432,7 @@ mod tests {
             0
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), original);
-        fs::remove_file(path.with_extension("toml.bak")).unwrap();
+        fs::remove_file(path.with_extension("toml.~1~")).unwrap();
         let mut incoming = definitions("new");
         let definition = incoming.remove("added").unwrap();
         incoming.insert("quoted.name".into(), definition);
@@ -395,12 +461,16 @@ mod tests {
             );
             assert_eq!(fs::read_to_string(&path).unwrap(), original);
             assert_eq!(
-                fs::read_to_string(path.with_extension("toml.bak")).unwrap(),
+                fs::read_to_string(path.with_extension("toml.~1~")).unwrap(),
                 original
             );
-            assert!(matches!(Snapshot::backup(&path), Err(FileError::Backup)));
+            Snapshot::backup(&path).unwrap();
             assert_eq!(
-                fs::read_to_string(path.with_extension("toml.bak")).unwrap(),
+                fs::read_to_string(path.with_extension("toml.~2~")).unwrap(),
+                original
+            );
+            assert_eq!(
+                fs::read_to_string(path.with_extension("toml.~1~")).unwrap(),
                 original
             );
         }
@@ -411,9 +481,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         let snapshot = Snapshot::backup(&path).unwrap();
-        assert_eq!(fs::read(path.with_extension("toml.bak")).unwrap(), b"");
+        assert_eq!(fs::read(path.with_extension("toml.~1~")).unwrap(), b"");
         assert_eq!(snapshot.apply(&definitions("tool")).unwrap(), 1);
-        fs::remove_file(path.with_extension("toml.bak")).unwrap();
+        fs::remove_file(path.with_extension("toml.~1~")).unwrap();
         let snapshot = Snapshot::backup(&path).unwrap();
         fs::write(&path, "# external edit").unwrap();
         assert_eq!(
@@ -424,7 +494,7 @@ mod tests {
         let link = dir.path().join("link.toml");
         symlink(&path, &link).unwrap();
         assert!(matches!(Snapshot::backup(&link), Err(FileError::Backup)));
-        assert!(!link.with_extension("toml.bak").exists());
+        assert!(!link.with_extension("toml.~1~").exists());
     }
 
     #[test]
@@ -445,7 +515,7 @@ mod tests {
         assert_eq!(result, Err(FileError::Write));
         assert_eq!(fs::read_to_string(&path).unwrap(), "# original");
         assert_eq!(
-            fs::read_to_string(path.with_extension("toml.bak")).unwrap(),
+            fs::read_to_string(path.with_extension("toml.~1~")).unwrap(),
             "# original"
         );
     }

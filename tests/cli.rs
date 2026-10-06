@@ -672,16 +672,19 @@ fn import_merges_resolved_stacks_with_private_backup_and_noop_repeat() {
         parsed["mcp_servers"]["shared"]["env"]["API_KEY"].as_str(),
         Some("fixture-import-secret")
     );
-    let backup = fixture.directory.path().join("config.toml.bak");
+    let backup = fixture.directory.path().join("config.toml.~1~");
     assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
     assert_eq!(
         std::fs::metadata(&config).unwrap().permissions().mode() & 0o777,
         0o600
     );
     let output = execute();
-    assert_eq!(output.status.code(), Some(11));
+    assert!(output.status.success(), "{output:?}");
     assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
-    std::fs::rename(&backup, fixture.directory.path().join("prior-backup")).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(config.with_extension("toml.~2~")).unwrap(),
+        written
+    );
     let modified = std::fs::metadata(&config).unwrap().modified().unwrap();
     let output = execute();
     assert!(output.status.success(), "{output:?}");
@@ -726,7 +729,7 @@ fn import_backs_up_before_validation_and_preserves_original_on_failure() {
         assert!(!String::from_utf8_lossy(&output.stderr).contains("fixture-secret"));
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
         assert_eq!(
-            std::fs::read_to_string(fixture.directory.path().join("config.toml.bak")).unwrap(),
+            std::fs::read_to_string(fixture.directory.path().join("config.toml.~1~")).unwrap(),
             original
         );
     }
@@ -734,10 +737,10 @@ fn import_backs_up_before_validation_and_preserves_original_on_failure() {
         "schema_version: 1\nservers:\n  added:\n    client: codex\n    config: {command: tool}\n",
     );
     let config = fixture.directory.path().join("config.toml");
-    let backup = fixture.directory.path().join("config.toml.bak");
+    let backup = fixture.directory.path().join("config.toml.~1~");
     std::fs::write(&config, original).unwrap();
     std::fs::write(&backup, "keep backup").unwrap();
-    // Backup failure must happen before even trying to read the stack file.
+    // An existing backup is retained; the next backup precedes reading the stack.
     std::fs::remove_file(&fixture.file).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
         .args(["import", "codex", "--auto-approve"])
@@ -748,7 +751,11 @@ fn import_backs_up_before_validation_and_preserves_original_on_failure() {
         .stdin(Stdio::null())
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(11));
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(
+        std::fs::read_to_string(config.with_extension("toml.~2~")).unwrap(),
+        original
+    );
     assert_eq!(std::fs::read_to_string(&backup).unwrap(), "keep backup");
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
 }
@@ -771,7 +778,7 @@ fn import_refuses_platforms_without_private_write_support() {
         .unwrap();
     assert_eq!(output.status.code(), Some(13));
     assert_eq!(std::fs::read_to_string(&config).unwrap(), "# original");
-    assert!(!fixture.directory.path().join("config.toml.bak").exists());
+    assert!(!fixture.directory.path().join("config.toml.~1~").exists());
 }
 
 #[cfg(unix)]
@@ -825,7 +832,7 @@ fn codex_export_import_round_trip_preserves_supported_fields() {
         }
     }
     assert!(!after.contains_key("model"));
-    assert_eq!(std::fs::read(root.join("target.toml.bak")).unwrap(), b"");
+    assert_eq!(std::fs::read(root.join("target.toml.~1~")).unwrap(), b"");
     assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
 }
 
@@ -835,7 +842,7 @@ fn import_dry_run_is_read_only_redacted_and_available_without_a_terminal() {
         "schema_version: 1\nservers:\n  added:\n    client: codex\n    config:\n      command: tool\n      args: [{'$env': MCPSTACK_PREVIEW_ARGUMENT}]\n      env: {API_KEY: literal-preview-secret}\n",
     );
     let config = fixture.directory.path().join("config.toml");
-    let backup = fixture.directory.path().join("config.toml.bak");
+    let backup = fixture.directory.path().join("config.toml.~1~");
     let original =
         "# preserve\nmodel='private-model-value'\n[mcp_servers.existing]\ncommand='existing'\n";
     std::fs::write(&config, original).unwrap();
@@ -923,7 +930,7 @@ fn import_requires_explicit_approval_without_a_terminal() {
         assert_eq!(output.status.code(), Some(10), "{output:?}");
         assert!(String::from_utf8_lossy(&output.stderr).contains("--auto-approve"));
         assert!(!config.exists());
-        assert!(!fixture.directory.path().join("config.toml.bak").exists());
+        assert!(!fixture.directory.path().join("config.toml.~1~").exists());
     }
 }
 
@@ -953,7 +960,7 @@ fn masked_import_rejects_missing_values_without_interactive_input() {
         #[cfg(not(unix))]
         if flag != "--dry-run" {
             assert_eq!(output.status.code(), Some(13));
-            assert!(!fixture.directory.path().join("config.toml.bak").exists());
+            assert!(!fixture.directory.path().join("config.toml.~1~").exists());
             continue;
         }
         assert!(!output.status.success(), "{output:?}");
@@ -975,7 +982,7 @@ fn masked_import_rejects_missing_values_without_interactive_input() {
         assert!(diagnostics.contains("interactive import"));
         assert!(output.stdout.is_empty());
         assert!(!config.exists());
-        let backup = fixture.directory.path().join("config.toml.bak");
+        let backup = fixture.directory.path().join("config.toml.~1~");
         if flag == "--dry-run" {
             assert!(!backup.exists());
         } else {
@@ -1114,11 +1121,11 @@ fn dry_run_shows_redacted_conflicts_without_overwriting_existing_config() {
     );
     #[cfg(unix)]
     assert_eq!(
-        std::fs::read_to_string(fixture.directory.path().join("config.toml.bak")).unwrap(),
+        std::fs::read_to_string(fixture.directory.path().join("config.toml.~1~")).unwrap(),
         original
     );
     #[cfg(not(unix))]
-    assert!(!fixture.directory.path().join("config.toml.bak").exists());
+    assert!(!fixture.directory.path().join("config.toml.~1~").exists());
 }
 
 #[test]
@@ -1221,7 +1228,7 @@ fn dry_run_compares_real_secrets_and_marks_only_changed_lines() {
             assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
         }
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
-        assert!(!fixture.directory.path().join("config.toml.bak").exists());
+        assert!(!fixture.directory.path().join("config.toml.~1~").exists());
     }
 }
 
@@ -1256,7 +1263,7 @@ fn auto_approve_replaces_existing_servers_and_preserves_unrelated_settings() {
         Some("untouched")
     );
     assert_eq!(
-        std::fs::read_to_string(config.with_extension("toml.bak")).unwrap(),
+        std::fs::read_to_string(config.with_extension("toml.~1~")).unwrap(),
         original
     );
 }
