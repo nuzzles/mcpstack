@@ -704,10 +704,6 @@ fn import_backs_up_before_validation_and_preserves_original_on_failure() {
             10,
         ),
         (
-            "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: other}\n",
-            12,
-        ),
-        (
             "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: other, future: fixture-secret}\n",
             10,
         ),
@@ -1075,7 +1071,7 @@ fn dry_run_shows_redacted_conflicts_without_overwriting_existing_config() {
         assert!(!diff.contains(secret));
         assert!(!String::from_utf8_lossy(&preview.stderr).contains(secret));
     }
-    // Supplying a real value still cannot authorize replacing an existing server.
+    // Auto-approval authorizes replacement after the read-only preview.
     let actual = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
         .args(["import", "codex", "-y"])
         .arg(&fixture.file)
@@ -1087,14 +1083,17 @@ fn dry_run_shows_redacted_conflicts_without_overwriting_existing_config() {
         .output()
         .unwrap();
     #[cfg(unix)]
-    assert_eq!(actual.status.code(), Some(12));
+    assert!(actual.status.success());
     #[cfg(not(unix))]
     assert_eq!(actual.status.code(), Some(13));
+    #[cfg(not(unix))]
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     #[cfg(unix)]
     assert!(
-        String::from_utf8_lossy(&actual.stderr).contains("Existing servers are not overwritten")
+        std::fs::read_to_string(&config)
+            .unwrap()
+            .contains("new-api-secret")
     );
-    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     #[cfg(unix)]
     assert_eq!(
         std::fs::read_to_string(fixture.directory.path().join("config.toml.bak")).unwrap(),
@@ -1206,4 +1205,40 @@ fn dry_run_compares_real_secrets_and_marks_only_changed_lines() {
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
         assert!(!fixture.directory.path().join("config.toml.bak").exists());
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn auto_approve_replaces_existing_servers_and_preserves_unrelated_settings() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: replacement}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    let original = "# keep\nmodel='private'\n[mcp_servers.shared]\ncommand='old'\nargs=['obsolete']\n[mcp_servers.other]\ncommand='untouched'\n";
+    std::fs::write(&config, original).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["import", "codex", "-y", "--config"])
+        .arg(&config)
+        .arg(&fixture.file)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = std::fs::read_to_string(&config).unwrap();
+    let written: toml::Table = toml::from_str(&text).unwrap();
+    assert!(text.starts_with("# keep"));
+    assert_eq!(written["model"].as_str(), Some("private"));
+    assert_eq!(
+        written["mcp_servers"]["shared"]["command"].as_str(),
+        Some("replacement")
+    );
+    assert!(written["mcp_servers"]["shared"].get("args").is_none());
+    assert_eq!(
+        written["mcp_servers"]["other"]["command"].as_str(),
+        Some("untouched")
+    );
+    assert_eq!(
+        std::fs::read_to_string(config.with_extension("toml.bak")).unwrap(),
+        original
+    );
 }

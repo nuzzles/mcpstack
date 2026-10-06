@@ -18,10 +18,6 @@ pub enum FileError {
     #[error("Invalid target TOML or mcp_servers table. Original config and backup are unchanged.")]
     Config,
     #[error(
-        "Import refused: a server with the same name already has different settings. Existing servers are not overwritten. Update or rename that stack entry before importing; client configuration was not changed."
-    )]
-    Conflict,
-    #[error(
         "The target changed during import. No config changes were written; retry with a fresh backup."
     )]
     Changed,
@@ -124,23 +120,6 @@ impl Snapshot {
         Ok(changes)
     }
 
-    /// Reject conflicts before approval or backup, skipping identical entries.
-    pub fn additions(
-        &self,
-        definitions: &BTreeMap<String, toml::Table>,
-    ) -> Result<BTreeMap<String, toml::Table>, FileError> {
-        self.preview(definitions)?
-            .into_iter()
-            .map(|(name, (existing, definition))| {
-                if existing.is_some() {
-                    Err(FileError::Conflict)
-                } else {
-                    Ok((name, definition))
-                }
-            })
-            .collect()
-    }
-
     fn document(&self) -> Result<DocumentMut, FileError> {
         let text = std::str::from_utf8(self.original.as_deref().unwrap_or_default())
             .map_err(|_| FileError::Config)?;
@@ -152,7 +131,11 @@ impl Snapshot {
     }
 
     pub fn apply(self, definitions: &BTreeMap<String, toml::Table>) -> Result<usize, FileError> {
-        let additions = self.additions(definitions)?;
+        let additions: BTreeMap<_, _> = self
+            .preview(definitions)?
+            .into_iter()
+            .map(|(name, (_, definition))| (name, definition))
+            .collect();
         let mut document = self.document()?;
         let added = additions.len();
         for (name, definition) in &additions {
@@ -313,7 +296,7 @@ mod tests {
         let path = dir.path().join("config.toml");
         fs::write(&path, "# original").unwrap();
         let snapshot = Snapshot::read(&path).unwrap();
-        assert_eq!(snapshot.additions(&definitions("tool")).unwrap().len(), 1);
+        assert_eq!(snapshot.preview(&definitions("tool")).unwrap().len(), 1);
         assert!(!path.with_extension("toml.bak").exists());
         fs::write(&path, "# external edit").unwrap();
         assert_eq!(snapshot.create_backup(), Err(FileError::Changed));
@@ -399,13 +382,8 @@ mod tests {
     }
 
     #[test]
-    fn backup_conflicts_parse_errors_and_definition_conflicts_preserve_originals() {
-        for original in [
-            "broken = [",
-            "mcp_servers=42",
-            "[mcp_servers.added]\ncommand='different'",
-            "[mcp_servers.added]\ncommand='tool'\nfuture=true",
-        ] {
+    fn backup_conflicts_and_parse_errors_preserve_originals() {
+        for original in ["broken = [", "mcp_servers=42"] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("config.toml");
             fs::write(&path, original).unwrap();

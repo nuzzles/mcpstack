@@ -29,8 +29,6 @@ pub enum ErrorCode {
     ImportError = 10,
     #[error("Unable to create a private configuration backup.")]
     BackupError = 11,
-    #[error("The stack conflicts with an existing server definition.")]
-    ImportConflict = 12,
     #[error("Unable to safely write client configuration.")]
     ConfigWriteError = 13,
 }
@@ -99,7 +97,6 @@ impl AppError {
             }
             Self::ImportFile(error) => match error {
                 crate::importers::codex_fs::FileError::Backup => ErrorCode::BackupError,
-                crate::importers::codex_fs::FileError::Conflict => ErrorCode::ImportConflict,
                 _ => ErrorCode::ConfigWriteError,
             },
         }

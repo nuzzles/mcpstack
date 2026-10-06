@@ -11,13 +11,13 @@ use crate::importers::codex::prepare;
 use crate::importers::codex_fs::Snapshot;
 use crate::schema::Stack;
 
-/// Preview and approve server additions without installing server software.
+/// Preview and approve server additions and replacements.
 #[derive(Args)]
 pub struct Import {
     /// Preview redacted diffs without writing files; ask for missing masked values.
     #[arg(long, global = true)]
     dry_run: bool,
-    /// Approve all server additions without prompting.
+    /// Approve all server additions and replacements without prompting.
     #[arg(short = 'y', long, global = true)]
     auto_approve: bool,
     #[command(subcommand)]
@@ -102,14 +102,10 @@ impl Import {
                 }
                 let definitions = prepared?;
                 let changes = snapshot.preview(&definitions)?;
-                let additions = if self.dry_run {
-                    changes
-                        .iter()
-                        .map(|(name, (_, definition))| (name.clone(), definition.clone()))
-                        .collect()
-                } else {
-                    snapshot.additions(&definitions)?
-                };
+                let additions: BTreeMap<_, _> = changes
+                    .iter()
+                    .map(|(name, (_, definition))| (name.clone(), definition.clone()))
+                    .collect();
                 warn_runtime_bindings(&additions);
                 let secrets: Vec<_> = resolver.values.values().flatten().cloned().collect();
                 let diffs: BTreeMap<_, _> = additions
@@ -150,13 +146,19 @@ impl Import {
                     additions
                 } else {
                     select_servers(additions, |name, current, total| {
+                        let replacing = changes[name].0.is_some();
+                        let action = if replacing {
+                            "Replace existing server"
+                        } else {
+                            "Import"
+                        };
                         Select::new()
-                            .with_prompt(format!("Server {current}/{total}: Import {name:?}?"))
+                            .with_prompt(format!("Server {current}/{total}: {action} {name:?}?"))
                             .items([
-                                "Skip this server",
-                                "Import this server",
-                                "Skip this and all remaining servers",
-                                "Import this and all remaining servers",
+                                "No, skip this server",
+                                "Yes, import this server",
+                                "No, skip this and all remaining servers",
+                                "Yes, import this and all remaining servers (including replacements)",
                             ])
                             .default(0)
                             .report(false)
