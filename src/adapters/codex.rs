@@ -210,6 +210,21 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires Codex installed by the CI setup-codex action"]
+    fn detects_installed_codex() {
+        let expected = std::env::var("MCPSTACK_TEST_CODEX_VERSION")
+            .expect("set MCPSTACK_TEST_CODEX_VERSION to the installed version");
+        let expected = Version::parse(&expected).unwrap();
+        assert_eq!(
+            expected, CURRENT_STABLE,
+            "keep CI and the checked adapter version aligned"
+        );
+        assert_eq!(detect_codex_version().unwrap(), expected);
+        assert_eq!(detect_codex().unwrap(), CodexAdapter::Pre1);
+        assert!(detect_import().is_ok());
+    }
+
+    #[test]
     fn import_requires_checked_version() {
         let adapter = CodexImportAdapter::select(&CURRENT_STABLE).unwrap();
         let stack = StackV1::from_yaml("schema_version: 1\nservers: {}\n").unwrap();
