@@ -37,7 +37,12 @@ enum Client {
 }
 
 impl Import {
-    pub fn run(self, output: &mut impl Write, non_interactive: bool) -> Result<(), AppError> {
+    pub fn run(
+        self,
+        output: &mut impl Write,
+        non_interactive: bool,
+        colored: bool,
+    ) -> Result<(), AppError> {
         match self.client {
             Client::Codex { file, config } => {
                 let path = config
@@ -68,7 +73,7 @@ impl Import {
                     for (name, (existing, _)) in &changes {
                         if existing.is_some() {
                             tracing::warn!(
-                                "Server {name} differs from the existing configuration; actual import requires this conflict to be resolved. Unresolved preview values may affect this comparison."
+                                "Server {name:?} differs from the existing configuration; actual import requires this conflict to be resolved. Unresolved preview values may affect this comparison."
                             );
                         }
                     }
@@ -120,7 +125,7 @@ impl Import {
                 }
                 // Show the whole proposal before even a bulk approval choice.
                 for diff in diffs.values() {
-                    write!(output, "{diff}")?;
+                    write_diff(output, diff, colored)?;
                 }
                 output.flush()?;
                 if self.dry_run {
@@ -131,7 +136,7 @@ impl Import {
                 } else {
                     select_servers(additions, |name, current, total| {
                         Select::new()
-                            .with_prompt(format!("Server {current}/{total}: Import {name}?"))
+                            .with_prompt(format!("Server {current}/{total}: Import {name:?}?"))
                             .items([
                                 "Skip this server",
                                 "Import this server",
@@ -161,6 +166,30 @@ impl Import {
             }
         }
     }
+}
+
+fn write_diff(output: &mut impl Write, diff: &str, colored: bool) -> std::io::Result<()> {
+    if !colored {
+        return write!(output, "{diff}");
+    }
+    for line in diff.lines() {
+        let color =
+            if line.starts_with("--- ") || line.starts_with("+++ ") || line.starts_with("@@ ") {
+                Some(36) // cyan headers
+            } else if line.starts_with('+') {
+                Some(32) // green additions
+            } else if line.starts_with('-') {
+                Some(31) // red removals
+            } else {
+                None
+            };
+        if let Some(color) = color {
+            writeln!(output, "\x1b[{color}m{line}\x1b[0m")?;
+        } else {
+            writeln!(output, "{line}")?;
+        }
+    }
+    Ok(())
 }
 
 /// Cache each reference so repeated uses ask only once. Preview sentinels are

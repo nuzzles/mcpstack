@@ -1055,7 +1055,7 @@ fn dry_run_shows_redacted_conflicts_without_overwriting_existing_config() {
     let diff = String::from_utf8_lossy(&preview.stdout);
     assert!(diff.contains("-command = \"old-tool\""));
     assert!(diff.contains("+command = \"new-tool\""));
-    assert!(String::from_utf8_lossy(&preview.stderr).contains("conflict"));
+    assert!(String::from_utf8_lossy(&preview.stderr).contains("Server \"shared\" differs"));
     for secret in ["old-private-secret", "old-api-secret", "private-model"] {
         assert!(!diff.contains(secret));
         assert!(!String::from_utf8_lossy(&preview.stderr).contains(secret));
@@ -1074,4 +1074,59 @@ fn dry_run_shows_redacted_conflicts_without_overwriting_existing_config() {
     assert_eq!(actual.status.code(), Some(12));
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     assert!(!fixture.directory.path().join("config.toml.bak").exists());
+}
+
+#[test]
+fn import_diff_color_honors_modes_environment_and_no_color() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: new-tool}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    std::fs::write(&config, "[mcp_servers.shared]\ncommand='old-tool'\n").unwrap();
+    let execute = |flags: &[&str], mode: Option<&str>, no_color: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
+        command
+            .args(["import", "codex", "--dry-run"])
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .args(flags)
+            .env_remove("MCPSTACK_COLOR")
+            .env_remove("NO_COLOR")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null());
+        if let Some(value) = mode {
+            command.env("MCPSTACK_COLOR", value);
+        }
+        if let Some(value) = no_color {
+            command.env("NO_COLOR", value);
+        }
+        command.output().unwrap()
+    };
+    let plain = execute(&[], None, None);
+    assert!(plain.status.success());
+    assert!(!plain.stdout.contains(&0x1b)); // redirected stdout stays plain in auto
+    for (flags, mode, no_color, colored) in [
+        (vec!["--color", "always"], None, None, true),
+        (vec![], Some("always"), None, true),
+        (vec!["--color", "never"], Some("always"), None, false),
+        (vec!["--color", "always", "--no-color"], None, None, false),
+        (vec!["--color", "always"], None, Some("1"), false),
+        (vec!["--color", "always"], None, Some(""), true),
+    ] {
+        let output = execute(&flags, mode, no_color);
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        if colored {
+            assert!(text.contains("\x1b[36m--- "));
+            assert!(text.contains("\x1b[32m+command = \"new-tool\"\x1b[0m"));
+            assert!(text.contains("\x1b[31m-command = \"old-tool\"\x1b[0m"));
+            let stripped = ["\x1b[36m", "\x1b[32m", "\x1b[31m", "\x1b[0m"]
+                .iter()
+                .fold(text, |text, sequence| text.replace(sequence, ""));
+            assert_eq!(stripped.as_bytes(), plain.stdout);
+        } else {
+            assert_eq!(text.as_bytes(), plain.stdout);
+        }
+    }
 }
