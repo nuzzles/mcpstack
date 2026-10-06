@@ -29,7 +29,7 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
     assert_eq!(schema["cli_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(schema["command"]["name"], "mcpstack");
     let commands = schema["command"]["commands"].as_array().unwrap();
-    assert_eq!(commands.len(), 4); // validate, export, import, and generated help
+    assert_eq!(commands.len(), 5); // validate, export, import, diff, and generated help
     let validate = commands
         .iter()
         .find(|command| command["name"] == "validate")
@@ -242,7 +242,7 @@ fn validation_reports_safe_typed_errors_and_missing_arguments() {
 }
 
 #[test]
-fn native_validation_reports_adapter_boundary_without_executing_helpers() {
+fn native_validation_preserves_inputs_without_executing_helpers() {
     let document = r#"{
         "schema_version":1,
         "servers":{"native":{
@@ -258,7 +258,7 @@ fn native_validation_reports_adapter_boundary_without_executing_helpers() {
     let output = fixture.validate();
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout).unwrap();
-    assert!(text.contains("require client adapter validation"));
+    assert_eq!(text, "Valid stack (schema 1, 1 servers).\n");
     assert!(!text.contains("MCPSTACK_MISSING_TEST_TOKEN"));
     assert_eq!(std::fs::read_to_string(&fixture.file).unwrap(), document);
     assert_eq!(
@@ -649,7 +649,7 @@ fn import_merges_resolved_stacks_with_private_backup_and_noop_repeat() {
     std::fs::write(&config, original).unwrap();
     let execute = || {
         Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["--non-interactive", "import", "codex"])
+            .args(["--non-interactive", "import", "codex", "-y"])
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
@@ -672,20 +672,23 @@ fn import_merges_resolved_stacks_with_private_backup_and_noop_repeat() {
         parsed["mcp_servers"]["shared"]["env"]["API_KEY"].as_str(),
         Some("fixture-import-secret")
     );
-    let backup = fixture.directory.path().join("config.toml.bak");
+    let backup = fixture.directory.path().join("config.toml.~1~");
     assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
     assert_eq!(
         std::fs::metadata(&config).unwrap().permissions().mode() & 0o777,
         0o600
     );
     let output = execute();
-    assert_eq!(output.status.code(), Some(11));
+    assert!(output.status.success(), "{output:?}");
     assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
-    std::fs::rename(&backup, fixture.directory.path().join("prior-backup")).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(config.with_extension("toml.~2~")).unwrap(),
+        written
+    );
     let modified = std::fs::metadata(&config).unwrap().modified().unwrap();
     let output = execute();
     assert!(output.status.success(), "{output:?}");
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Imported 0"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("No changes"));
     assert_eq!(std::fs::read_to_string(&config).unwrap(), written);
     assert_eq!(
         std::fs::metadata(&config).unwrap().modified().unwrap(),
@@ -695,17 +698,13 @@ fn import_merges_resolved_stacks_with_private_backup_and_noop_repeat() {
 
 #[cfg(unix)]
 #[test]
-fn import_failures_backup_first_and_leave_config_unchanged() {
+fn import_backs_up_before_validation_and_preserves_original_on_failure() {
     let original = "[mcp_servers.shared]\ncommand='original'\n";
     for (document, status) in [
         ("broken: [fixture-secret", 4),
         (
             "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: tool, args: [{'$env': MCPSTACK_MISSING_IMPORT_TOKEN}]}\n",
             10,
-        ),
-        (
-            "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: other}\n",
-            12,
         ),
         (
             "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: other, future: fixture-secret}\n",
@@ -716,7 +715,7 @@ fn import_failures_backup_first_and_leave_config_unchanged() {
         let config = fixture.directory.path().join("config.toml");
         std::fs::write(&config, original).unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["import", "codex"])
+            .args(["import", "codex", "--auto-approve"])
             .arg(&fixture.file)
             .env("PATH", "")
             .env("CODEX_HOME", fixture.directory.path())
@@ -730,17 +729,21 @@ fn import_failures_backup_first_and_leave_config_unchanged() {
         assert!(!String::from_utf8_lossy(&output.stderr).contains("fixture-secret"));
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
         assert_eq!(
-            std::fs::read_to_string(fixture.directory.path().join("config.toml.bak")).unwrap(),
+            std::fs::read_to_string(fixture.directory.path().join("config.toml.~1~")).unwrap(),
             original
         );
     }
-    let fixture = StackFixture::new("invalid input that must not be processed");
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  added:\n    client: codex\n    config: {command: tool}\n",
+    );
     let config = fixture.directory.path().join("config.toml");
-    let backup = fixture.directory.path().join("config.toml.bak");
+    let backup = fixture.directory.path().join("config.toml.~1~");
     std::fs::write(&config, original).unwrap();
     std::fs::write(&backup, "keep backup").unwrap();
+    // An existing backup is retained; the next backup precedes reading the stack.
+    std::fs::remove_file(&fixture.file).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["import", "codex"])
+        .args(["import", "codex", "--auto-approve"])
         .arg(&fixture.file)
         .arg("--config")
         .arg(&config)
@@ -748,7 +751,11 @@ fn import_failures_backup_first_and_leave_config_unchanged() {
         .stdin(Stdio::null())
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(11));
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(
+        std::fs::read_to_string(config.with_extension("toml.~2~")).unwrap(),
+        original
+    );
     assert_eq!(std::fs::read_to_string(&backup).unwrap(), "keep backup");
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
 }
@@ -756,11 +763,13 @@ fn import_failures_backup_first_and_leave_config_unchanged() {
 #[cfg(not(unix))]
 #[test]
 fn import_refuses_platforms_without_private_write_support() {
-    let fixture = StackFixture::new("schema_version: 1\nservers: {}");
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  new:\n    client: codex\n    config: {command: tool}\n",
+    );
     let config = fixture.directory.path().join("config.toml");
     std::fs::write(&config, "# original").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["import", "codex"])
+        .args(["import", "codex", "--auto-approve"])
         .arg(&fixture.file)
         .arg("--config")
         .arg(&config)
@@ -769,7 +778,7 @@ fn import_refuses_platforms_without_private_write_support() {
         .unwrap();
     assert_eq!(output.status.code(), Some(13));
     assert_eq!(std::fs::read_to_string(&config).unwrap(), "# original");
-    assert!(!fixture.directory.path().join("config.toml.bak").exists());
+    assert!(!fixture.directory.path().join("config.toml.~1~").exists());
 }
 
 #[cfg(unix)]
@@ -801,7 +810,7 @@ fn codex_export_import_round_trip_preserves_supported_fields() {
             .as_str()
             .unwrap();
     let imported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["import", "codex"])
+        .args(["import", "codex", "--auto-approve"])
         .arg(&fixture.file)
         .arg("--config")
         .arg(&target)
@@ -823,6 +832,553 @@ fn codex_export_import_round_trip_preserves_supported_fields() {
         }
     }
     assert!(!after.contains_key("model"));
-    assert_eq!(std::fs::read(root.join("target.toml.bak")).unwrap(), b"");
+    assert_eq!(std::fs::read(root.join("target.toml.~1~")).unwrap(), b"");
     assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
+}
+
+#[test]
+fn diff_is_read_only_redacted_and_available_without_a_terminal() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  added:\n    client: codex\n    config:\n      command: tool\n      args: [{'$env': MCPSTACK_PREVIEW_ARGUMENT}]\n      env: {API_KEY: literal-preview-secret}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    let backup = fixture.directory.path().join("config.toml.~1~");
+    let original =
+        "# preserve\nmodel='private-model-value'\n[mcp_servers.existing]\ncommand='existing'\n";
+    std::fs::write(&config, original).unwrap();
+    std::fs::write(&backup, "existing backup").unwrap();
+    let modified = std::fs::metadata(&config).unwrap().modified().unwrap();
+    for target_exists in [true, false] {
+        if !target_exists {
+            std::fs::remove_file(&config).unwrap();
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["--non-interactive", "diff", "codex"])
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .env("MCPSTACK_PREVIEW_ARGUMENT", "arbitrary-preview-secret")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let diff = String::from_utf8(output.stdout).unwrap();
+        if target_exists {
+            assert!(diff.starts_with(&format!("--- {}\n", config.display())));
+        } else {
+            assert!(diff.contains("--- /dev/null\n+++ "));
+            assert!(diff.contains("@@ -0,0 +1,"));
+        }
+        assert!(diff.contains("+[mcp_servers.added]"));
+        assert!(diff.contains("+command = \"tool\""));
+        assert!(diff.contains("<redacted>"));
+        for secret in [
+            "literal-preview-secret",
+            "arbitrary-preview-secret",
+            "private-model-value",
+        ] {
+            assert!(!diff.contains(secret), "{diff}");
+            assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+        }
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "existing backup");
+        if target_exists {
+            assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+            assert_eq!(
+                std::fs::metadata(&config).unwrap().modified().unwrap(),
+                modified
+            );
+        } else {
+            assert!(!config.exists());
+        }
+    }
+    std::fs::remove_file(&backup).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["diff", "codex"])
+        .arg(&fixture.file)
+        .arg("--config")
+        .arg(&config)
+        .env("MCPSTACK_PREVIEW_ARGUMENT", "arbitrary-preview-secret")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(!config.exists());
+    assert!(!backup.exists());
+}
+
+#[test]
+fn import_requires_explicit_approval_without_a_terminal() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  new:\n    client: codex\n    config: {command: tool}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    for (non_interactive, dry_run) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
+        if non_interactive {
+            command.arg("--non-interactive");
+        }
+        command.args(["import", "codex"]);
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        let output = command
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(10), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("--auto-approve"));
+        assert!(!config.exists());
+        assert!(!fixture.directory.path().join("config.toml.~1~").exists());
+    }
+}
+
+#[test]
+fn masked_import_rejects_missing_values_without_interactive_input() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  process:\n    client: codex\n    config:\n      command: tool\n      args: [{'$env': MCPSTACK_MASKED_SECRET}]\n      env: {API_KEY: {'$env': MCPSTACK_MASKED_SECRET}}\n  remote:\n    client: codex\n    config:\n      url: {'$env': MCPSTACK_MASKED_ENDPOINT}\n      oauth: {client_id: test-client, client_secret: {'$env': MCPSTACK_MASKED_SECRET}}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    for flag in ["--dry-run", "-y", "--auto-approve"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["import", "codex"])
+            .args(if flag == "--dry-run" {
+                vec![flag, "-y"]
+            } else {
+                vec![flag]
+            })
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .env_remove("MCPSTACK_MASKED_SECRET")
+            .env_remove("MCPSTACK_MASKED_ENDPOINT")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        #[cfg(not(unix))]
+        if flag != "--dry-run" {
+            assert_eq!(output.status.code(), Some(13));
+            assert!(!fixture.directory.path().join("config.toml.~1~").exists());
+            continue;
+        }
+        assert!(!output.status.success(), "{output:?}");
+        let diagnostics = String::from_utf8_lossy(&output.stderr);
+        assert!(diagnostics.contains("WARN"));
+        assert!(diagnostics.contains("MCPSTACK_MASKED_SECRET"));
+        if flag == "--dry-run" {
+            assert!(
+                diagnostics
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .contains("Dry run; no changes will be committed.")
+            );
+        } else {
+            assert!(!diagnostics.contains("Dry run;"));
+        }
+        assert_eq!(output.status.code(), Some(10));
+        assert!(diagnostics.contains("interactive import"));
+        assert!(output.stdout.is_empty());
+        assert!(!config.exists());
+        let backup = fixture.directory.path().join("config.toml.~1~");
+        if flag == "--dry-run" {
+            assert!(!backup.exists());
+        } else {
+            assert_eq!(std::fs::read(&backup).unwrap(), b"");
+            std::fs::remove_file(backup).unwrap();
+        }
+    }
+}
+
+#[test]
+fn native_runtime_bindings_are_preserved_without_resolving_values() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  process:\n    client: codex\n    config: {command: tool, env_vars: [MCPSTACK_RUNTIME_ENV, {name: MCPSTACK_REMOTE_ENV, source: remote}]}\n  remote:\n    client: codex\n    config:\n      url: https://example.com/mcp\n      bearer_token_env_var: MCPSTACK_RUNTIME_TOKEN\n      env_http_headers: {X-Key: MCPSTACK_RUNTIME_HEADER}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    let execute = |flag| {
+        Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["import", "codex"])
+            .args(if flag == "--dry-run" {
+                vec![flag, "-y"]
+            } else {
+                vec![flag]
+            })
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .env_remove("MCPSTACK_RUNTIME_ENV")
+            .env_remove("MCPSTACK_RUNTIME_TOKEN")
+            .env_remove("MCPSTACK_RUNTIME_HEADER")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let preview = execute("--dry-run");
+    assert!(preview.status.success(), "{preview:?}");
+    assert!(!config.exists());
+    let warnings = String::from_utf8_lossy(&preview.stderr);
+    assert!(!warnings.contains("MCPSTACK_REMOTE_ENV"));
+    for name in [
+        "MCPSTACK_RUNTIME_ENV",
+        "MCPSTACK_RUNTIME_TOKEN",
+        "MCPSTACK_RUNTIME_HEADER",
+    ] {
+        assert!(warnings.contains(name));
+    }
+    #[cfg(unix)]
+    {
+        let output = execute("-y");
+        assert!(output.status.success(), "{output:?}");
+        let definitions: toml::Table =
+            toml::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        let servers = &definitions["mcp_servers"];
+        assert_eq!(
+            servers["process"]["env_vars"][0].as_str(),
+            Some("MCPSTACK_RUNTIME_ENV")
+        );
+        assert_eq!(
+            servers["remote"]["bearer_token_env_var"].as_str(),
+            Some("MCPSTACK_RUNTIME_TOKEN")
+        );
+        assert_eq!(
+            servers["remote"]["env_http_headers"]["X-Key"].as_str(),
+            Some("MCPSTACK_RUNTIME_HEADER")
+        );
+        assert!(!servers["process"].as_table().unwrap().contains_key("env"));
+        assert!(
+            !servers["remote"]
+                .as_table()
+                .unwrap()
+                .contains_key("http_headers")
+        );
+    }
+}
+
+#[test]
+fn diff_shows_redacted_replacements_without_overwriting_existing_config() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: new-tool, env: {API_KEY: {'$env': MCPSTACK_CONFLICT_SECRET}}}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    let original = "# private\nmodel='private-model'\n[mcp_servers.shared]\ncommand='old-tool'\ncustom_secret='old-private-secret'\n[mcp_servers.shared.env]\nAPI_KEY='old-api-secret'\n";
+    std::fs::write(&config, original).unwrap();
+    let execute = || {
+        Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["diff", "codex"])
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .env("MCPSTACK_CONFLICT_SECRET", "new-api-secret")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let preview = execute();
+    assert!(preview.status.success(), "{preview:?}");
+    let diff = String::from_utf8_lossy(&preview.stdout);
+    assert!(diff.contains("-command='old-tool'"));
+    assert!(diff.contains("+command = \"new-tool\""));
+    let diagnostics = String::from_utf8_lossy(&preview.stderr);
+    assert!(diagnostics.is_empty());
+    assert!(!diagnostics.contains("differs"));
+    for secret in ["old-private-secret", "old-api-secret", "private-model"] {
+        assert!(!diff.contains(secret));
+        assert!(!String::from_utf8_lossy(&preview.stderr).contains(secret));
+    }
+    // Auto-approval authorizes replacement after the read-only preview.
+    let actual = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["import", "codex", "-y"])
+        .arg(&fixture.file)
+        .arg("--config")
+        .arg(&config)
+        .env("MCPSTACK_CONFLICT_SECRET", "new-api-secret")
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    #[cfg(unix)]
+    assert!(actual.status.success());
+    #[cfg(not(unix))]
+    assert_eq!(actual.status.code(), Some(13));
+    #[cfg(not(unix))]
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    #[cfg(unix)]
+    assert!(
+        std::fs::read_to_string(&config)
+            .unwrap()
+            .contains("new-api-secret")
+    );
+    #[cfg(unix)]
+    assert_eq!(
+        std::fs::read_to_string(fixture.directory.path().join("config.toml.~1~")).unwrap(),
+        original
+    );
+    #[cfg(not(unix))]
+    assert!(!fixture.directory.path().join("config.toml.~1~").exists());
+}
+
+#[test]
+fn diff_color_honors_modes_environment_and_no_color() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: new-tool}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    std::fs::write(&config, "[mcp_servers.shared]\ncommand='old-tool'\n").unwrap();
+    let execute = |flags: &[&str], mode: Option<&str>, no_color: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
+        command
+            .args(["diff", "codex"])
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .args(flags)
+            .env_remove("MCPSTACK_COLOR")
+            .env_remove("NO_COLOR")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null());
+        if let Some(value) = mode {
+            command.env("MCPSTACK_COLOR", value);
+        }
+        if let Some(value) = no_color {
+            command.env("NO_COLOR", value);
+        }
+        command.output().unwrap()
+    };
+    let plain = execute(&[], None, None);
+    assert!(plain.status.success());
+    assert!(!plain.stdout.contains(&0x1b)); // redirected stdout stays plain in auto
+    for (flags, mode, no_color, colored) in [
+        (vec!["--color", "always"], None, None, true),
+        (vec![], Some("always"), None, true),
+        (vec!["--color", "never"], Some("always"), None, false),
+        (vec!["--color", "always", "--no-color"], None, None, false),
+        (vec!["--color", "always"], None, Some("1"), false),
+        (vec!["--color", "always"], None, Some(""), true),
+    ] {
+        let output = execute(&flags, mode, no_color);
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        if colored {
+            assert!(text.contains("\x1b[36m--- "));
+            assert!(text.contains("\x1b[32m+command = \"new-tool\"\x1b[0m"));
+            assert!(text.contains("\x1b[31m-command='old-tool'\x1b[0m"));
+            let stripped = ["\x1b[36m", "\x1b[32m", "\x1b[31m", "\x1b[0m"]
+                .iter()
+                .fold(text, |text, sequence| text.replace(sequence, ""));
+            assert_eq!(stripped.as_bytes(), plain.stdout);
+        } else {
+            assert_eq!(text.as_bytes(), plain.stdout);
+        }
+    }
+}
+
+#[test]
+fn diff_compares_real_secrets_and_marks_only_changed_lines() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config:\n      url: https://example.com/mcp\n      http_headers: {Authorization: {'$env': MCPSTACK_COMPARE_SECRET}}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    let original = "[mcp_servers.shared]\nurl = \"https://example.com/mcp\"\n\n[mcp_servers.shared.http_headers]\nAuthorization = \"existing-fixture-secret\"\n";
+    std::fs::write(&config, original).unwrap();
+    for (value, changed) in [
+        ("existing-fixture-secret", false),
+        ("new-fixture-secret", true),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["diff", "codex"])
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .env("MCPSTACK_COMPARE_SECRET", value)
+            .env_remove("RUST_LOG")
+            .env_remove("MCPSTACK_COLOR")
+            .env_remove("NO_COLOR")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let diff = String::from_utf8_lossy(&output.stdout);
+        if changed {
+            assert!(diff.contains("-Authorization = \"<redacted>\""));
+            assert!(diff.contains("+Authorization = \"<redacted: changed>\""));
+            assert!(!diff.contains("-url ="));
+            assert!(!diff.contains("+url ="));
+            assert!(!diff.contains("-[mcp_servers.shared.http_headers]"));
+            assert!(!diff.contains("+[mcp_servers.shared.http_headers]"));
+        } else {
+            assert!(diff.contains("No changes"));
+            assert!(!diff.contains("@@"));
+            let diagnostics = String::from_utf8_lossy(&output.stderr);
+            assert!(diagnostics.is_empty());
+        }
+        for secret in ["existing-fixture-secret", "new-fixture-secret"] {
+            assert!(!diff.contains(secret));
+            assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+        }
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+        assert!(!fixture.directory.path().join("config.toml.~1~").exists());
+    }
+}
+
+#[test]
+fn previews_redact_old_values_at_incoming_secret_reference_locations() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  process:\n    client: codex\n    config:\n      command: tool\n      args: [{'$env': MCPSTACK_ROTATED_VALUE}, visible-arg]\n      env: {CUSTOM: {'$env': MCPSTACK_ROTATED_VALUE}, ORDINARY: visible-env}\n  remote:\n    transport:\n      type: http\n      url: https://example.com/mcp\n      headers: {X-Custom: {env: MCPSTACK_ROTATED_VALUE}, X-Ordinary: visible-header}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    let original = "[mcp_servers.process]\ncommand='tool'\nargs=['old-argument-credential', 'visible-arg']\n[mcp_servers.process.env]\nCUSTOM='old-environment-credential'\nORDINARY='visible-env'\n[mcp_servers.remote]\nurl='https://example.com/mcp'\n[mcp_servers.remote.http_headers]\nX-Custom='old-header-credential'\nX-Ordinary='visible-header'\n";
+    std::fs::write(&config, original).unwrap();
+    for args in [
+        vec!["diff", "codex"],
+        vec!["import", "codex", "--dry-run", "-y"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(args)
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .args(["--color", "never"])
+            .env("MCPSTACK_ROTATED_VALUE", "new-rotated-credential")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let preview = String::from_utf8_lossy(&output.stdout);
+        assert!(preview.contains("<redacted: changed>"));
+        for credential in [
+            "old-argument-credential",
+            "old-environment-credential",
+            "old-header-credential",
+            "new-rotated-credential",
+        ] {
+            assert!(!preview.contains(credential), "{preview}");
+            assert!(!String::from_utf8_lossy(&output.stderr).contains(credential));
+        }
+        for ordinary in ["visible-arg", "visible-env", "visible-header"] {
+            assert!(preview.contains(ordinary), "{preview}");
+        }
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+        assert!(!config.with_extension("toml.~1~").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn auto_approve_replaces_existing_servers_and_preserves_unrelated_settings() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: replacement}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    let original = "# keep\nmodel='private'\n[mcp_servers.shared]\ncommand='old'\nargs=['obsolete']\n[mcp_servers.other]\ncommand='untouched'\n";
+    std::fs::write(&config, original).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["import", "codex", "-y", "--config"])
+        .arg(&config)
+        .arg(&fixture.file)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = std::fs::read_to_string(&config).unwrap();
+    let written: toml::Table = toml::from_str(&text).unwrap();
+    assert!(text.starts_with("# keep"));
+    assert_eq!(written["model"].as_str(), Some("private"));
+    assert_eq!(
+        written["mcp_servers"]["shared"]["command"].as_str(),
+        Some("replacement")
+    );
+    assert!(written["mcp_servers"]["shared"].get("args").is_none());
+    assert_eq!(
+        written["mcp_servers"]["other"]["command"].as_str(),
+        Some("untouched")
+    );
+    assert_eq!(
+        std::fs::read_to_string(config.with_extension("toml.~1~")).unwrap(),
+        original
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn diff_hunk_positions_match_original_and_imported_files() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  first:\n    client: codex\n    config: {command: new, args: [extra]}\n  last:\n    client: codex\n    config: {command: last-new}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    let original = "a=1\nb=2\nc=3\nd=4\ne=5\nf=6\ng=7\nh=8\ni=9\nj=10\n[mcp_servers.first]\ncommand = \"old\"\n[mcp_servers.unrelated]\ncommand=\"private\"\na=1\nb=2\nc=3\nd=4\ne=5\nf=6\ng=7\nh=8\ni=9\nj=10\n[mcp_servers.last]\ncommand = \"last-old\"\n";
+    std::fs::write(&config, original).unwrap();
+    let invoke = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(args)
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .env_remove("MCPSTACK_COLOR")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let preview = invoke(&["diff", "codex"]);
+    assert!(preview.status.success(), "{preview:?}");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    assert!(!config.with_extension("toml.~1~").exists());
+    let dry = invoke(&["import", "codex", "--dry-run", "-y"]);
+    assert!(dry.status.success(), "{dry:?}");
+    assert!(dry.stdout.starts_with(&preview.stdout));
+    assert!(String::from_utf8_lossy(&dry.stdout).contains("Would import 2 server(s)."));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    assert!(!config.with_extension("toml.~1~").exists());
+    let applied = invoke(&["import", "codex", "-y"]);
+    assert!(applied.status.success(), "{applied:?}");
+    assert!(!String::from_utf8_lossy(&applied.stdout).contains("@@"));
+    let proposed = std::fs::read_to_string(&config).unwrap();
+    let before: Vec<_> = original.lines().collect();
+    let after: Vec<_> = proposed.lines().collect();
+    let patch = String::from_utf8(preview.stdout).unwrap();
+    let (mut old, mut new, mut hunks) = (0, 0, 0);
+    for line in patch.lines().skip(2) {
+        if line.starts_with("@@") {
+            let ranges: Vec<_> = line.split_whitespace().collect();
+            old = ranges[1][1..]
+                .split(',')
+                .next()
+                .unwrap()
+                .parse::<usize>()
+                .unwrap()
+                - 1;
+            new = ranges[2][1..]
+                .split(',')
+                .next()
+                .unwrap()
+                .parse::<usize>()
+                .unwrap()
+                - 1;
+            assert!(old >= 8, "{patch}");
+            hunks += 1;
+        } else if let Some(text) = line.strip_prefix('-') {
+            assert_eq!(before[old], text, "old line {}", old + 1);
+            old += 1;
+        } else if let Some(text) = line.strip_prefix('+') {
+            assert_eq!(after[new], text, "new line {}", new + 1);
+            new += 1;
+        } else if let Some(text) = line.strip_prefix(' ') {
+            if text != "# <unrelated configuration omitted>" {
+                assert_eq!(before[old], text);
+                assert_eq!(after[new], text);
+            }
+            old += 1;
+            new += 1;
+        }
+    }
+    assert_eq!(hunks, 2, "{patch}");
 }

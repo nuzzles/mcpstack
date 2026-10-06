@@ -1,9 +1,29 @@
 pub mod v1;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub use v1::{Server, StackV1};
+
+/// A stack file decoded into its version-specific representation.
+/// Untagged serialization keeps the existing schema_version-based wire format.
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum Stack {
+    V1(StackV1),
+}
+
+impl Stack {
+    pub fn from_yaml(document: &str) -> Result<Self, ValidationError> {
+        crate::importers::from_yaml(document)
+    }
+}
+
+impl From<StackV1> for Stack {
+    fn from(stack: StackV1) -> Self {
+        Self::V1(stack)
+    }
+}
 
 /// Stack format version currently supported for reading and writing.
 pub const SCHEMA_VERSION: u64 = 1;
@@ -51,9 +71,11 @@ pub struct StackVersion {
     pub schema_version: u64,
 }
 
+#[cfg(test)]
 impl StackV1 {
     pub fn from_yaml(document: &str) -> Result<Self, ValidationError> {
-        crate::importers::from_yaml(document)
+        let Stack::V1(stack) = Stack::from_yaml(document)?;
+        Ok(stack)
     }
 }
 

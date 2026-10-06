@@ -10,7 +10,7 @@ use crate::schema::{Server, StackV1};
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ImportError {
     #[error(
-        "A secret reference is missing, non-Unicode, empty, or contains NUL. Set all referenced environment variables."
+        "A masked field needs a secret value. Set the referenced environment variable or use interactive import to enter it; --auto-approve cannot supply missing values."
     )]
     Secret,
     #[error(
@@ -176,7 +176,6 @@ pub fn prepare(
                         } => {
                             definition.url = Some(url.clone());
                             if let Some(reference) = bearer_token {
-                                secret(&reference.env, &mut lookup)?;
                                 definition.bearer_token_env_var = Some(reference.env.clone());
                             }
                             definition.http_headers = headers
@@ -344,6 +343,19 @@ impl Definition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn portable_bearer_binding_does_not_read_the_secret() {
+        let stack = StackV1::from_yaml("schema_version: 1\nservers:\n  remote:\n    transport: {type: http, url: https://example.com/mcp, bearer_token: {env: RUNTIME_TOKEN}}\n").unwrap();
+        let definitions = prepare(&stack, |_| {
+            panic!("runtime bindings must not resolve values")
+        })
+        .unwrap();
+        assert_eq!(
+            definitions["remote"]["bearer_token_env_var"].as_str(),
+            Some("RUNTIME_TOKEN")
+        );
+    }
+
     #[test]
     fn resolves_nested_native_and_portable_references() {
         let stack = StackV1::from_yaml("schema_version: 1\nservers:\n  native:\n    client: codex\n    config:\n      command: tool\n      args: [{'$env': TOKEN}]\n      env: {KEY: {'$env': TOKEN}}\n  portable:\n    transport:\n      type: http\n      url: https://example.com/mcp\n      headers: {Authorization: {env: TOKEN}}\n").unwrap();

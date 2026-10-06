@@ -1,5 +1,6 @@
 pub(crate) mod schema;
 
+use crate::cmd::diff::Diff;
 use crate::cmd::export::Export;
 use crate::cmd::import::Import;
 use crate::cmd::schema::Schema;
@@ -15,6 +16,7 @@ pub const EXAMPLES: &[&str] = &[
     "mcpstack validate --help",
     "mcpstack export codex --help",
     "mcpstack import codex --help",
+    "mcpstack diff codex --help",
 ];
 
 /// Install MCP servers, version-control stacks, and share setups across teams.
@@ -28,7 +30,7 @@ pub const EXAMPLES: &[&str] = &[
 pub struct Cli {
     #[command(flatten)]
     pub logging: Logging,
-    /// Disable prompts and mask detected secrets unless --expose-secrets is supplied.
+    /// Disable all prompts; missing masked values fail even during dry-run.
     #[arg(long, global = true)]
     non_interactive: bool,
     /// Print the complete CLI interface as versioned JSON.
@@ -43,6 +45,7 @@ enum Commands {
     Validate(Validate),
     Export(Export),
     Import(Import),
+    Diff(Diff),
 }
 
 impl Cli {
@@ -57,7 +60,12 @@ impl Cli {
             match command {
                 Commands::Validate(inner) => inner.run(output),
                 Commands::Export(inner) => inner.run(output, self.non_interactive),
-                Commands::Import(inner) => inner.run(output),
+                Commands::Import(inner) => {
+                    inner.run(output, self.non_interactive, self.logging.output_ansi())
+                }
+                Commands::Diff(inner) => {
+                    inner.run(output, self.non_interactive, self.logging.output_ansi())
+                }
             }
         } else {
             Self::command().write_long_help(output)?;

@@ -1,4 +1,4 @@
-//! Backup-first, preserving, atomic Codex config merges.
+//! Optional private backups and atomic Codex config merges.
 use std::collections::BTreeMap;
 use std::fs;
 #[cfg(unix)]
@@ -12,22 +12,14 @@ use toml_edit::{DocumentMut, Item, Table};
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum FileError {
     #[error(
-        "Cannot create private backup. Move any existing .bak file aside and check the target path and permissions. Import was not processed."
+        "Cannot create private backup at the chosen path. Choose an unused file path and check permissions. Import was not processed."
     )]
     Backup,
-    #[error("Invalid target TOML or mcp_servers table. Original config and backup are unchanged.")]
+    #[error("Invalid target TOML or mcp_servers table. Client configuration was not changed.")]
     Config,
-    #[error(
-        "An existing server differs from the stack. Resolve the conflict explicitly; no config changes were written."
-    )]
-    Conflict,
-    #[error(
-        "The target changed during import. No config changes were written; retry with a fresh backup."
-    )]
+    #[error("The target changed during import. No config changes were written; retry the import.")]
     Changed,
-    #[error(
-        "Unable to write config atomically. The original config and private backup remain available."
-    )]
+    #[error("Unable to write config atomically. The original config was not replaced.")]
     Write,
     #[error(
         "Private config writes currently require Unix permissions. This platform is not supported for import."
@@ -42,59 +34,161 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    pub fn backup(path: &Path) -> Result<Self, FileError> {
+    /// Guard every write path, including imports that decline a backup.
+    pub fn ensure_write_supported(&self) -> Result<(), FileError> {
+        #[cfg(unix)]
+        {
+            Ok(())
+        }
         #[cfg(not(unix))]
         {
-            let _ = path;
-            return Err(FileError::Platform);
+            Err(FileError::Platform)
+        }
+    }
+
+    /// Read a plan snapshot without creating files, including on non-Unix hosts.
+    pub fn read(path: &Path) -> Result<Self, FileError> {
+        Ok(Self {
+            path: path.into(),
+            original: read_regular(path).map_err(|_| FileError::Config)?,
+        })
+    }
+
+    #[cfg(all(test, unix))]
+    pub fn backup(path: &Path) -> Result<Self, FileError> {
+        let snapshot = Self::read(path).map_err(|_| FileError::Backup)?;
+        snapshot.create_backup()?;
+        Ok(snapshot)
+    }
+
+    /// Use GNU-style numbered backups, retaining every existing generation.
+    pub fn default_backup_path(&self) -> Result<PathBuf, FileError> {
+        let parent = self
+            .path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let mut prefix = self
+            .path
+            .file_name()
+            .ok_or(FileError::Backup)?
+            .to_os_string();
+        prefix.push(".~");
+        let mut latest = 0_u64;
+        for entry in fs::read_dir(parent).map_err(|_| FileError::Backup)? {
+            let name = entry.map_err(|_| FileError::Backup)?.file_name();
+            let Some(suffix) = name
+                .as_encoded_bytes()
+                .strip_prefix(prefix.as_encoded_bytes())
+            else {
+                continue;
+            };
+            let Some(number) = suffix
+                .strip_suffix(b"~")
+                .and_then(|bytes| std::str::from_utf8(bytes).ok())
+                .filter(|number| {
+                    !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+                })
+            else {
+                continue;
+            };
+            latest = latest.max(number.parse::<u64>().map_err(|_| FileError::Backup)?);
+        }
+        let next = latest.checked_add(1).ok_or(FileError::Backup)?;
+        let mut path = self.path.as_os_str().to_os_string();
+        path.push(format!(".~{next}~"));
+        Ok(path.into())
+    }
+
+    #[cfg(all(test, unix))]
+    pub fn create_backup(&self) -> Result<(), FileError> {
+        self.create_backup_at(&self.default_backup_path()?)
+    }
+
+    /// Back up the original before reading the stack or resolving secrets.
+    pub fn create_backup_at(&self, backup_path: &Path) -> Result<(), FileError> {
+        #[cfg(not(unix))]
+        {
+            let _ = backup_path;
+            Err(FileError::Platform)
         }
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            let original = read_regular(path).map_err(|_| FileError::Backup)?;
-            let mut backup_name = path.as_os_str().to_os_string();
-            backup_name.push(".bak");
+            self.check_unchanged()?;
+            if file_identity(&self.path).map_err(|_| FileError::Backup)?
+                == file_identity(backup_path).map_err(|_| FileError::Backup)?
+            {
+                return Err(FileError::Backup);
+            }
             let mut backup = OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .mode(0o600)
-                .open(PathBuf::from(backup_name))
+                .open(backup_path)
                 .map_err(|_| FileError::Backup)?;
-            // On failure retain the private partial backup rather than deleting
-            // a path that another process might have replaced.
+            // Retain a partial private backup on failure rather than deleting
+            // a path another process might have replaced.
             backup
-                .write_all(original.as_deref().unwrap_or_default())
+                .write_all(self.original.as_deref().unwrap_or_default())
                 .map_err(|_| FileError::Backup)?;
             backup.sync_all().map_err(|_| FileError::Backup)?;
-            Ok(Self {
-                path: path.into(),
-                original,
-            })
+            Ok(())
         }
     }
 
-    pub fn apply(self, definitions: &BTreeMap<String, toml::Table>) -> Result<usize, FileError> {
-        let text = std::str::from_utf8(self.original.as_deref().unwrap_or_default())
-            .map_err(|_| FileError::Config)?;
-        let mut document = text.parse::<DocumentMut>().map_err(|_| FileError::Config)?;
-        let mut added = 0;
-        if document.contains_key("mcp_servers") && !document["mcp_servers"].is_table_like() {
-            return Err(FileError::Config);
-        }
+    /// Compare additions and replacements without writes.
+    pub fn preview(
+        &self,
+        definitions: &BTreeMap<String, toml::Table>,
+    ) -> Result<BTreeMap<String, (Option<toml::Table>, toml::Table)>, FileError> {
+        let document = self.document()?;
+        let mut changes = BTreeMap::new();
         for (name, definition) in definitions {
-            if let Some(existing) = document
+            let existing = document
                 .get("mcp_servers")
                 .and_then(Item::as_table_like)
                 .and_then(|servers| servers.get(name))
-            {
-                let existing = existing_table(existing)?;
-                // Normalize documented defaults when comparing, but never rewrite
-                // an identical entry or drop unknown existing fields.
-                if canonical(existing) != canonical(definition.clone()) {
-                    return Err(FileError::Conflict);
-                }
+                .map(existing_table)
+                .transpose()?;
+            if existing.as_ref().is_some_and(|existing| {
+                canonical(existing.clone()) == canonical(definition.clone())
+            }) {
                 continue;
             }
+            changes.insert(name.clone(), (existing, definition.clone()));
+        }
+        Ok(changes)
+    }
+
+    fn document(&self) -> Result<DocumentMut, FileError> {
+        let text = std::str::from_utf8(self.original.as_deref().unwrap_or_default())
+            .map_err(|_| FileError::Config)?;
+        let document = text.parse::<DocumentMut>().map_err(|_| FileError::Config)?;
+        if document.contains_key("mcp_servers") && !document["mcp_servers"].is_table_like() {
+            return Err(FileError::Config);
+        }
+        Ok(document)
+    }
+
+    pub fn original_text(&self) -> Result<&str, FileError> {
+        std::str::from_utf8(self.original.as_deref().unwrap_or_default())
+            .map_err(|_| FileError::Config)
+    }
+
+    /// Build exactly the document that apply writes, without touching the filesystem.
+    pub fn proposal(
+        &self,
+        definitions: &BTreeMap<String, toml::Table>,
+    ) -> Result<(usize, String), FileError> {
+        let additions: BTreeMap<_, _> = self
+            .preview(definitions)?
+            .into_iter()
+            .map(|(name, (_, definition))| (name, definition))
+            .collect();
+        let mut document = self.document()?;
+        let added = additions.len();
+        for (name, definition) in &additions {
             if !document.contains_key("mcp_servers") {
                 document["mcp_servers"] = Item::Table(Table::new());
             }
@@ -107,8 +201,13 @@ impl Snapshot {
                 .as_table_like_mut()
                 .ok_or(FileError::Config)?
                 .insert(name, Item::Table(server));
-            added += 1;
         }
+        Ok((added, document.to_string()))
+    }
+
+    pub fn apply(self, definitions: &BTreeMap<String, toml::Table>) -> Result<usize, FileError> {
+        self.ensure_write_supported()?;
+        let (added, document) = self.proposal(definitions)?;
         self.check_unchanged()?;
         if added == 0 {
             return Ok(0);
@@ -121,7 +220,7 @@ impl Snapshot {
         let mut temporary =
             tempfile::NamedTempFile::new_in(parent).map_err(|_| FileError::Write)?;
         temporary
-            .write_all(document.to_string().as_bytes())
+            .write_all(document.as_bytes())
             .map_err(|_| FileError::Write)?;
         temporary
             .as_file()
@@ -146,6 +245,18 @@ impl Snapshot {
         }
         Ok(())
     }
+}
+
+#[cfg(unix)]
+fn file_identity(path: &Path) -> Result<PathBuf, std::io::Error> {
+    let parent = path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("missing filename"))?;
+    Ok(parent.canonicalize()?.join(name))
 }
 
 fn read_regular(path: &Path) -> Result<Option<Vec<u8>>, std::io::Error> {
@@ -214,6 +325,75 @@ mod tests {
     }
 
     #[test]
+    fn numbered_backups_preserve_generations_and_skip_occupied_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("codex.bak");
+        fs::write(&path, "first").unwrap();
+        let snapshot = Snapshot::read(&path).unwrap();
+        let first = snapshot.default_backup_path().unwrap();
+        assert_eq!(first, dir.path().join("codex.bak.~1~"));
+        snapshot.create_backup_at(&first).unwrap();
+        fs::write(&path, "second").unwrap();
+        let snapshot = Snapshot::read(&path).unwrap();
+        let second = snapshot.default_backup_path().unwrap();
+        assert_eq!(second, dir.path().join("codex.bak.~2~"));
+        snapshot.create_backup_at(&second).unwrap();
+        assert_eq!(fs::read_to_string(&first).unwrap(), "first");
+        assert_eq!(fs::read_to_string(&second).unwrap(), "second");
+        // Gaps, directories, and dangling symlinks must not cause reuse.
+        fs::remove_file(&first).unwrap();
+        fs::create_dir(dir.path().join("codex.bak.~9~")).unwrap();
+        symlink(
+            dir.path().join("missing"),
+            dir.path().join("codex.bak.~10~"),
+        )
+        .unwrap();
+        fs::write(dir.path().join("other.~99~"), "unrelated").unwrap();
+        let next = snapshot.default_backup_path().unwrap();
+        assert_eq!(next, dir.path().join("codex.bak.~11~"));
+        // An intervening creation still cannot be overwritten.
+        fs::write(&next, "concurrent backup").unwrap();
+        assert_eq!(snapshot.create_backup_at(&next), Err(FileError::Backup));
+        assert_eq!(fs::read_to_string(&next).unwrap(), "concurrent backup");
+    }
+
+    #[test]
+    fn custom_backups_are_private_and_cannot_use_the_target_or_overwrite_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let absent = Snapshot::read(&path).unwrap();
+        let alias = dir.path().join(".").join("config.toml");
+        assert_eq!(absent.create_backup_at(&alias), Err(FileError::Backup));
+        assert!(!path.exists());
+        fs::write(&path, "# private fixture").unwrap();
+        let snapshot = Snapshot::read(&path).unwrap();
+        let custom = dir.path().join("backup with spaces.toml");
+        snapshot.create_backup_at(&custom).unwrap();
+        assert_eq!(fs::read_to_string(&custom).unwrap(), "# private fixture");
+        assert_eq!(
+            fs::metadata(&custom).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(!snapshot.default_backup_path().unwrap().exists());
+        assert_eq!(snapshot.create_backup_at(&custom), Err(FileError::Backup));
+        assert_eq!(fs::read_to_string(&custom).unwrap(), "# private fixture");
+    }
+
+    #[test]
+    fn target_changed_after_preview_aborts_before_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "# original").unwrap();
+        let snapshot = Snapshot::read(&path).unwrap();
+        assert_eq!(snapshot.preview(&definitions("tool")).unwrap().len(), 1);
+        assert!(!path.with_extension("toml.~1~").exists());
+        fs::write(&path, "# external edit").unwrap();
+        assert_eq!(snapshot.create_backup(), Err(FileError::Changed));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# external edit");
+        assert!(!path.with_extension("toml.~1~").exists());
+    }
+
+    #[test]
     fn preserves_comments_settings_and_skips_semantically_identical_servers() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -227,7 +407,7 @@ mod tests {
             1
         );
         assert_eq!(
-            fs::read(path.with_extension("toml.bak")).unwrap(),
+            fs::read(path.with_extension("toml.~1~")).unwrap(),
             original.as_bytes()
         );
         let written = fs::read_to_string(&path).unwrap();
@@ -235,7 +415,7 @@ mod tests {
         let metadata = fs::metadata(&path).unwrap();
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
         assert_eq!(
-            fs::metadata(path.with_extension("toml.bak"))
+            fs::metadata(path.with_extension("toml.~1~"))
                 .unwrap()
                 .permissions()
                 .mode()
@@ -243,7 +423,7 @@ mod tests {
             0o600
         );
         fs::rename(
-            path.with_extension("toml.bak"),
+            path.with_extension("toml.~1~"),
             dir.path().join("first-backup"),
         )
         .unwrap();
@@ -275,7 +455,7 @@ mod tests {
             0
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), original);
-        fs::remove_file(path.with_extension("toml.bak")).unwrap();
+        fs::remove_file(path.with_extension("toml.~1~")).unwrap();
         let mut incoming = definitions("new");
         let definition = incoming.remove("added").unwrap();
         incoming.insert("quoted.name".into(), definition);
@@ -291,13 +471,8 @@ mod tests {
     }
 
     #[test]
-    fn backup_conflicts_parse_errors_and_definition_conflicts_preserve_originals() {
-        for original in [
-            "broken = [",
-            "mcp_servers=42",
-            "[mcp_servers.added]\ncommand='different'",
-            "[mcp_servers.added]\ncommand='tool'\nfuture=true",
-        ] {
+    fn backup_conflicts_and_parse_errors_preserve_originals() {
+        for original in ["broken = [", "mcp_servers=42"] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("config.toml");
             fs::write(&path, original).unwrap();
@@ -309,12 +484,16 @@ mod tests {
             );
             assert_eq!(fs::read_to_string(&path).unwrap(), original);
             assert_eq!(
-                fs::read_to_string(path.with_extension("toml.bak")).unwrap(),
+                fs::read_to_string(path.with_extension("toml.~1~")).unwrap(),
                 original
             );
-            assert!(matches!(Snapshot::backup(&path), Err(FileError::Backup)));
+            Snapshot::backup(&path).unwrap();
             assert_eq!(
-                fs::read_to_string(path.with_extension("toml.bak")).unwrap(),
+                fs::read_to_string(path.with_extension("toml.~2~")).unwrap(),
+                original
+            );
+            assert_eq!(
+                fs::read_to_string(path.with_extension("toml.~1~")).unwrap(),
                 original
             );
         }
@@ -325,9 +504,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         let snapshot = Snapshot::backup(&path).unwrap();
-        assert_eq!(fs::read(path.with_extension("toml.bak")).unwrap(), b"");
+        assert_eq!(fs::read(path.with_extension("toml.~1~")).unwrap(), b"");
         assert_eq!(snapshot.apply(&definitions("tool")).unwrap(), 1);
-        fs::remove_file(path.with_extension("toml.bak")).unwrap();
+        fs::remove_file(path.with_extension("toml.~1~")).unwrap();
         let snapshot = Snapshot::backup(&path).unwrap();
         fs::write(&path, "# external edit").unwrap();
         assert_eq!(
@@ -338,7 +517,7 @@ mod tests {
         let link = dir.path().join("link.toml");
         symlink(&path, &link).unwrap();
         assert!(matches!(Snapshot::backup(&link), Err(FileError::Backup)));
-        assert!(!link.with_extension("toml.bak").exists());
+        assert!(!link.with_extension("toml.~1~").exists());
     }
 
     #[test]
@@ -359,8 +538,28 @@ mod tests {
         assert_eq!(result, Err(FileError::Write));
         assert_eq!(fs::read_to_string(&path).unwrap(), "# original");
         assert_eq!(
-            fs::read_to_string(path.with_extension("toml.bak")).unwrap(),
+            fs::read_to_string(path.with_extension("toml.~1~")).unwrap(),
             "# original"
         );
+    }
+}
+
+#[cfg(all(test, not(unix)))]
+mod platform_tests {
+    use super::*;
+
+    #[test]
+    fn apply_without_backup_refuses_unsupported_private_writes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        let original = "# original\n";
+        fs::write(&path, original).unwrap();
+        let snapshot = Snapshot::read(&path).unwrap();
+        let definitions =
+            BTreeMap::from([("added".into(), toml::from_str("command='tool'").unwrap())]);
+        assert_eq!(snapshot.ensure_write_supported(), Err(FileError::Platform));
+        assert_eq!(snapshot.apply(&definitions), Err(FileError::Platform));
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 }

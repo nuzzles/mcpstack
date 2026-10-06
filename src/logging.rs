@@ -1,5 +1,5 @@
 use std::env::var_os;
-use std::io::{IsTerminal, stderr};
+use std::io::{IsTerminal, stderr, stdout};
 
 use clap::{ArgAction, Args, ValueEnum};
 #[cfg(windows)]
@@ -20,10 +20,10 @@ pub struct Logging {
     /// Override the tracing filter (also read from RUST_LOG).
     #[arg(long, global = true, env = "RUST_LOG", conflicts_with_all = ["verbose", "quiet"])]
     log: Option<String>,
-    /// ANSI color mode for logs on stderr.
+    /// ANSI color mode for logs and diffs.
     #[arg(long, global = true, env = "MCPSTACK_COLOR", value_enum, default_value_t = ColorMode::Auto)]
     color: ColorMode,
-    /// Disable ANSI colors in logs; also honors nonempty NO_COLOR.
+    /// Disable ANSI colors; also honors nonempty NO_COLOR.
     #[arg(long, global = true)]
     no_color: bool,
 }
@@ -37,6 +37,22 @@ enum ColorMode {
 }
 
 impl Logging {
+    /// Diffs follow stdout's terminal state independently of stderr logging.
+    pub fn output_ansi(&self) -> bool {
+        self.ansi_for(stdout().is_terminal())
+    }
+
+    fn ansi_for(&self, terminal: bool) -> bool {
+        let no_color = self.no_color || var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
+        let colored = ansi_enabled(self.color, no_color, terminal);
+        #[cfg(windows)]
+        if colored {
+            // Explicit always mode emits ANSI even without an attached console.
+            let _ = enable_ansi_support();
+        }
+        colored
+    }
+
     pub fn init(&self) -> Result<(), AppError> {
         // Clap checks conflicts within each command level, but global options
         // can be supplied on opposite sides of a subcommand.
@@ -55,14 +71,7 @@ impl Logging {
                 _ => "error,mcpstack=trace",
             });
         let filter = EnvFilter::try_new(directives).map_err(|_| AppError::Logging)?;
-        let no_color = self.no_color || var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
-        let colored = ansi_enabled(self.color, no_color, stderr().is_terminal());
-        #[cfg(windows)]
-        if colored {
-            // Explicit always mode must still emit ANSI when redirected or when
-            // no Windows console is attached. Console setup is best-effort.
-            let _ = enable_ansi_support();
-        }
+        let colored = self.ansi_for(stderr().is_terminal());
         fmt()
             .with_env_filter(filter)
             .with_writer(stderr)

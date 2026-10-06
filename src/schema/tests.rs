@@ -448,14 +448,16 @@ fn yaml_rejects_duplicates_and_unsupported_versions() {
 
 #[test]
 fn exporter_dispatch_rejects_unknown_versions_and_round_trips_v1() {
-    let mut stack = parse(&document()).unwrap();
+    let mut stack = Stack::V1(parse(&document()).unwrap());
     let yaml = crate::exporters::to_yaml(&stack).unwrap();
     let restored = crate::importers::from_yaml(&yaml).unwrap();
+    assert!(matches!(restored, Stack::V1(_)));
     assert_eq!(
         serde_json::to_value(&restored).unwrap(),
         serde_json::to_value(&stack).unwrap()
     );
-    stack.schema_version = 2;
+    let Stack::V1(inner) = &mut stack;
+    inner.schema_version = 2;
     assert_eq!(
         crate::exporters::to_yaml(&stack).err().unwrap(),
         ValidationError::UnsupportedVersion

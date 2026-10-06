@@ -17,7 +17,7 @@ to its entry in Current status at the bottom.\
 | Done | Read MCP config at an explicit path for export. |
 | Partial [*](#codex-import) | Write MCP config at the default or an explicit path for import. |
 | Done | Validate MCP fields against the bundled current Codex config schema; reject obsolete or unknown fields. [*](#codex-config-schema) |
-| Done | On import, preserve unrelated settings/servers; skip identical entries and reject differing ones. |
+| Done | On import, preserve unrelated settings/servers; skip identical entries and require approval for replacements. |
 
 ### Logging and ANSI
 
@@ -25,7 +25,7 @@ to its entry in Current status at the bottom.\
 | --- | --- |
 | Done | Send compact tracing logs to stderr; keep YAML exports and CLI schema JSON clean on stdout. |
 | Done | Support `-v`/`-vv`, `--quiet`, and `--log`/`RUST_LOG` filtering. |
-| Done | Support `--color auto/always/never` and `MCPSTACK_COLOR`; auto checks stderr's terminal status. |
+| Done | Support `--color auto/always/never` and `MCPSTACK_COLOR`; auto checks stderr for logs and stdout for diffs. |
 | Done | Honor `--no-color` and nonempty `NO_COLOR`; enable ANSI support on Windows. |
 | Done | Keep configuration values out of logs; retain typed error codes and exit statuses. |
 
@@ -44,8 +44,8 @@ to its entry in Current status at the bottom.\
 | Done | Export Codex server entries as a YAML stack to stdout with safe defaults. [*](#codex-export) |
 | Done | Replace recognized credentials with secret references by default; allow interactive selections or `--expose-secrets` to include values. |
 | Partial [*](#codex-import) | Import/merge a stack into Codex without losing supported fields. [*](#phase-1-boundaries) |
-| Done | Resolve secret references from environment variables; reject missing values. [*](#secrets) |
-| Partial [*](#codex-import) | Create a `.bak` copy of the target config before beginning import; abort if backup creation fails. |
+| Done | Resolve masked literals from environment variables or hidden prompts; preserve native runtime bindings. [*](#secrets) |
+| Partial [*](#codex-import) | Offer a unique numbered backup before processing import; abort if a requested backup fails. |
 | Partial [*](#codex-import) | Atomic config writes with restrictive permissions; preserve originals on failure. |
 | Partial [*](#stack-workflow-tests) | Test round trips, repeat imports, config schema compatibility, missing secrets, and write failures. |
 
@@ -70,23 +70,23 @@ to its entry in Current status at the bottom.\
 | Unsupported | Detect machine-specific paths and missing local prerequisites. |
 | Unsupported | Produce Git-friendly exports; require explicit overwrite of existing files. |
 | Unsupported | Preserve version pins and identify unpinned servers. |
-| Unsupported | Keep discovery, validation, and planning free of writes and server execution. |
-| Unsupported | Preview additions, updates, removals, conflicts, and blockers. |
-| Unsupported | Show planned writes, downloads, and commands with secrets redacted. |
+| Partial [*](#codex-import) | Keep discovery, validation, and planning free of writes and server execution. |
+| Partial [*](#codex-import) | Preview additions, updates, removals, conflicts, and blockers. |
+| Partial [*](#codex-import) | Show planned writes, downloads, and commands with secrets redacted. |
 | Unsupported | Resolve relative paths from the stack location; identify the target config. |
 | Unsupported | Apply a whole stack as one transaction. [*](#transactions) |
 | Unsupported | Optionally continue installing independent servers after failures. [*](#continue-on-failure) |
-| Unsupported | Require explicit conflict resolution and validate prerequisites before writes. |
-| Unsupported | Private recovery copies and stale-plan detection. |
-| Unsupported | Repeat installs without duplicates or unnecessary side effects. |
+| Partial [*](#codex-import) | Require explicit conflict resolution and validate prerequisites before writes. |
+| Partial [*](#codex-import) | Private recovery copies and stale-plan detection. |
+| Partial [*](#codex-import) | Repeat installs without duplicates or unnecessary side effects. |
 | Unsupported | Define supported installation mechanisms; reject unsupported ones before writes. |
 | Unsupported | Verify servers through MCP connection and initialization. |
 | Unsupported | Bound verification time; report per-server and overall results. |
 | Unsupported | Diagnose program, credential, authentication, transport, and protocol failures. |
 | Unsupported | Clean up verification processes/connections without invoking application tools. |
 | Unsupported | Add secret resolution providers beyond environment variables. [*](#secrets) |
-| Unsupported | Keep secrets out of output, shared files, CLI arguments, and child-process logs. |
-| Unsupported | Test secret redaction and configuration preservation on success and failure. |
+| Partial [*](#secrets) | Keep secrets out of output, shared files, CLI arguments, and child-process logs. |
+| Partial [*](#stack-workflow-tests) | Test secret redaction and configuration preservation on success and failure. |
 | Unsupported | Test sharing a stack between users with different credentials end to end. |
 | Unsupported | Document human and AI workflows, failure handling, switching, and repeat installs. |
 
@@ -94,7 +94,8 @@ to its entry in Current status at the bottom.\
 
 ### Version compatibility
 
-[*] Stack schema versions are independent of Codex configuration fields. Codex
+[*] Stack files decode into `Stack::V1(StackV1)`; readers and writers dispatch
+through this enum. Stack schema versions are independent of Codex configuration fields. Codex
 config.toml has no format-version field. Import and export use a bundled snapshot
 of the current official MCP config schema without detecting or running Codex.
 Reject unsupported stack schemas, obsolete or unknown MCP fields, invalid values,
@@ -102,18 +103,11 @@ and unsupported portable transports before writing. Preserve unrelated settings.
 
 ### Phase 1 boundaries
 
-[*] After locating the target config, create a sibling `config.toml.bak` before
-any import processing or changes. If backup creation fails, abort the import.
-Do not overwrite an existing backup silently. This requirement applies to import;
-read-only export does not create backups.
-
-Import means merging server definitions into Codex config, not installing or
-starting server software. Validate before writing and leave the config unchanged
-on invalid input, unsupported fields, unresolved references, or differing entries
-with the same name. Compare parsed definitions after resolving references; skip
-identical entries without rewriting an unchanged config. Write changes atomically
-with restrictive permissions. Keep credentials out of exports and diagnostics.
-Existing export files require explicit overwrite.
+[*] Import merges server definitions into Codex config without installing or
+starting server software. Validate and resolve the stack before changing config.
+Preserve unrelated settings, skip identical servers, and apply only approved
+additions or replacements. Backups and private writes are described under
+[Codex import](#codex-import).
 
 ---
 
@@ -127,16 +121,15 @@ and interactive controls.
 
 ### Interaction
 
-[*] Prompt by default in interactive terminals. Explicit noninteractive mode and
-redirected input must never prompt or hang; missing inputs produce actionable
-errors. Machine-readable results must remain parseable during interactive use.
-Codex export now prompts for each detected credential when stdin and stderr are
-terminals, showing the current selection and total. The selection defaults to
-masking, with Yes/No to all choices for the current and remaining credentials.
-`--non-interactive` and redirected input mask all detected credentials;
-`--expose-secrets` includes them without prompts. Prompt labels contain field
-paths, never values. Cancelling a selection aborts export before anything is
-printed on stdout. Other commands do not yet need interactive input.
+[*] Prompt when stdin and stderr are terminals. `--non-interactive` or redirected
+input disables prompts. Export defaults to masking credentials; `--expose-secrets`
+includes them without prompting.
+
+Import defaults to skipping each addition or replacement, with per-server and
+bulk choices. `-y` / `--auto-approve` approves all changes. Dry-run retains these
+prompts and shows only approved changes; unattended dry-run requires `-y`.
+`diff` shows all proposed changes without server approval prompts. Both preview
+modes can ask for missing masked values and never write files.
 
 ### Claude support
 
@@ -165,12 +158,17 @@ Transactional mode must not silently commit a partially installed stack.
 
 ### Secrets
 
-[*] Phase 1 resolves references from environment variables; Phase 2 adds providers.
-Document reference syntax. Export replaces recognized credential fields and values
-with environment references; commands, URLs, and ordinary settings stay literal.
-`--expose-secrets` explicitly opts into exporting credential literals; its output
-may contain credentials and is intended for private use. Private client configs
-and recovery copies use restrictive permissions.
+[*] Masked literal fields use `{"$env":"VARIABLE"}` in native definitions or
+`{env: VARIABLE}` in portable secret fields. Resolve them from the shell or hidden
+interactive input, caching repeated references. Missing values fail when prompting
+is unavailable, including actual imports with `-y`. Both preview modes can prompt
+for missing values and always compare real values.
+
+Native `env_vars`, `bearer_token_env_var`, and `env_http_headers` retain their runtime
+bindings without embedding values. Missing local runtime variables warn; remote
+bindings are not checked against the local shell. Masking does not convert native
+fields into runtime bindings. Export recognition and exposure are described under
+[Codex export](#codex-export). Additional secret providers remain Phase 2 work.
 
 ## Open decisions
 
@@ -187,8 +185,8 @@ scope. Publishing and release/deployment automation require explicit authorizati
 
 ### Commands and help
 
-Help, version, `--schema`, `validate <file>`, `export codex`, `import codex <file>`, and runnable help
-examples are implemented.
+Help, version, `--schema`, `validate <file>`, `export codex`,
+`diff codex <file>`, `import codex <file>`, and runnable help examples are implemented.
 
 ### Exit statuses and error codes
 
@@ -197,10 +195,9 @@ CLI exit statuses are 0 for success/help/version, 1 for output failures
 failures (`STACK_READ_ERROR`), and 4 for invalid stacks (`INVALID_STACK`).
 Config read failures use 5 (`CONFIG_READ_ERROR`); export failures use 6
 (`EXPORT_ERROR`). Logging initialization/filter failures use exit 9
-(`LOGGING_ERROR`). Removed client-version statuses 7 and 8 are not reused.
+(`LOGGING_ERROR`). Removed statuses 7, 8, and 12 are not reused.
 Import failures use 10 (`IMPORT_ERROR`), backup failures use 11 (`BACKUP_ERROR`),
-conflicts use 12 (`IMPORT_CONFLICT`), and safe-write failures use 13
-(`CONFIG_WRITE_ERROR`).
+and config merge/write failures use 13 (`CONFIG_WRITE_ERROR`).
 
 ### Deterministic output
 
@@ -211,7 +208,8 @@ deterministic native YAML stacks. Plans and structured operation results are pen
 ### Output formats
 
 Help, version, and validation results use text output;
-`--schema` emits JSON; `export codex` emits YAML.
+`--schema` emits JSON; `export codex` emits YAML; `diff` and import dry-run
+emit redacted unified diffs.
 Diagnostics go to stderr without echoing argument values. Structured JSON
 operation results are pending.
 
@@ -220,10 +218,9 @@ operation results are pending.
 Stack serialization round trips, client-independent documents, reference syntax,
 unsupported shared fields, native client fields and secret references, transport
 URL schemes, validation file preservation, and CLI output failures are
-covered. Current Codex schema validation and export without a Codex installation
-are also covered. Repeat imports, secret resolution, backups, atomic writes, and failure
+covered. Current Codex schema validation, diff redaction and file line numbers, and
+export without a Codex installation are also covered. Repeat imports, secret resolution, backups, atomic writes, and failure
 preservation are covered on Unix; other platforms reject import safely.
-
 
 ### Codex export
 
@@ -251,8 +248,7 @@ including when standard input is redirected. `export codex --expose-secrets`
 preserves literal values, including credentials, without prompting.
 No export mode changes the source file or logs its values. Server names and field
 keys remain visible. `export codex --config <path>` reads an explicit TOML file instead of the default
-config. Relative paths resolve from the current working directory. Imports are pending.
-
+config. Relative paths resolve from the current working directory.
 
 ### Codex config schema
 
@@ -266,12 +262,33 @@ safe filesystem writes currently support Unix only.
 
 ### Codex import
 
-`import codex <file> [--config <path>]` resolves secrets and validates against the
-bundled current MCP schema without finding or running Codex. It preserves
-unrelated settings, comments, and servers, skips identical definitions, and
-rejects differing entries. A private sibling `.bak` is created before processing;
-an existing backup must be moved aside explicitly. The original is checked for
-changes before atomic replacement using a synced private temporary file. Native
-entries retain all supported schema fields. Private writes support Unix only;
-other platforms reject import before processing. A final check/rename race with
-external editors remains; avoid concurrent editing.
+All Codex commands accept `--config <path>`; otherwise they use
+`$CODEX_HOME/config.toml` or `~/.codex/config.toml`. Paths resolve from the current
+directory. Import and diff validate the stack against the bundled MCP schema
+without running Codex or servers.
+
+| Command | Behavior |
+| --- | --- |
+| `diff codex stack.yml` | Show all proposed changes; prompt only for missing masked values. |
+| `import codex stack.yml` | Offer backup, approve additions/replacements, and apply without printing a diff. |
+| `import codex stack.yml -y` | Create a default backup and approve all changes automatically. |
+| `import codex stack.yml --dry-run` | Follow secret and server prompts, then show only approved changes without writes. |
+
+Backups default to numbered sibling files (`config.toml.~1~`, `config.toml.~2~`,
+etc.) beyond the highest existing generation. The prompt allows another path or
+skipping backup. Requested backups must succeed before stack reads or secret
+prompts, never overwrite existing files, and remain after later failures,
+cancellation, or no-op imports.
+
+Replacements update the complete server definition. Unrelated settings, comments,
+and servers are preserved; identical entries do not rewrite the config. Private
+writes use a synced temporary file and check the original snapshot before atomic
+replacement. Writes support Unix only; previews work on all platforms. Concurrent
+editing still has a final check/rename race.
+
+Diffs use the original and proposed file line numbers. Recognized credentials and
+resolved secrets are redacted; hidden changes display `<redacted: changed>`.
+Comments and unrelated values are omitted from preview context. These previews
+are for review, not patch application. Dry-run logs one initial warning and
+creates no files or backups. Server removal, installation/download plans, and
+prerequisite verification remain unsupported.
