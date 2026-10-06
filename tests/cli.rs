@@ -408,10 +408,51 @@ fn export_rejects_detection_failures_and_major_versions_before_reading_config() 
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
         .args(["export", "codex"])
         .env("PATH", fixture.directory.path())
+        .env(
+            "MCPSTACK_CODEX_APP",
+            fixture.directory.path().join("missing.app"),
+        )
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(7));
     assert!(output.stdout.is_empty());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn export_finds_chatgpt_desktop_codex_when_cli_is_not_on_path() {
+    let fixture = StackFixture::new("unchanged");
+    let root = fixture.directory.path();
+    std::fs::write(
+        root.join("config.toml"),
+        "[mcp_servers.example]\ncommand='example'\n",
+    )
+    .unwrap();
+    let bin = mock_codex(root, "codex-cli 0.160.0", 0);
+    let app = root.join("ChatGPT.app");
+    let bundled = app.join("Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex");
+    std::fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+    std::fs::copy(bin.join("codex"), &bundled).unwrap();
+
+    let run_with_path = |path: &std::path::Path| {
+        Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["export", "codex"])
+            .env("PATH", path)
+            .env("MCPSTACK_CODEX_APP", &app)
+            .env("CODEX_HOME", root)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let fallback = run_with_path(root);
+    assert!(fallback.status.success(), "{fallback:?}");
+    let stack: Value = yaml_serde::from_slice(&fallback.stdout).unwrap();
+    assert_eq!(stack["servers"]["example"]["config"]["command"], "example");
+
+    // A CLI on PATH remains authoritative, even if a desktop bundle exists.
+    std::fs::write(&bundled, "#!/bin/sh\nprintf 'codex-cli 1.0.0\\n'\n").unwrap();
+    let preferred = run_with_path(&bin);
+    assert!(preferred.status.success(), "{preferred:?}");
 }
 
 #[cfg(unix)]

@@ -259,8 +259,12 @@ config. Relative paths resolve from the current working directory. Imports are p
 ### Codex version adapters
 
 `export codex` runs `codex --version` and selects an adapter before reading the
-configuration. The native TOML adapter covers versions from 0.0.0 through the
-checked stable release 0.160.0, retaining historical field names and values.
+configuration. If `codex` is absent from `PATH` on macOS, detection also tries
+the CLI bundled in `ChatGPT.app` under `/Applications` or `~/Applications`.
+`MCPSTACK_CODEX_APP` selects a custom app bundle path instead of those locations.
+An installed CLI on `PATH` takes precedence. The native TOML adapter covers
+versions from 0.0.0 through the checked stable release 0.160.0, retaining
+historical field names and values.
 Newer 0.x versions (including future 0.x prereleases) warn on stderr and export
 using the existing adapter. Codex 1.0.0 and later, including major-version
 prereleases, require an explicit adapter and fail before configuration reads. This range describes the reader's policy,

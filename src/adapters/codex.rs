@@ -1,4 +1,5 @@
-use std::process::{Command, Stdio};
+use std::io;
+use std::process::{Command, Output, Stdio};
 
 use semver::Version;
 use thiserror::Error;
@@ -9,7 +10,7 @@ use crate::schema::StackV1;
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AdapterError {
     #[error(
-        "Unable to detect Codex version. Ensure codex is installed and codex --version succeeds."
+        "Unable to detect Codex version. Ensure codex --version succeeds on PATH or ChatGPT Desktop is installed on macOS."
     )]
     Detection,
     #[error("Codex 1.0.0 and later, including prereleases, require an explicit supported adapter.")]
@@ -25,15 +26,47 @@ pub fn detect() -> Result<CodexAdapter, AdapterError> {
 }
 
 fn detect_version() -> Result<Version, AdapterError> {
-    let output = codex_command()?
-        .arg("--version")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|_| AdapterError::Detection)?;
+    let output = match version_output(codex_command()?) {
+        Ok(output) => output,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            version_output(bundled_codex_command().ok_or(AdapterError::Detection)?)
+                .map_err(|_| AdapterError::Detection)?
+        }
+        Err(_) => return Err(AdapterError::Detection),
+    };
     if !output.status.success() {
         return Err(AdapterError::Detection);
     }
     parse_version(&output.stdout)
+}
+
+fn version_output(mut command: Command) -> io::Result<Output> {
+    command.arg("--version").stdin(Stdio::null()).output()
+}
+
+#[cfg(target_os = "macos")]
+fn bundled_codex_command() -> Option<Command> {
+    use std::path::PathBuf;
+
+    let apps = match std::env::var_os("MCPSTACK_CODEX_APP") {
+        Some(path) => vec![PathBuf::from(path)],
+        None => {
+            let mut apps = vec![PathBuf::from("/Applications/ChatGPT.app")];
+            if let Some(dirs) = directories::BaseDirs::new() {
+                apps.push(dirs.home_dir().join("Applications/ChatGPT.app"));
+            }
+            apps
+        }
+    };
+    apps.into_iter()
+        .map(|app| app.join("Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"))
+        .find(|path| path.is_file())
+        .map(Command::new)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn bundled_codex_command() -> Option<Command> {
+    None
 }
 
 #[cfg(not(windows))]
