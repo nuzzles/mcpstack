@@ -150,9 +150,17 @@ impl Import {
                             .with_prompt(format!("Server {current}/{total}: {action} {name:?}?"))
                             .items([
                                 "No, skip this server",
-                                "Yes, import this server",
+                                if replacing {
+                                    "Yes, replace this server"
+                                } else {
+                                    "Yes, import this server"
+                                },
                                 "No, skip this and all remaining servers",
-                                "Yes, import this and all remaining servers (including replacements)",
+                                if replacing {
+                                    "Yes, replace this server and approve all remaining changes"
+                                } else {
+                                    "Yes, import this and all remaining servers (including replacements)"
+                                },
                             ])
                             .default(0)
                             .report(false)
