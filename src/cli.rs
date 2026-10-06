@@ -1,6 +1,7 @@
 pub(crate) mod schema;
 
 use crate::cmd::export::Export;
+use crate::cmd::import::Import;
 use crate::cmd::schema::Schema;
 use crate::cmd::validate::Validate;
 use crate::error::AppError;
@@ -13,6 +14,7 @@ pub const EXAMPLES: &[&str] = &[
     "mcpstack --help",
     "mcpstack validate --help",
     "mcpstack export codex --help",
+    "mcpstack import codex --help",
 ];
 
 /// Install MCP servers, version-control stacks, and share setups across teams.
@@ -40,6 +42,7 @@ pub struct Cli {
 enum Commands {
     Validate(Validate),
     Export(Export),
+    Import(Import),
 }
 
 impl Cli {
@@ -54,6 +57,7 @@ impl Cli {
             match command {
                 Commands::Validate(inner) => inner.run(output),
                 Commands::Export(inner) => inner.run(output, self.non_interactive),
+                Commands::Import(inner) => inner.run(output),
             }
         } else {
             Self::command().write_long_help(output)?;

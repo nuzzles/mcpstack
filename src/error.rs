@@ -25,6 +25,14 @@ pub enum ErrorCode {
     ExportError = 6,
     #[error("Unable to initialize logging. Check the log filter.")]
     LoggingError = 9,
+    #[error("Unable to prepare stack definitions for import.")]
+    ImportError = 10,
+    #[error("Unable to create a private configuration backup.")]
+    BackupError = 11,
+    #[error("The stack conflicts with an existing server definition.")]
+    ImportConflict = 12,
+    #[error("Unable to safely write client configuration.")]
+    ConfigWriteError = 13,
 }
 
 impl ErrorCode {
@@ -62,6 +70,10 @@ pub enum AppError {
     ConfigPath,
     #[error("{0}")]
     Export(#[from] crate::exporters::codex::ExportError),
+    #[error("{0}")]
+    Import(#[from] crate::importers::codex::ImportError),
+    #[error("{0}")]
+    ImportFile(#[from] crate::importers::codex_fs::FileError),
 }
 
 impl AppError {
@@ -74,6 +86,12 @@ impl AppError {
             Self::Stack(_) => ErrorCode::InvalidStack,
             Self::ConfigRead(_) | Self::ConfigPath => ErrorCode::ConfigReadError,
             Self::Export(_) => ErrorCode::ExportError,
+            Self::Import(_) => ErrorCode::ImportError,
+            Self::ImportFile(error) => match error {
+                crate::importers::codex_fs::FileError::Backup => ErrorCode::BackupError,
+                crate::importers::codex_fs::FileError::Conflict => ErrorCode::ImportConflict,
+                _ => ErrorCode::ConfigWriteError,
+            },
         }
     }
 }

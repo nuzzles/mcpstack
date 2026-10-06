@@ -77,7 +77,7 @@ impl Export {
     }
 }
 
-fn default_config() -> Option<PathBuf> {
+pub(super) fn default_config() -> Option<PathBuf> {
     if let Some(home) = env::var_os("CODEX_HOME").filter(|value| !value.is_empty()) {
         Some(PathBuf::from(home).join("config.toml"))
     } else {

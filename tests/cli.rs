@@ -29,7 +29,7 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
     assert_eq!(schema["cli_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(schema["command"]["name"], "mcpstack");
     let commands = schema["command"]["commands"].as_array().unwrap();
-    assert_eq!(commands.len(), 3); // validate, export, and generated help
+    assert_eq!(commands.len(), 4); // validate, export, import, and generated help
     let validate = commands
         .iter()
         .find(|command| command["name"] == "validate")
@@ -635,4 +635,194 @@ fn export_reads_explicit_config_and_preserves_inputs() {
             assert_eq!(std::fs::read_to_string(&selected).unwrap(), document);
         }
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn import_merges_resolved_stacks_with_private_backup_and_noop_repeat() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config:\n      command: tool\n      env: {API_KEY: {'$env': MCPSTACK_IMPORT_TEST_SECRET}}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    let original = "# keep comment\nmodel='test'\n[mcp_servers.local]\ncommand='local'\n";
+    std::fs::write(&config, original).unwrap();
+    let execute = || {
+        Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["--non-interactive", "import", "codex"])
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .env("PATH", "")
+            .env("MCPSTACK_IMPORT_TEST_SECRET", "fixture-import-secret")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let output = execute();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Imported 1"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("fixture-import-secret"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("fixture-import-secret"));
+    let written = std::fs::read_to_string(&config).unwrap();
+    assert!(written.starts_with(original));
+    let parsed: toml::Table = toml::from_str(&written).unwrap();
+    assert_eq!(
+        parsed["mcp_servers"]["shared"]["env"]["API_KEY"].as_str(),
+        Some("fixture-import-secret")
+    );
+    let backup = fixture.directory.path().join("config.toml.bak");
+    assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
+    assert_eq!(
+        std::fs::metadata(&config).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let output = execute();
+    assert_eq!(output.status.code(), Some(11));
+    assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
+    std::fs::rename(&backup, fixture.directory.path().join("prior-backup")).unwrap();
+    let modified = std::fs::metadata(&config).unwrap().modified().unwrap();
+    let output = execute();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Imported 0"));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), written);
+    assert_eq!(
+        std::fs::metadata(&config).unwrap().modified().unwrap(),
+        modified
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn import_failures_backup_first_and_leave_config_unchanged() {
+    let original = "[mcp_servers.shared]\ncommand='original'\n";
+    for (document, status) in [
+        ("broken: [fixture-secret", 4),
+        (
+            "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: tool, args: [{'$env': MCPSTACK_MISSING_IMPORT_TOKEN}]}\n",
+            10,
+        ),
+        (
+            "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: other}\n",
+            12,
+        ),
+        (
+            "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: other, future: fixture-secret}\n",
+            10,
+        ),
+    ] {
+        let fixture = StackFixture::new(document);
+        let config = fixture.directory.path().join("config.toml");
+        std::fs::write(&config, original).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["import", "codex"])
+            .arg(&fixture.file)
+            .env("PATH", "")
+            .env("CODEX_HOME", fixture.directory.path())
+            .env_remove("MCPSTACK_MISSING_IMPORT_TOKEN")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(status), "{output:?}");
+        assert!(output.stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("fixture-secret"));
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+        assert_eq!(
+            std::fs::read_to_string(fixture.directory.path().join("config.toml.bak")).unwrap(),
+            original
+        );
+    }
+    let fixture = StackFixture::new("invalid input that must not be processed");
+    let config = fixture.directory.path().join("config.toml");
+    let backup = fixture.directory.path().join("config.toml.bak");
+    std::fs::write(&config, original).unwrap();
+    std::fs::write(&backup, "keep backup").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["import", "codex"])
+        .arg(&fixture.file)
+        .arg("--config")
+        .arg(&config)
+        .env("PATH", "")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(11));
+    assert_eq!(std::fs::read_to_string(&backup).unwrap(), "keep backup");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+}
+
+#[cfg(not(unix))]
+#[test]
+fn import_refuses_platforms_without_private_write_support() {
+    let fixture = StackFixture::new("schema_version: 1\nservers: {}");
+    let config = fixture.directory.path().join("config.toml");
+    std::fs::write(&config, "# original").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["import", "codex"])
+        .arg(&fixture.file)
+        .arg("--config")
+        .arg(&config)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(13));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), "# original");
+    assert!(!fixture.directory.path().join("config.toml.bak").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_export_import_round_trip_preserves_supported_fields() {
+    let fixture = StackFixture::new("placeholder");
+    let root = fixture.directory.path();
+    let source = root.join("source.toml");
+    let target = root.join("target.toml");
+    let original = "# source settings are not shared\nmodel='private'\n[mcp_servers.process]\ncommand='tool'\nargs=['--token=fixture-roundtrip-secret']\ncwd='/tmp'\nenv_vars=['FORWARDED']\nenabled=false\nrequired=true\nstartup_timeout_sec=10\ntool_timeout_sec=20\nenabled_tools=['read']\ndisabled_tools=['write']\n[mcp_servers.process.env]\nAPI_KEY='fixture-roundtrip-secret'\n[mcp_servers.remote]\nurl='https://example.com/mcp'\nbearer_token_env_var='CODEX_TOKEN'\n[mcp_servers.remote.http_headers]\nAuthorization='fixture-roundtrip-secret'\n[mcp_servers.remote.env_http_headers]\nX-Auth='OTHER_TOKEN'\n";
+    std::fs::write(&source, original).unwrap();
+    let exported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["--non-interactive", "export", "codex", "--config"])
+        .arg(&source)
+        .env("PATH", "")
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(exported.status.success(), "{exported:?}");
+    assert!(!String::from_utf8_lossy(&exported.stdout).contains("fixture-roundtrip-secret"));
+    std::fs::write(&fixture.file, &exported.stdout).unwrap();
+    let stack: serde_json::Value = yaml_serde::from_slice(&exported.stdout).unwrap();
+    let config = &stack["servers"]["process"]["config"];
+    let argument = config["args"][0]["$env"].as_str().unwrap();
+    let api_key = config["env"]["API_KEY"]["$env"].as_str().unwrap();
+    let authorization =
+        stack["servers"]["remote"]["config"]["http_headers"]["Authorization"]["$env"]
+            .as_str()
+            .unwrap();
+    let imported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["import", "codex"])
+        .arg(&fixture.file)
+        .arg("--config")
+        .arg(&target)
+        .env("PATH", "")
+        .env_remove("RUST_LOG")
+        .env(argument, "--token=fixture-roundtrip-secret")
+        .env(api_key, "fixture-roundtrip-secret")
+        .env(authorization, "fixture-roundtrip-secret")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(imported.status.success(), "{imported:?}");
+    let before: toml::Table = toml::from_str(original).unwrap();
+    let after: toml::Table = toml::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+    for (name, definition) in before["mcp_servers"].as_table().unwrap() {
+        for (field, expected) in definition.as_table().unwrap() {
+            let actual = &after["mcp_servers"][name][field];
+            assert_eq!(actual, expected, "{name}.{field}");
+        }
+    }
+    assert!(!after.contains_key("model"));
+    assert_eq!(std::fs::read(root.join("target.toml.bak")).unwrap(), b"");
+    assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
 }
