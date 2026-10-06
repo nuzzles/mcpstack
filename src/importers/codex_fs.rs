@@ -42,17 +42,32 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// Read a plan snapshot without creating files, including on non-Unix hosts.
+    pub fn read(path: &Path) -> Result<Self, FileError> {
+        Ok(Self {
+            path: path.into(),
+            original: read_regular(path).map_err(|_| FileError::Config)?,
+        })
+    }
+
+    #[cfg(all(test, unix))]
     pub fn backup(path: &Path) -> Result<Self, FileError> {
+        let snapshot = Self::read(path).map_err(|_| FileError::Backup)?;
+        snapshot.create_backup()?;
+        Ok(snapshot)
+    }
+
+    /// Back up exactly the bytes reviewed, after approval and before any writes.
+    pub fn create_backup(&self) -> Result<(), FileError> {
         #[cfg(not(unix))]
         {
-            let _ = path;
-            return Err(FileError::Platform);
+            Err(FileError::Platform)
         }
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            let original = read_regular(path).map_err(|_| FileError::Backup)?;
-            let mut backup_name = path.as_os_str().to_os_string();
+            self.check_unchanged()?;
+            let mut backup_name = self.path.as_os_str().to_os_string();
             backup_name.push(".bak");
             let mut backup = OpenOptions::new()
                 .write(true)
@@ -60,41 +75,54 @@ impl Snapshot {
                 .mode(0o600)
                 .open(PathBuf::from(backup_name))
                 .map_err(|_| FileError::Backup)?;
-            // On failure retain the private partial backup rather than deleting
-            // a path that another process might have replaced.
+            // Retain a partial private backup on failure rather than deleting
+            // a path another process might have replaced.
             backup
-                .write_all(original.as_deref().unwrap_or_default())
+                .write_all(self.original.as_deref().unwrap_or_default())
                 .map_err(|_| FileError::Backup)?;
             backup.sync_all().map_err(|_| FileError::Backup)?;
-            Ok(Self {
-                path: path.into(),
-                original,
-            })
+            Ok(())
         }
     }
 
-    pub fn apply(self, definitions: &BTreeMap<String, toml::Table>) -> Result<usize, FileError> {
-        let text = std::str::from_utf8(self.original.as_deref().unwrap_or_default())
-            .map_err(|_| FileError::Config)?;
-        let mut document = text.parse::<DocumentMut>().map_err(|_| FileError::Config)?;
-        let mut added = 0;
-        if document.contains_key("mcp_servers") && !document["mcp_servers"].is_table_like() {
-            return Err(FileError::Config);
-        }
+    /// Filter identical entries and reject conflicts before approval or backup.
+    pub fn additions(
+        &self,
+        definitions: &BTreeMap<String, toml::Table>,
+    ) -> Result<BTreeMap<String, toml::Table>, FileError> {
+        let document = self.document()?;
+        let mut additions = BTreeMap::new();
         for (name, definition) in definitions {
             if let Some(existing) = document
                 .get("mcp_servers")
                 .and_then(Item::as_table_like)
                 .and_then(|servers| servers.get(name))
             {
-                let existing = existing_table(existing)?;
-                // Normalize documented defaults when comparing, but never rewrite
-                // an identical entry or drop unknown existing fields.
-                if canonical(existing) != canonical(definition.clone()) {
+                if canonical(existing_table(existing)?) != canonical(definition.clone()) {
                     return Err(FileError::Conflict);
                 }
-                continue;
+            } else {
+                additions.insert(name.clone(), definition.clone());
             }
+        }
+        Ok(additions)
+    }
+
+    fn document(&self) -> Result<DocumentMut, FileError> {
+        let text = std::str::from_utf8(self.original.as_deref().unwrap_or_default())
+            .map_err(|_| FileError::Config)?;
+        let document = text.parse::<DocumentMut>().map_err(|_| FileError::Config)?;
+        if document.contains_key("mcp_servers") && !document["mcp_servers"].is_table_like() {
+            return Err(FileError::Config);
+        }
+        Ok(document)
+    }
+
+    pub fn apply(self, definitions: &BTreeMap<String, toml::Table>) -> Result<usize, FileError> {
+        let additions = self.additions(definitions)?;
+        let mut document = self.document()?;
+        let added = additions.len();
+        for (name, definition) in &additions {
             if !document.contains_key("mcp_servers") {
                 document["mcp_servers"] = Item::Table(Table::new());
             }
@@ -107,7 +135,6 @@ impl Snapshot {
                 .as_table_like_mut()
                 .ok_or(FileError::Config)?
                 .insert(name, Item::Table(server));
-            added += 1;
         }
         self.check_unchanged()?;
         if added == 0 {
@@ -211,6 +238,20 @@ mod tests {
             ))
             .unwrap(),
         )])
+    }
+
+    #[test]
+    fn target_changed_after_preview_aborts_before_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "# original").unwrap();
+        let snapshot = Snapshot::read(&path).unwrap();
+        assert_eq!(snapshot.additions(&definitions("tool")).unwrap().len(), 1);
+        assert!(!path.with_extension("toml.bak").exists());
+        fs::write(&path, "# external edit").unwrap();
+        assert_eq!(snapshot.create_backup(), Err(FileError::Changed));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# external edit");
+        assert!(!path.with_extension("toml.bak").exists());
     }
 
     #[test]

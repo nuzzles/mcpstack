@@ -649,7 +649,7 @@ fn import_merges_resolved_stacks_with_private_backup_and_noop_repeat() {
     std::fs::write(&config, original).unwrap();
     let execute = || {
         Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["--non-interactive", "import", "codex"])
+            .args(["--non-interactive", "import", "codex", "-y"])
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
@@ -679,13 +679,13 @@ fn import_merges_resolved_stacks_with_private_backup_and_noop_repeat() {
         0o600
     );
     let output = execute();
-    assert_eq!(output.status.code(), Some(11));
+    assert!(output.status.success(), "{output:?}");
     assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
     std::fs::rename(&backup, fixture.directory.path().join("prior-backup")).unwrap();
     let modified = std::fs::metadata(&config).unwrap().modified().unwrap();
     let output = execute();
     assert!(output.status.success(), "{output:?}");
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Imported 0"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("No changes"));
     assert_eq!(std::fs::read_to_string(&config).unwrap(), written);
     assert_eq!(
         std::fs::metadata(&config).unwrap().modified().unwrap(),
@@ -695,7 +695,7 @@ fn import_merges_resolved_stacks_with_private_backup_and_noop_repeat() {
 
 #[cfg(unix)]
 #[test]
-fn import_failures_backup_first_and_leave_config_unchanged() {
+fn import_validation_failures_leave_config_and_backup_unchanged() {
     let original = "[mcp_servers.shared]\ncommand='original'\n";
     for (document, status) in [
         ("broken: [fixture-secret", 4),
@@ -716,7 +716,7 @@ fn import_failures_backup_first_and_leave_config_unchanged() {
         let config = fixture.directory.path().join("config.toml");
         std::fs::write(&config, original).unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["import", "codex"])
+            .args(["import", "codex", "--auto-approve"])
             .arg(&fixture.file)
             .env("PATH", "")
             .env("CODEX_HOME", fixture.directory.path())
@@ -729,18 +729,17 @@ fn import_failures_backup_first_and_leave_config_unchanged() {
         assert!(output.stdout.is_empty());
         assert!(!String::from_utf8_lossy(&output.stderr).contains("fixture-secret"));
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
-        assert_eq!(
-            std::fs::read_to_string(fixture.directory.path().join("config.toml.bak")).unwrap(),
-            original
-        );
+        assert!(!fixture.directory.path().join("config.toml.bak").exists());
     }
-    let fixture = StackFixture::new("invalid input that must not be processed");
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  added:\n    client: codex\n    config: {command: tool}\n",
+    );
     let config = fixture.directory.path().join("config.toml");
     let backup = fixture.directory.path().join("config.toml.bak");
     std::fs::write(&config, original).unwrap();
     std::fs::write(&backup, "keep backup").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["import", "codex"])
+        .args(["import", "codex", "--auto-approve"])
         .arg(&fixture.file)
         .arg("--config")
         .arg(&config)
@@ -756,11 +755,13 @@ fn import_failures_backup_first_and_leave_config_unchanged() {
 #[cfg(not(unix))]
 #[test]
 fn import_refuses_platforms_without_private_write_support() {
-    let fixture = StackFixture::new("schema_version: 1\nservers: {}");
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  new:\n    client: codex\n    config: {command: tool}\n",
+    );
     let config = fixture.directory.path().join("config.toml");
     std::fs::write(&config, "# original").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["import", "codex"])
+        .args(["import", "codex", "--auto-approve"])
         .arg(&fixture.file)
         .arg("--config")
         .arg(&config)
@@ -801,7 +802,7 @@ fn codex_export_import_round_trip_preserves_supported_fields() {
             .as_str()
             .unwrap();
     let imported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["import", "codex"])
+        .args(["import", "codex", "--auto-approve"])
         .arg(&fixture.file)
         .arg("--config")
         .arg(&target)
@@ -825,4 +826,99 @@ fn codex_export_import_round_trip_preserves_supported_fields() {
     assert!(!after.contains_key("model"));
     assert_eq!(std::fs::read(root.join("target.toml.bak")).unwrap(), b"");
     assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
+}
+
+#[test]
+fn import_dry_run_is_read_only_redacted_and_available_without_a_terminal() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  added:\n    client: codex\n    config:\n      command: tool\n      args: [{'$env': MCPSTACK_PREVIEW_ARGUMENT}]\n      env: {API_KEY: literal-preview-secret}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    let backup = fixture.directory.path().join("config.toml.bak");
+    let original =
+        "# preserve\nmodel='private-model-value'\n[mcp_servers.existing]\ncommand='existing'\n";
+    std::fs::write(&config, original).unwrap();
+    std::fs::write(&backup, "existing backup").unwrap();
+    let modified = std::fs::metadata(&config).unwrap().modified().unwrap();
+    for target_exists in [true, false] {
+        if !target_exists {
+            std::fs::remove_file(&config).unwrap();
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["--non-interactive", "import", "--dry-run", "codex"])
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .arg("-y") // dry-run takes precedence over approval
+            .env("MCPSTACK_PREVIEW_ARGUMENT", "arbitrary-preview-secret")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let diff = String::from_utf8(output.stdout).unwrap();
+        assert!(diff.contains("--- /dev/null\n+++ "));
+        assert!(diff.contains("@@ -0,0 +1,"));
+        assert!(diff.contains("+[mcp_servers.added]"));
+        assert!(diff.contains("+command = \"tool\""));
+        assert!(diff.contains("<redacted>"));
+        for secret in [
+            "literal-preview-secret",
+            "arbitrary-preview-secret",
+            "private-model-value",
+        ] {
+            assert!(!diff.contains(secret), "{diff}");
+            assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+        }
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "existing backup");
+        if target_exists {
+            assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+            assert_eq!(
+                std::fs::metadata(&config).unwrap().modified().unwrap(),
+                modified
+            );
+        } else {
+            assert!(!config.exists());
+        }
+    }
+    std::fs::remove_file(&backup).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["import", "codex", "--dry-run"])
+        .arg(&fixture.file)
+        .arg("--config")
+        .arg(&config)
+        .env("MCPSTACK_PREVIEW_ARGUMENT", "arbitrary-preview-secret")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(!config.exists());
+    assert!(!backup.exists());
+}
+
+#[test]
+fn import_requires_explicit_approval_without_a_terminal() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  new:\n    client: codex\n    config: {command: tool}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    for non_interactive in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
+        if non_interactive {
+            command.arg("--non-interactive");
+        }
+        let output = command
+            .args(["import", "codex"])
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(10), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("--auto-approve"));
+        assert!(!config.exists());
+        assert!(!fixture.directory.path().join("config.toml.bak").exists());
+    }
 }

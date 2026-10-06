@@ -72,6 +72,12 @@ pub enum AppError {
     Export(#[from] crate::exporters::codex::ExportError),
     #[error("{0}")]
     Import(#[from] crate::importers::codex::ImportError),
+    #[error(
+        "Import approval requires a terminal. Use --auto-approve (-y) to write or --dry-run to preview."
+    )]
+    ImportApprovalRequired,
+    #[error("Import approval was cancelled or could not be completed. No files were changed.")]
+    ImportApprovalCancelled,
     #[error("{0}")]
     ImportFile(#[from] crate::importers::codex_fs::FileError),
 }
@@ -86,7 +92,9 @@ impl AppError {
             Self::Stack(_) => ErrorCode::InvalidStack,
             Self::ConfigRead(_) | Self::ConfigPath => ErrorCode::ConfigReadError,
             Self::Export(_) => ErrorCode::ExportError,
-            Self::Import(_) => ErrorCode::ImportError,
+            Self::Import(_) | Self::ImportApprovalRequired | Self::ImportApprovalCancelled => {
+                ErrorCode::ImportError
+            }
             Self::ImportFile(error) => match error {
                 crate::importers::codex_fs::FileError::Backup => ErrorCode::BackupError,
                 crate::importers::codex_fs::FileError::Conflict => ErrorCode::ImportConflict,

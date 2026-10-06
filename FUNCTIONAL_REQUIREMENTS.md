@@ -45,7 +45,7 @@ to its entry in Current status at the bottom.\
 | Done | Replace recognized credentials with secret references by default; allow interactive selections or `--expose-secrets` to include values. |
 | Partial [*](#codex-import) | Import/merge a stack into Codex without losing supported fields. [*](#phase-1-boundaries) |
 | Done | Resolve secret references from environment variables; reject missing values. [*](#secrets) |
-| Partial [*](#codex-import) | Create a `.bak` copy of the target config before beginning import; abort if backup creation fails. |
+| Partial [*](#codex-import) | Create a `.bak` copy of the approved target config before writing; abort if backup creation fails. |
 | Partial [*](#codex-import) | Atomic config writes with restrictive permissions; preserve originals on failure. |
 | Partial [*](#stack-workflow-tests) | Test round trips, repeat imports, config schema compatibility, missing secrets, and write failures. |
 
@@ -102,10 +102,11 @@ and unsupported portable transports before writing. Preserve unrelated settings.
 
 ### Phase 1 boundaries
 
-[*] After locating the target config, create a sibling `config.toml.bak` before
-any import processing or changes. If backup creation fails, abort the import.
-Do not overwrite an existing backup silently. This requirement applies to import;
-read-only export does not create backups.
+[*] Preview and approve imports before creating a sibling `config.toml.bak`.
+Create the private backup before writing approved changes; abort if backup
+creation fails or the target changed since preview. Never overwrite an existing
+backup silently. Dry runs, cancelled/skipped imports, and identical entries create
+no backup and change no files.
 
 Import means merging server definitions into Codex config, not installing or
 starting server software. Validate before writing and leave the config unchanged
@@ -136,7 +137,13 @@ masking, with Yes/No to all choices for the current and remaining credentials.
 `--non-interactive` and redirected input mask all detected credentials;
 `--expose-secrets` includes them without prompts. Prompt labels contain field
 paths, never values. Cancelling a selection aborts export before anything is
-printed on stdout. Other commands do not yet need interactive input.
+printed on stdout.
+
+Codex import shows redacted per-server diffs and requires approval for each new
+server, with import/skip-all choices for the remaining servers. All choices finish
+before any writes. `--auto-approve` (`-y`) approves all additions without prompting;
+`--dry-run` prints only the proposed diffs and never writes or prompts, even with
+`-y`. Noninteractive imports require `-y` or `--dry-run` when changes are needed.
 
 ### Claude support
 
@@ -266,12 +273,17 @@ safe filesystem writes currently support Unix only.
 
 ### Codex import
 
-`import codex <file> [--config <path>]` resolves secrets and validates against the
-bundled current MCP schema without finding or running Codex. It preserves
-unrelated settings, comments, and servers, skips identical definitions, and
-rejects differing entries. A private sibling `.bak` is created before processing;
-an existing backup must be moved aside explicitly. The original is checked for
-changes before atomic replacement using a synced private temporary file. Native
+`import codex <file> [--config <path>] [--dry-run | --auto-approve]` resolves
+secrets and validates against the bundled MCP schema without running Codex.
+It preserves unrelated settings, comments, and servers, skips identical
+definitions, and rejects differing entries. Redacted section-level unified diffs
+show every proposed addition before approvals. The preview is for review, not an
+patch for automatic application. Literal credentials recognized by export and all resolved
+reference values are masked; unrelated existing config is never printed.
+A private sibling `.bak` is created only when approved additions will be written;
+an existing backup must be moved aside explicitly. Dry-run previews work on all
+platforms without creating config files, backups, directories, or temporary files.
+The original is checked for changes before atomic replacement using a synced private temporary file. Native
 entries retain all supported schema fields. Private writes support Unix only;
-other platforms reject import before processing. A final check/rename race with
+other platforms reject writes. A final check/rename race with
 external editors remains; avoid concurrent editing.
