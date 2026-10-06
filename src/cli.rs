@@ -1,5 +1,6 @@
 pub(crate) mod schema;
 
+use crate::cmd::diff::Diff;
 use crate::cmd::export::Export;
 use crate::cmd::import::Import;
 use crate::cmd::schema::Schema;
@@ -15,6 +16,7 @@ pub const EXAMPLES: &[&str] = &[
     "mcpstack validate --help",
     "mcpstack export codex --help",
     "mcpstack import codex --help",
+    "mcpstack diff codex --help",
 ];
 
 /// Install MCP servers, version-control stacks, and share setups across teams.
@@ -43,6 +45,7 @@ enum Commands {
     Validate(Validate),
     Export(Export),
     Import(Import),
+    Diff(Diff),
 }
 
 impl Cli {
@@ -57,7 +60,8 @@ impl Cli {
             match command {
                 Commands::Validate(inner) => inner.run(output),
                 Commands::Export(inner) => inner.run(output, self.non_interactive),
-                Commands::Import(inner) => {
+                Commands::Import(inner) => inner.run(output, self.non_interactive),
+                Commands::Diff(inner) => {
                     inner.run(output, self.non_interactive, self.logging.output_ansi())
                 }
             }

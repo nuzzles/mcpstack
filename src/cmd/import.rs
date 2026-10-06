@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write, stderr, stdin};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::{env, fs};
 
 use clap::{Args, Subcommand};
@@ -11,10 +11,10 @@ use crate::importers::codex::prepare;
 use crate::importers::codex_fs::Snapshot;
 use crate::schema::Stack;
 
-/// Preview and approve server additions and replacements.
+/// Approve and apply server additions and replacements.
 #[derive(Args)]
 pub struct Import {
-    /// Preview and approve changes without writing files; prompts still apply.
+    /// Run import prompts without writing files. Use diff to view the patch.
     #[arg(long, global = true)]
     dry_run: bool,
     /// Approve all server additions and replacements without prompting.
@@ -25,24 +25,19 @@ pub struct Import {
 }
 
 #[derive(Subcommand)]
-enum Client {
+pub(super) enum Client {
     Codex {
-        /// Stack file to import; secret references resolve from the environment.
+        /// Stack file to compare or import.
         #[arg(value_name = "FILE")]
         file: PathBuf,
-        /// Write this Codex TOML file instead of the default configuration.
+        /// Use this Codex TOML file instead of the default configuration.
         #[arg(long, value_name = "PATH")]
         config: Option<PathBuf>,
     },
 }
 
 impl Import {
-    pub fn run(
-        self,
-        output: &mut impl Write,
-        non_interactive: bool,
-        colored: bool,
-    ) -> Result<(), AppError> {
+    pub fn run(self, output: &mut impl Write, non_interactive: bool) -> Result<(), AppError> {
         if self.dry_run {
             tracing::warn!("Dry run; no changes will be committed.");
         }
@@ -107,20 +102,6 @@ impl Import {
                     .map(|(name, (_, definition))| (name.clone(), definition.clone()))
                     .collect();
                 warn_runtime_bindings(&additions);
-                let secrets: Vec<_> = resolver.values.values().flatten().cloned().collect();
-                let diffs: BTreeMap<_, _> = additions
-                    .iter()
-                    .map(|(name, definition)| {
-                        let diff = server_diff(
-                            &path,
-                            name,
-                            changes[name].0.as_ref(),
-                            definition,
-                            &secrets,
-                        )?;
-                        Ok((name.clone(), diff))
-                    })
-                    .collect::<Result<_, AppError>>()?;
                 if additions.is_empty() {
                     writeln!(
                         output,
@@ -131,11 +112,6 @@ impl Import {
                 if !self.auto_approve && !interactive {
                     return Err(AppError::ImportApprovalRequired);
                 }
-                // Show the whole proposal before even a bulk approval choice.
-                for diff in diffs.values() {
-                    write_diff(output, diff, colored)?;
-                }
-                output.flush()?;
                 let approved = if self.auto_approve {
                     additions
                 } else {
@@ -193,41 +169,17 @@ impl Import {
     }
 }
 
-fn write_diff(output: &mut impl Write, diff: &str, colored: bool) -> std::io::Result<()> {
-    if !colored {
-        return write!(output, "{diff}");
-    }
-    for line in diff.lines() {
-        let color =
-            if line.starts_with("--- ") || line.starts_with("+++ ") || line.starts_with("@@ ") {
-                Some(36) // cyan headers
-            } else if line.starts_with('+') {
-                Some(32) // green additions
-            } else if line.starts_with('-') {
-                Some(31) // red removals
-            } else {
-                None
-            };
-        if let Some(color) = color {
-            writeln!(output, "\x1b[{color}m{line}\x1b[0m")?;
-        } else {
-            writeln!(output, "{line}")?;
-        }
-    }
-    Ok(())
-}
-
 /// Cache each reference so repeated uses ask only once. All comparisons use
 /// real values; dry-run never proceeds to backup or file writes.
-struct SecretResolver {
-    dry_run: bool,
-    interactive: bool,
-    values: BTreeMap<String, Option<String>>,
-    cancelled: bool,
+pub(super) struct SecretResolver {
+    pub(super) dry_run: bool,
+    pub(super) interactive: bool,
+    pub(super) values: BTreeMap<String, Option<String>>,
+    pub(super) cancelled: bool,
 }
 
 impl SecretResolver {
-    fn resolve(&mut self, name: &str) -> Option<String> {
+    pub(super) fn resolve(&mut self, name: &str) -> Option<String> {
         if self.cancelled {
             return None;
         }
@@ -269,7 +221,7 @@ impl SecretResolver {
     }
 }
 
-fn warn_runtime_bindings(additions: &BTreeMap<String, toml::Table>) {
+pub(super) fn warn_runtime_bindings(additions: &BTreeMap<String, toml::Table>) {
     let mut names = BTreeSet::new();
     for definition in additions.values() {
         if let Some(name) = definition
@@ -333,130 +285,6 @@ fn select_servers(
         }
     }
     Ok(approved)
-}
-
-/// Section-level unified preview; include no unrelated private config.
-fn server_diff(
-    path: &Path,
-    name: &str,
-    existing: Option<&toml::Table>,
-    definition: &toml::Table,
-    secrets: &[String],
-) -> Result<String, AppError> {
-    let before = existing
-        .map(|table| render_server(name, table, None, secrets))
-        .transpose()?
-        .unwrap_or_default();
-    let after = render_server(name, definition, existing, secrets)?;
-    let label = format!("{} (mcp_servers.{name})", path.display());
-    let old_label = if existing.is_some() {
-        &label
-    } else {
-        "/dev/null"
-    };
-    Ok(similar::TextDiff::from_lines(&before, &after)
-        .unified_diff()
-        .context_radius(2)
-        .header(old_label, &label)
-        .to_string())
-}
-
-fn render_server(
-    name: &str,
-    definition: &toml::Table,
-    existing: Option<&toml::Table>,
-    secrets: &[String],
-) -> Result<String, AppError> {
-    let mut config = crate::exporters::codex::mask_for_preview(name, definition)?;
-    redact_references(&mut config);
-    redact_resolved(&mut config, secrets);
-    let source = serde_json::to_value(definition)
-        .map_err(|_| crate::importers::codex::ImportError::Definition)?;
-    let previous = existing
-        .map(serde_json::to_value)
-        .transpose()
-        .map_err(|_| crate::importers::codex::ImportError::Definition)?;
-    annotate_preview(&mut config, &source, previous.as_ref());
-    toml::to_string(&serde_json::json!({"mcp_servers": {name: config}}))
-        .map_err(|_| crate::importers::codex::ImportError::Definition.into())
-}
-
-/// Mark known hidden value changes without exposing the value, length, or hash.
-fn annotate_preview(
-    masked: &mut serde_json::Value,
-    source: &serde_json::Value,
-    previous: Option<&serde_json::Value>,
-) {
-    if masked.as_str() == Some("<redacted>") {
-        if previous.is_some_and(|previous| previous != source) {
-            *masked = "<redacted: changed>".into();
-        }
-    } else {
-        match masked {
-            serde_json::Value::Object(values) => {
-                for (key, value) in values {
-                    if let Some(source) = source.get(key) {
-                        annotate_preview(value, source, previous.and_then(|value| value.get(key)));
-                    }
-                }
-            }
-            serde_json::Value::Array(values) => {
-                for (index, value) in values.iter_mut().enumerate() {
-                    if let Some(source) = source.get(index) {
-                        annotate_preview(
-                            value,
-                            source,
-                            previous.and_then(|value| value.get(index)),
-                        );
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn redact_resolved(value: &mut serde_json::Value, secrets: &[String]) {
-    match value {
-        serde_json::Value::String(text) => {
-            if secrets
-                .iter()
-                .any(|secret| !secret.is_empty() && text.contains(secret))
-            {
-                *text = "<redacted>".into();
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                redact_resolved(value, secrets);
-            }
-        }
-        serde_json::Value::Object(values) => {
-            for value in values.values_mut() {
-                redact_resolved(value, secrets);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn redact_references(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(values) if values.contains_key("$env") => {
-            *value = serde_json::Value::String("<redacted>".into());
-        }
-        serde_json::Value::Object(values) => {
-            for value in values.values_mut() {
-                redact_references(value);
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                redact_references(value);
-            }
-        }
-        _ => {}
-    }
 }
 
 #[cfg(test)]

@@ -29,7 +29,7 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
     assert_eq!(schema["cli_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(schema["command"]["name"], "mcpstack");
     let commands = schema["command"]["commands"].as_array().unwrap();
-    assert_eq!(commands.len(), 4); // validate, export, import, and generated help
+    assert_eq!(commands.len(), 5); // validate, export, import, diff, and generated help
     let validate = commands
         .iter()
         .find(|command| command["name"] == "validate")
@@ -837,7 +837,7 @@ fn codex_export_import_round_trip_preserves_supported_fields() {
 }
 
 #[test]
-fn import_dry_run_is_read_only_redacted_and_available_without_a_terminal() {
+fn diff_is_read_only_redacted_and_available_without_a_terminal() {
     let fixture = StackFixture::new(
         "schema_version: 1\nservers:\n  added:\n    client: codex\n    config:\n      command: tool\n      args: [{'$env': MCPSTACK_PREVIEW_ARGUMENT}]\n      env: {API_KEY: literal-preview-secret}\n",
     );
@@ -853,11 +853,10 @@ fn import_dry_run_is_read_only_redacted_and_available_without_a_terminal() {
             std::fs::remove_file(&config).unwrap();
         }
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["--non-interactive", "import", "--dry-run", "codex"])
+            .args(["--non-interactive", "diff", "codex"])
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
-            .arg("-y") // approve unattended previews
             .env("MCPSTACK_PREVIEW_ARGUMENT", "arbitrary-preview-secret")
             .env_remove("RUST_LOG")
             .stdin(Stdio::null())
@@ -865,8 +864,12 @@ fn import_dry_run_is_read_only_redacted_and_available_without_a_terminal() {
             .unwrap();
         assert!(output.status.success(), "{output:?}");
         let diff = String::from_utf8(output.stdout).unwrap();
-        assert!(diff.contains("--- /dev/null\n+++ "));
-        assert!(diff.contains("@@ -0,0 +1,"));
+        if target_exists {
+            assert!(diff.starts_with(&format!("--- {}\n", config.display())));
+        } else {
+            assert!(diff.contains("--- /dev/null\n+++ "));
+            assert!(diff.contains("@@ -0,0 +1,"));
+        }
         assert!(diff.contains("+[mcp_servers.added]"));
         assert!(diff.contains("+command = \"tool\""));
         assert!(diff.contains("<redacted>"));
@@ -891,7 +894,7 @@ fn import_dry_run_is_read_only_redacted_and_available_without_a_terminal() {
     }
     std::fs::remove_file(&backup).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["import", "codex", "--dry-run", "-y"])
+        .args(["diff", "codex"])
         .arg(&fixture.file)
         .arg("--config")
         .arg(&config)
@@ -1059,21 +1062,16 @@ fn native_runtime_bindings_are_preserved_without_resolving_values() {
 }
 
 #[test]
-fn dry_run_shows_redacted_conflicts_without_overwriting_existing_config() {
+fn diff_shows_redacted_replacements_without_overwriting_existing_config() {
     let fixture = StackFixture::new(
         "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: new-tool, env: {API_KEY: {'$env': MCPSTACK_CONFLICT_SECRET}}}\n",
     );
     let config = fixture.directory.path().join("config.toml");
     let original = "# private\nmodel='private-model'\n[mcp_servers.shared]\ncommand='old-tool'\ncustom_secret='old-private-secret'\n[mcp_servers.shared.env]\nAPI_KEY='old-api-secret'\n";
     std::fs::write(&config, original).unwrap();
-    let execute = |flag| {
+    let execute = || {
         Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["import", "codex"])
-            .args(if flag == "--dry-run" {
-                vec![flag, "-y"]
-            } else {
-                vec![flag]
-            })
+            .args(["diff", "codex"])
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
@@ -1083,14 +1081,13 @@ fn dry_run_shows_redacted_conflicts_without_overwriting_existing_config() {
             .output()
             .unwrap()
     };
-    let preview = execute("--dry-run");
+    let preview = execute();
     assert!(preview.status.success(), "{preview:?}");
     let diff = String::from_utf8_lossy(&preview.stdout);
-    assert!(diff.contains("-command = \"old-tool\""));
+    assert!(diff.contains("-command='old-tool'"));
     assert!(diff.contains("+command = \"new-tool\""));
     let diagnostics = String::from_utf8_lossy(&preview.stderr);
-    assert!(diagnostics.contains("Dry run; no changes will be committed."));
-    assert_eq!(diagnostics.lines().count(), 1);
+    assert!(diagnostics.is_empty());
     assert!(!diagnostics.contains("differs"));
     for secret in ["old-private-secret", "old-api-secret", "private-model"] {
         assert!(!diff.contains(secret));
@@ -1129,7 +1126,7 @@ fn dry_run_shows_redacted_conflicts_without_overwriting_existing_config() {
 }
 
 #[test]
-fn import_diff_color_honors_modes_environment_and_no_color() {
+fn diff_color_honors_modes_environment_and_no_color() {
     let fixture = StackFixture::new(
         "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: new-tool}\n",
     );
@@ -1138,7 +1135,7 @@ fn import_diff_color_honors_modes_environment_and_no_color() {
     let execute = |flags: &[&str], mode: Option<&str>, no_color: Option<&str>| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
         command
-            .args(["import", "codex", "--dry-run", "-y"])
+            .args(["diff", "codex"])
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
@@ -1172,7 +1169,7 @@ fn import_diff_color_honors_modes_environment_and_no_color() {
         if colored {
             assert!(text.contains("\x1b[36m--- "));
             assert!(text.contains("\x1b[32m+command = \"new-tool\"\x1b[0m"));
-            assert!(text.contains("\x1b[31m-command = \"old-tool\"\x1b[0m"));
+            assert!(text.contains("\x1b[31m-command='old-tool'\x1b[0m"));
             let stripped = ["\x1b[36m", "\x1b[32m", "\x1b[31m", "\x1b[0m"]
                 .iter()
                 .fold(text, |text, sequence| text.replace(sequence, ""));
@@ -1184,19 +1181,19 @@ fn import_diff_color_honors_modes_environment_and_no_color() {
 }
 
 #[test]
-fn dry_run_compares_real_secrets_and_marks_only_changed_lines() {
+fn diff_compares_real_secrets_and_marks_only_changed_lines() {
     let fixture = StackFixture::new(
         "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config:\n      url: https://example.com/mcp\n      http_headers: {Authorization: {'$env': MCPSTACK_COMPARE_SECRET}}\n",
     );
     let config = fixture.directory.path().join("config.toml");
-    let original = "[mcp_servers.shared]\nurl='https://example.com/mcp'\n[mcp_servers.shared.http_headers]\nAuthorization='existing-fixture-secret'\n";
+    let original = "[mcp_servers.shared]\nurl = \"https://example.com/mcp\"\n\n[mcp_servers.shared.http_headers]\nAuthorization = \"existing-fixture-secret\"\n";
     std::fs::write(&config, original).unwrap();
     for (value, changed) in [
         ("existing-fixture-secret", false),
         ("new-fixture-secret", true),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["import", "codex", "--dry-run", "-y"])
+            .args(["diff", "codex"])
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
@@ -1220,8 +1217,7 @@ fn dry_run_compares_real_secrets_and_marks_only_changed_lines() {
             assert!(diff.contains("No changes"));
             assert!(!diff.contains("@@"));
             let diagnostics = String::from_utf8_lossy(&output.stderr);
-            assert!(diagnostics.contains("Dry run; no changes will be committed."));
-            assert_eq!(diagnostics.lines().count(), 1);
+            assert!(diagnostics.is_empty());
         }
         for secret in ["existing-fixture-secret", "new-fixture-secret"] {
             assert!(!diff.contains(secret));
@@ -1266,4 +1262,79 @@ fn auto_approve_replaces_existing_servers_and_preserves_unrelated_settings() {
         std::fs::read_to_string(config.with_extension("toml.~1~")).unwrap(),
         original
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn diff_hunk_positions_match_original_and_imported_files() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  first:\n    client: codex\n    config: {command: new, args: [extra]}\n  last:\n    client: codex\n    config: {command: last-new}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    let original = "a=1\nb=2\nc=3\nd=4\ne=5\nf=6\ng=7\nh=8\ni=9\nj=10\n[mcp_servers.first]\ncommand = \"old\"\n[mcp_servers.unrelated]\ncommand=\"private\"\na=1\nb=2\nc=3\nd=4\ne=5\nf=6\ng=7\nh=8\ni=9\nj=10\n[mcp_servers.last]\ncommand = \"last-old\"\n";
+    std::fs::write(&config, original).unwrap();
+    let invoke = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(args)
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .env_remove("MCPSTACK_COLOR")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let preview = invoke(&["diff", "codex"]);
+    assert!(preview.status.success(), "{preview:?}");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    assert!(!config.with_extension("toml.~1~").exists());
+    let dry = invoke(&["import", "codex", "--dry-run", "-y"]);
+    assert!(dry.status.success(), "{dry:?}");
+    assert!(!String::from_utf8_lossy(&dry.stdout).contains("@@"));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    assert!(!config.with_extension("toml.~1~").exists());
+    let applied = invoke(&["import", "codex", "-y"]);
+    assert!(applied.status.success(), "{applied:?}");
+    assert!(!String::from_utf8_lossy(&applied.stdout).contains("@@"));
+    let proposed = std::fs::read_to_string(&config).unwrap();
+    let before: Vec<_> = original.lines().collect();
+    let after: Vec<_> = proposed.lines().collect();
+    let patch = String::from_utf8(preview.stdout).unwrap();
+    let (mut old, mut new, mut hunks) = (0, 0, 0);
+    for line in patch.lines().skip(2) {
+        if line.starts_with("@@") {
+            let ranges: Vec<_> = line.split_whitespace().collect();
+            old = ranges[1][1..]
+                .split(',')
+                .next()
+                .unwrap()
+                .parse::<usize>()
+                .unwrap()
+                - 1;
+            new = ranges[2][1..]
+                .split(',')
+                .next()
+                .unwrap()
+                .parse::<usize>()
+                .unwrap()
+                - 1;
+            assert!(old >= 8, "{patch}");
+            hunks += 1;
+        } else if let Some(text) = line.strip_prefix('-') {
+            assert_eq!(before[old], text, "old line {}", old + 1);
+            old += 1;
+        } else if let Some(text) = line.strip_prefix('+') {
+            assert_eq!(after[new], text, "new line {}", new + 1);
+            new += 1;
+        } else if let Some(text) = line.strip_prefix(' ') {
+            if text != "# <unrelated configuration omitted>" {
+                assert_eq!(before[old], text);
+                assert_eq!(after[new], text);
+            }
+            old += 1;
+            new += 1;
+        }
+    }
+    assert_eq!(hunks, 2, "{patch}");
 }

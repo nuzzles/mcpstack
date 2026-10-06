@@ -20,7 +20,7 @@ pub struct Logging {
     /// Override the tracing filter (also read from RUST_LOG).
     #[arg(long, global = true, env = "RUST_LOG", conflicts_with_all = ["verbose", "quiet"])]
     log: Option<String>,
-    /// ANSI color mode for logs and import diffs.
+    /// ANSI color mode for logs and diffs.
     #[arg(long, global = true, env = "MCPSTACK_COLOR", value_enum, default_value_t = ColorMode::Auto)]
     color: ColorMode,
     /// Disable ANSI colors; also honors nonempty NO_COLOR.

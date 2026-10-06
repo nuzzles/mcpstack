@@ -163,7 +163,16 @@ impl Snapshot {
         Ok(document)
     }
 
-    pub fn apply(self, definitions: &BTreeMap<String, toml::Table>) -> Result<usize, FileError> {
+    pub fn original_text(&self) -> Result<&str, FileError> {
+        std::str::from_utf8(self.original.as_deref().unwrap_or_default())
+            .map_err(|_| FileError::Config)
+    }
+
+    /// Build exactly the document that apply writes, without touching the filesystem.
+    pub fn proposal(
+        &self,
+        definitions: &BTreeMap<String, toml::Table>,
+    ) -> Result<(usize, String), FileError> {
         let additions: BTreeMap<_, _> = self
             .preview(definitions)?
             .into_iter()
@@ -185,6 +194,11 @@ impl Snapshot {
                 .ok_or(FileError::Config)?
                 .insert(name, Item::Table(server));
         }
+        Ok((added, document.to_string()))
+    }
+
+    pub fn apply(self, definitions: &BTreeMap<String, toml::Table>) -> Result<usize, FileError> {
+        let (added, document) = self.proposal(definitions)?;
         self.check_unchanged()?;
         if added == 0 {
             return Ok(0);
@@ -197,7 +211,7 @@ impl Snapshot {
         let mut temporary =
             tempfile::NamedTempFile::new_in(parent).map_err(|_| FileError::Write)?;
         temporary
-            .write_all(document.to_string().as_bytes())
+            .write_all(document.as_bytes())
             .map_err(|_| FileError::Write)?;
         temporary
             .as_file()
