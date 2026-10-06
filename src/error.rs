@@ -80,12 +80,12 @@ impl AppError {
             Self::Stack(_) => ErrorCode::InvalidStack,
             Self::ConfigRead(_) | Self::ConfigPath => ErrorCode::ConfigReadError,
             Self::Export(_) => ErrorCode::ExportError,
-            Self::Adapter(crate::adapters::codex::AdapterError::Detection) => {
+            Self::Adapter(crate::adapters::codex::AdapterError::CodexDetection) => {
                 ErrorCode::ClientVersionError
             }
             Self::Adapter(
-                crate::adapters::codex::AdapterError::UnsupportedMajor
-                | crate::adapters::codex::AdapterError::UnsupportedImportVersion,
+                crate::adapters::codex::AdapterError::UnsupportedCodexExportVersion
+                | crate::adapters::codex::AdapterError::UnsupportedCodexImportVersion,
             ) => ErrorCode::UnsupportedClientVersion,
         }
     }

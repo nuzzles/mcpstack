@@ -1,4 +1,6 @@
 use std::io;
+#[cfg(any(target_os = "macos", test))]
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use semver::Version;
@@ -10,32 +12,32 @@ use crate::schema::StackV1;
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AdapterError {
     #[error(
-        "Unable to detect Codex version. Ensure codex --version succeeds on PATH or ChatGPT Desktop is installed on macOS."
+        "Unable to detect Codex version. Ensure Codex is installed and codex --version succeeds."
     )]
-    Detection,
+    CodexDetection,
     #[error("Codex 1.0.0 and later, including prereleases, require an explicit supported adapter.")]
-    UnsupportedMajor,
+    UnsupportedCodexExportVersion,
     #[error("Import supports only the checked stable Codex version 0.160.0.")]
-    UnsupportedImportVersion,
+    UnsupportedCodexImportVersion,
 }
 
 /// Select an adapter without reading or modifying client configuration.
-pub fn detect() -> Result<CodexAdapter, AdapterError> {
-    let version = detect_version()?;
+pub fn detect_codex() -> Result<CodexAdapter, AdapterError> {
+    let version = detect_codex_version()?;
     CodexAdapter::select(&version)
 }
 
-fn detect_version() -> Result<Version, AdapterError> {
+fn detect_codex_version() -> Result<Version, AdapterError> {
     let output = match version_output(codex_command()?) {
         Ok(output) => output,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            version_output(bundled_codex_command().ok_or(AdapterError::Detection)?)
-                .map_err(|_| AdapterError::Detection)?
+            version_output(bundled_codex_command().ok_or(AdapterError::CodexDetection)?)
+                .map_err(|_| AdapterError::CodexDetection)?
         }
-        Err(_) => return Err(AdapterError::Detection),
+        Err(_) => return Err(AdapterError::CodexDetection),
     };
     if !output.status.success() {
-        return Err(AdapterError::Detection);
+        return Err(AdapterError::CodexDetection);
     }
     parse_version(&output.stdout)
 }
@@ -46,22 +48,38 @@ fn version_output(mut command: Command) -> io::Result<Output> {
 
 #[cfg(target_os = "macos")]
 fn bundled_codex_command() -> Option<Command> {
-    use std::path::PathBuf;
+    let home = directories::BaseDirs::new();
+    let apps = codex_app_roots(
+        std::env::var_os("MCPSTACK_CODEX_APP").map(PathBuf::from),
+        Path::new("/Applications"),
+        home.as_ref().map(|dirs| dirs.home_dir()),
+    );
+    find_bundled_codex(apps).map(Command::new)
+}
 
-    let apps = match std::env::var_os("MCPSTACK_CODEX_APP") {
-        Some(path) => vec![PathBuf::from(path)],
-        None => {
-            let mut apps = vec![PathBuf::from("/Applications/ChatGPT.app")];
-            if let Some(dirs) = directories::BaseDirs::new() {
-                apps.push(dirs.home_dir().join("Applications/ChatGPT.app"));
-            }
-            apps
-        }
-    };
+// Keep candidate construction independent of the host filesystem so both
+// standard application locations can be tested without touching installed apps.
+#[cfg(any(target_os = "macos", test))]
+fn codex_app_roots(
+    explicit: Option<PathBuf>,
+    applications: &Path,
+    home: Option<&Path>,
+) -> Vec<PathBuf> {
+    if let Some(app) = explicit {
+        return vec![app];
+    }
+    let mut apps = vec![applications.join("ChatGPT.app")];
+    if let Some(home) = home {
+        apps.push(home.join("Applications/ChatGPT.app"));
+    }
+    apps
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn find_bundled_codex(apps: Vec<PathBuf>) -> Option<PathBuf> {
     apps.into_iter()
         .map(|app| app.join("Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"))
         .find(|path| path.is_file())
-        .map(Command::new)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -76,8 +94,8 @@ fn codex_command() -> Result<Command, AdapterError> {
 
 #[cfg(windows)]
 fn codex_command() -> Result<Command, AdapterError> {
-    let path = std::env::var_os("PATH").ok_or(AdapterError::Detection)?;
-    let launcher = windows_launcher(&path).ok_or(AdapterError::Detection)?;
+    let path = std::env::var_os("PATH").ok_or(AdapterError::CodexDetection)?;
+    let launcher = windows_launcher(&path).ok_or(AdapterError::CodexDetection)?;
     // Rust's Command handles an explicitly resolved .cmd via cmd.exe. Let it
     // quote the path and arguments rather than building a shell command string.
     Ok(Command::new(launcher))
@@ -98,32 +116,32 @@ fn windows_launcher(path: &std::ffi::OsStr) -> Option<std::path::PathBuf> {
 }
 
 fn parse_version(output: &[u8]) -> Result<Version, AdapterError> {
-    let output = std::str::from_utf8(output).map_err(|_| AdapterError::Detection)?;
+    let output = std::str::from_utf8(output).map_err(|_| AdapterError::CodexDetection)?;
     let mut words = output.split_whitespace();
     if words.next() != Some("codex-cli") {
-        return Err(AdapterError::Detection);
+        return Err(AdapterError::CodexDetection);
     }
-    let version = words.next().ok_or(AdapterError::Detection)?;
+    let version = words.next().ok_or(AdapterError::CodexDetection)?;
     if words.next().is_some() {
-        return Err(AdapterError::Detection);
+        return Err(AdapterError::CodexDetection);
     }
-    Version::parse(version).map_err(|_| AdapterError::Detection)
+    Version::parse(version).map_err(|_| AdapterError::CodexDetection)
 }
 
-/// An adapter validated for writes, constructed only after exact-version detection.
-pub struct CodexImportAdapter(());
+/// Import adapter selected after checking the supported Codex version.
+pub struct CodexImportAdapter;
 
 #[allow(dead_code, reason = "foundation for the stacked import CLI PR")]
 pub fn detect_import() -> Result<CodexImportAdapter, AdapterError> {
-    CodexImportAdapter::select(&detect_version()?)
+    CodexImportAdapter::select(&detect_codex_version()?)
 }
 
 impl CodexImportAdapter {
     fn select(version: &Version) -> Result<Self, AdapterError> {
         if version != &CURRENT_STABLE {
-            return Err(AdapterError::UnsupportedImportVersion);
+            return Err(AdapterError::UnsupportedCodexImportVersion);
         }
-        Ok(Self(()))
+        Ok(Self)
     }
 
     #[allow(dead_code, reason = "foundation for the stacked import CLI PR")]
@@ -150,7 +168,7 @@ pub enum CodexAdapter {
 impl CodexAdapter {
     pub fn select(version: &Version) -> Result<Self, AdapterError> {
         if version.major >= 1 {
-            return Err(AdapterError::UnsupportedMajor);
+            return Err(AdapterError::UnsupportedCodexExportVersion);
         }
         // Historical stdio/HTTP/auth field changes stay inside mcp_servers;
         // native export preserves their spellings and values without translation.
@@ -199,7 +217,7 @@ mod tests {
         for version in ["0.159.0", "0.160.1", "0.160.0-alpha.1", "1.0.0"] {
             assert!(matches!(
                 CodexImportAdapter::select(&Version::parse(version).unwrap()),
-                Err(AdapterError::UnsupportedImportVersion)
+                Err(AdapterError::UnsupportedCodexImportVersion)
             ));
         }
     }
@@ -227,6 +245,43 @@ mod tests {
     }
 
     #[test]
+    fn finds_system_user_and_explicit_desktop_bundles() {
+        let root = tempfile::tempdir().unwrap();
+        let system = root.path().join("system Applications");
+        let home = root.path().join("user home");
+        let explicit = root.path().join("custom ChatGPT.app");
+        let roots = codex_app_roots(None, &system, Some(&home));
+        assert_eq!(
+            roots,
+            [
+                system.join("ChatGPT.app"),
+                home.join("Applications/ChatGPT.app")
+            ]
+        );
+        assert!(find_bundled_codex(roots.clone()).is_none());
+        let relative = "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
+        let user_binary = roots[1].join(relative);
+        std::fs::create_dir_all(user_binary.parent().unwrap()).unwrap();
+        std::fs::write(&user_binary, "fixture").unwrap();
+        assert_eq!(find_bundled_codex(roots.clone()), Some(user_binary));
+        let system_binary = roots[0].join(relative);
+        std::fs::create_dir_all(system_binary.parent().unwrap()).unwrap();
+        std::fs::write(&system_binary, "fixture").unwrap();
+        assert_eq!(find_bundled_codex(roots), Some(system_binary));
+        assert_eq!(
+            codex_app_roots(None, &system, None),
+            [system.join("ChatGPT.app")]
+        );
+        let override_roots = codex_app_roots(Some(explicit.clone()), &system, Some(&home));
+        assert_eq!(override_roots.as_slice(), std::slice::from_ref(&explicit));
+        assert!(find_bundled_codex(override_roots.clone()).is_none());
+        let binary = explicit.join(relative);
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, "fixture").unwrap();
+        assert_eq!(find_bundled_codex(override_roots), Some(binary));
+    }
+
+    #[test]
     fn parses_codex_version_without_exposing_bad_output() {
         assert_eq!(
             parse_version(b"codex-cli 0.149.0\r\n").unwrap(),
@@ -241,7 +296,7 @@ mod tests {
             b"\xff",
         ] {
             let error = parse_version(output).unwrap_err();
-            assert_eq!(error, AdapterError::Detection);
+            assert_eq!(error, AdapterError::CodexDetection);
             assert!(!error.to_string().contains("fixture-secret"));
         }
     }
@@ -294,7 +349,7 @@ mod tests {
         ] {
             assert_eq!(
                 CodexAdapter::select(&Version::parse(version).unwrap()).unwrap_err(),
-                AdapterError::UnsupportedMajor
+                AdapterError::UnsupportedCodexExportVersion
             );
         }
     }

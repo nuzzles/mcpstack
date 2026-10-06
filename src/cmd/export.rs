@@ -5,7 +5,7 @@ use std::{env, fs};
 use clap::{Args, Subcommand};
 use dialoguer::Select;
 
-use crate::adapters::codex::detect;
+use crate::adapters::codex::detect_codex;
 use crate::error::AppError;
 use crate::exporters::{codex::ExportError, to_yaml};
 
@@ -33,7 +33,7 @@ impl Export {
         match self.client {
             Client::Codex { config } => {
                 tracing::debug!("Exporting Codex MCP configuration");
-                let adapter = detect()?;
+                let adapter = detect_codex()?;
                 if let Some(warning) = adapter.warning() {
                     tracing::warn!("{warning}");
                 }

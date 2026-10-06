@@ -457,6 +457,30 @@ fn export_finds_chatgpt_desktop_codex_when_cli_is_not_on_path() {
 
 #[cfg(unix)]
 #[test]
+fn export_discovers_cli_installations_in_path_order() {
+    let fixture = StackFixture::new("unchanged");
+    let root = fixture.directory.path();
+    let first = mock_codex(&root.join("npm tools with spaces"), "codex-cli 0.160.0", 0);
+    let second = mock_codex(&root.join("native tools"), "codex-cli 1.0.0", 0);
+    std::fs::write(
+        root.join("config.toml"),
+        "[mcp_servers.example]\ncommand='example'\n",
+    )
+    .unwrap();
+    for (paths, expected) in [([&first, &second], 0), ([&second, &first], 8)] {
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["export", "codex"])
+            .env("PATH", std::env::join_paths(paths).unwrap())
+            .env("CODEX_HOME", root)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(expected), "{output:?}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn older_versions_export_and_newer_versions_warn_only_on_stderr() {
     for version in [
         "0.0.0",
@@ -546,6 +570,51 @@ fn windows_npm_launcher_exports_and_reports_detection_failures() {
         std::fs::read_to_string(fixture.directory.path().join("config.toml")).unwrap(),
         config
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_native_launcher_takes_precedence_over_npm_in_the_same_directory() {
+    let fixture = StackFixture::new("unchanged");
+    let root = fixture.directory.path();
+    let bin = root.join("native tools with spaces");
+    std::fs::create_dir_all(&bin).unwrap();
+    let source = root.join("codex_fixture.rs");
+    std::fs::write(
+        &source,
+        r#"fn main() {
+        assert_eq!(std::env::args().nth(1).as_deref(), Some("--version"));
+        println!("codex-cli 0.160.0");
+    }"#,
+    )
+    .unwrap();
+    let compiler = Command::new("rustc")
+        .arg(&source)
+        .arg("-o")
+        .arg(bin.join("codex.exe"))
+        .output()
+        .unwrap();
+    assert!(compiler.status.success(), "{compiler:?}");
+    std::fs::write(
+        bin.join("codex.cmd"),
+        "@echo off\r\necho codex-cli 1.0.0\r\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("config.toml"),
+        "[mcp_servers.example]\ncommand='example'\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["export", "codex"])
+        .env("PATH", &bin)
+        .env("CODEX_HOME", root)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stack: Value = yaml_serde::from_slice(&output.stdout).unwrap();
+    assert_eq!(stack["servers"]["example"]["config"]["command"], "example");
 }
 
 #[test]

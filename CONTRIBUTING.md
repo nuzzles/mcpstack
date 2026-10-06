@@ -58,6 +58,20 @@ Keep commands predictable for humans and agents. Preserve unrelated client
 settings, never log secrets, and test meaningful behavior as it is implemented.
 Do not commit real client configurations or credentials as fixtures.
 
+## Cross-platform diagnostics and discovery
+
+Keep errors in shared code platform-neutral and actionable on macOS, Linux, and
+Windows. Do not name a specific OS or its installation paths in a cross-platform
+error message; put platform-specific guidance in documentation or a diagnostic
+that is compiled only for that platform.
+
+Test Codex discovery on all three platforms. Standard CLI installations (npm,
+Homebrew, and native binaries) are discovered through PATH; Windows supports
+native `codex.exe` and npm `codex.cmd` launchers. The macOS desktop fallback checks
+system and user Applications folders, with `MCPSTACK_CODEX_APP` as an explicit
+bundle override. Test PATH order, paths with spaces, missing launchers, and
+version-command failures without depending on a real Codex installation.
+
 ## Changing the MSRV
 
 Update `package.rust-version` in Cargo.toml, the README's current MSRV statement,
