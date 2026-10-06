@@ -1291,7 +1291,8 @@ fn diff_hunk_positions_match_original_and_imported_files() {
     assert!(!config.with_extension("toml.~1~").exists());
     let dry = invoke(&["import", "codex", "--dry-run", "-y"]);
     assert!(dry.status.success(), "{dry:?}");
-    assert!(!String::from_utf8_lossy(&dry.stdout).contains("@@"));
+    assert!(dry.stdout.starts_with(&preview.stdout));
+    assert!(String::from_utf8_lossy(&dry.stdout).contains("Would import 2 server(s)."));
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     assert!(!config.with_extension("toml.~1~").exists());
     let applied = invoke(&["import", "codex", "-y"]);

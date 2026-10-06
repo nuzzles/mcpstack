@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{IsTerminal, Write, stderr, stdin};
 use std::ops::Range;
+use std::path::Path;
 
 use clap::Args;
 use serde_json::Value as Json;
@@ -61,37 +62,49 @@ impl Diff {
             .collect();
         warn_runtime_bindings(&incoming);
         let secrets: Vec<_> = resolver.values.into_values().flatten().collect();
-        let mut before_masks = BTreeMap::new();
-        let mut after_masks = BTreeMap::new();
-        for (name, (before, after)) in &changes {
-            if let Some(before) = before {
-                before_masks.insert(name.clone(), masked_server(name, before, None, &secrets)?);
-            }
-            after_masks.insert(
-                name.clone(),
-                masked_server(name, after, before.as_ref(), &secrets)?,
-            );
-        }
-        let original = snapshot.original_text()?;
-        let (_, proposed) = snapshot.proposal(&incoming)?;
-        let before = redact_document(original, &before_masks)?;
-        let after = redact_document(&proposed, &after_masks)?;
-        let label = path.to_string_lossy();
-        let patch = similar::TextDiff::from_lines(&before, &after)
-            .unified_diff()
-            .context_radius(2)
-            .header(
-                if original.is_empty() {
-                    "/dev/null"
-                } else {
-                    &label
-                },
-                &label,
-            )
-            .to_string();
-        write_diff(output, &patch, colored)?;
-        Ok(())
+        show_diff(&snapshot, &path, &incoming, &secrets, output, colored)
     }
+}
+
+pub(super) fn show_diff(
+    snapshot: &Snapshot,
+    path: &Path,
+    definitions: &BTreeMap<String, toml::Table>,
+    secrets: &[String],
+    output: &mut impl Write,
+    colored: bool,
+) -> Result<(), AppError> {
+    let changes = snapshot.preview(definitions)?;
+    let mut before_masks = BTreeMap::new();
+    let mut after_masks = BTreeMap::new();
+    for (name, (before, after)) in &changes {
+        if let Some(before) = before {
+            before_masks.insert(name.clone(), masked_server(name, before, None, secrets)?);
+        }
+        after_masks.insert(
+            name.clone(),
+            masked_server(name, after, before.as_ref(), secrets)?,
+        );
+    }
+    let original = snapshot.original_text()?;
+    let (_, proposed) = snapshot.proposal(definitions)?;
+    let before = redact_document(original, &before_masks)?;
+    let after = redact_document(&proposed, &after_masks)?;
+    let label = path.to_string_lossy();
+    let patch = similar::TextDiff::from_lines(&before, &after)
+        .unified_diff()
+        .context_radius(2)
+        .header(
+            if original.is_empty() {
+                "/dev/null"
+            } else {
+                &label
+            },
+            &label,
+        )
+        .to_string();
+    write_diff(output, &patch, colored)?;
+    Ok(())
 }
 
 fn masked_server(

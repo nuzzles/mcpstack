@@ -14,7 +14,7 @@ use crate::schema::Stack;
 /// Approve and apply server additions and replacements.
 #[derive(Args)]
 pub struct Import {
-    /// Run import prompts without writing files. Use diff to view the patch.
+    /// Run import prompts, then show the diff for approved changes without writing files.
     #[arg(long, global = true)]
     dry_run: bool,
     /// Approve all server additions and replacements without prompting.
@@ -37,7 +37,12 @@ pub(super) enum Client {
 }
 
 impl Import {
-    pub fn run(self, output: &mut impl Write, non_interactive: bool) -> Result<(), AppError> {
+    pub fn run(
+        self,
+        output: &mut impl Write,
+        non_interactive: bool,
+        colored: bool,
+    ) -> Result<(), AppError> {
         if self.dry_run {
             tracing::warn!("Dry run; no changes will be committed.");
         }
@@ -153,6 +158,8 @@ impl Import {
                     return Ok(());
                 }
                 if self.dry_run {
+                    let secrets: Vec<_> = resolver.values.into_values().flatten().collect();
+                    super::diff::show_diff(&snapshot, &path, &approved, &secrets, output, colored)?;
                     writeln!(output, "Would import {} server(s).", approved.len())?;
                     return Ok(());
                 }

@@ -60,7 +60,9 @@ impl Cli {
             match command {
                 Commands::Validate(inner) => inner.run(output),
                 Commands::Export(inner) => inner.run(output, self.non_interactive),
-                Commands::Import(inner) => inner.run(output, self.non_interactive),
+                Commands::Import(inner) => {
+                    inner.run(output, self.non_interactive, self.logging.output_ansi())
+                }
                 Commands::Diff(inner) => {
                     inner.run(output, self.non_interactive, self.logging.output_ansi())
                 }
