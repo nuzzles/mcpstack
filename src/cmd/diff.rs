@@ -78,13 +78,13 @@ pub(super) fn show_diff(
     let mut before_masks = BTreeMap::new();
     let mut after_masks = BTreeMap::new();
     for (name, (before, after)) in &changes {
+        let after_mask = masked_server(name, after, before.as_ref(), secrets)?;
         if let Some(before) = before {
-            before_masks.insert(name.clone(), masked_server(name, before, None, secrets)?);
+            let mut before_mask = masked_server(name, before, None, secrets)?;
+            redact_matching_fields(&mut before_mask, &after_mask);
+            before_masks.insert(name.clone(), before_mask);
         }
-        after_masks.insert(
-            name.clone(),
-            masked_server(name, after, before.as_ref(), secrets)?,
-        );
+        after_masks.insert(name.clone(), after_mask);
     }
     let original = snapshot.original_text()?;
     let (_, proposed) = snapshot.proposal(definitions)?;
@@ -105,6 +105,30 @@ pub(super) fn show_diff(
         .to_string();
     write_diff(output, &patch, colored)?;
     Ok(())
+}
+
+/// A masked incoming field identifies its existing value as private too, even
+/// when that value differs and its field name does not identify a credential.
+fn redact_matching_fields(before: &mut Json, after: &Json) {
+    if matches!(after.as_str(), Some("<redacted>" | "<redacted: changed>")) {
+        *before = "<redacted>".into();
+        return;
+    }
+    match (before, after) {
+        (Json::Object(before), Json::Object(after)) => {
+            for (key, value) in before {
+                if let Some(after) = after.get(key) {
+                    redact_matching_fields(value, after);
+                }
+            }
+        }
+        (Json::Array(before), Json::Array(after)) => {
+            for (before, after) in before.iter_mut().zip(after) {
+                redact_matching_fields(before, after);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn masked_server(

@@ -1228,6 +1228,49 @@ fn diff_compares_real_secrets_and_marks_only_changed_lines() {
     }
 }
 
+#[test]
+fn previews_redact_old_values_at_incoming_secret_reference_locations() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  process:\n    client: codex\n    config:\n      command: tool\n      args: [{'$env': MCPSTACK_ROTATED_VALUE}, visible-arg]\n      env: {CUSTOM: {'$env': MCPSTACK_ROTATED_VALUE}, ORDINARY: visible-env}\n  remote:\n    transport:\n      type: http\n      url: https://example.com/mcp\n      headers: {X-Custom: {env: MCPSTACK_ROTATED_VALUE}, X-Ordinary: visible-header}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    let original = "[mcp_servers.process]\ncommand='tool'\nargs=['old-argument-credential', 'visible-arg']\n[mcp_servers.process.env]\nCUSTOM='old-environment-credential'\nORDINARY='visible-env'\n[mcp_servers.remote]\nurl='https://example.com/mcp'\n[mcp_servers.remote.http_headers]\nX-Custom='old-header-credential'\nX-Ordinary='visible-header'\n";
+    std::fs::write(&config, original).unwrap();
+    for args in [
+        vec!["diff", "codex"],
+        vec!["import", "codex", "--dry-run", "-y"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(args)
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .args(["--color", "never"])
+            .env("MCPSTACK_ROTATED_VALUE", "new-rotated-credential")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let preview = String::from_utf8_lossy(&output.stdout);
+        assert!(preview.contains("<redacted: changed>"));
+        for credential in [
+            "old-argument-credential",
+            "old-environment-credential",
+            "old-header-credential",
+            "new-rotated-credential",
+        ] {
+            assert!(!preview.contains(credential), "{preview}");
+            assert!(!String::from_utf8_lossy(&output.stderr).contains(credential));
+        }
+        for ordinary in ["visible-arg", "visible-env", "visible-header"] {
+            assert!(preview.contains(ordinary), "{preview}");
+        }
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+        assert!(!config.with_extension("toml.~1~").exists());
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn auto_approve_replaces_existing_servers_and_preserves_unrelated_settings() {

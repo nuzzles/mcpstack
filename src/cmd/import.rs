@@ -59,31 +59,41 @@ impl Import {
                         return Err(AppError::ImportApprovalRequired);
                     }
                     snapshot.ensure_write_supported()?;
-                    let default = snapshot.default_backup_path()?;
-                    let create_backup = self.auto_approve
-                        || Confirm::new()
-                            .with_prompt("Create a backup before importing?")
-                            .default(true)
-                            .report(false)
-                            .interact()
-                            .map_err(|_| AppError::ImportApprovalCancelled)?;
-                    if create_backup {
-                        let backup_path = if self.auto_approve {
-                            default
-                        } else {
-                            let default_text = default.to_string_lossy().into_owned();
-                            let selected: String = Input::new()
-                                .with_prompt("Backup path")
-                                .default(default_text.clone())
+                    let backup_path = choose_backup_path(
+                        &snapshot,
+                        self.auto_approve,
+                        || {
+                            Confirm::new()
+                                .with_prompt("Create a backup before importing?")
+                                .default(true)
                                 .report(false)
+                                .interact()
+                                .map_err(|_| AppError::ImportApprovalCancelled)
+                        },
+                        |default| {
+                            let mut input = Input::<String>::new()
+                                .with_prompt("Backup path")
+                                .report(false);
+                            let default_text =
+                                default.map(|path| path.to_string_lossy().into_owned());
+                            if let Some(text) = &default_text {
+                                input = input.default(text.clone());
+                            } else {
+                                tracing::warn!(
+                                    "Cannot determine a default backup path; enter an unused custom path."
+                                );
+                            }
+                            let selected = input
                                 .interact_text()
                                 .map_err(|_| AppError::ImportApprovalCancelled)?;
-                            if selected == default_text {
-                                default
+                            if default_text.as_ref() == Some(&selected) {
+                                Ok(default.unwrap().to_path_buf())
                             } else {
-                                PathBuf::from(selected)
+                                Ok(PathBuf::from(selected))
                             }
-                        };
+                        },
+                    )?;
+                    if let Some(backup_path) = backup_path {
                         snapshot.create_backup_at(&backup_path)?;
                     }
                 }
@@ -175,6 +185,24 @@ impl Import {
             }
         }
     }
+}
+
+/// Discover numbered backups only after the user requests one. Interactive
+/// callers can still choose a custom path when default discovery fails.
+fn choose_backup_path(
+    snapshot: &Snapshot,
+    auto_approve: bool,
+    confirm: impl FnOnce() -> Result<bool, AppError>,
+    choose: impl FnOnce(Option<&std::path::Path>) -> Result<PathBuf, AppError>,
+) -> Result<Option<PathBuf>, AppError> {
+    if auto_approve {
+        return Ok(Some(snapshot.default_backup_path()?));
+    }
+    if !confirm()? {
+        return Ok(None);
+    }
+    let default = snapshot.default_backup_path().ok();
+    choose(default.as_deref()).map(Some)
 }
 
 /// Cache each reference so repeated uses ask only once. All comparisons use
@@ -298,6 +326,53 @@ fn select_servers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unavailable_default_backup_can_be_skipped_or_replaced_with_custom_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        // An unrepresentable generation makes numbered discovery fail on every
+        // platform, just as a directory that cannot be listed would.
+        fs::write(
+            directory.path().join("config.toml.~18446744073709551616~"),
+            "existing",
+        )
+        .unwrap();
+        let snapshot = Snapshot::read(&path).unwrap();
+        assert!(snapshot.default_backup_path().is_err());
+        assert!(
+            choose_backup_path(
+                &snapshot,
+                false,
+                || Ok(false),
+                |_| { panic!("skipping backup must not ask for a path") }
+            )
+            .unwrap()
+            .is_none()
+        );
+        let custom = directory.path().join("custom.toml");
+        let selected = choose_backup_path(
+            &snapshot,
+            false,
+            || Ok(true),
+            |default| {
+                assert!(default.is_none());
+                Ok(custom.clone())
+            },
+        )
+        .unwrap();
+        assert_eq!(selected, Some(custom));
+        assert!(
+            choose_backup_path(
+                &snapshot,
+                true,
+                || panic!("automatic backup must not prompt"),
+                |_| { panic!("automatic backup must not ask for a path") }
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
 
     fn additions() -> BTreeMap<String, toml::Table> {
         ["a", "b", "c"]
