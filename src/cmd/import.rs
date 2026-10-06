@@ -59,32 +59,32 @@ impl Import {
                         return Err(AppError::ImportApprovalRequired);
                     }
                     let default = snapshot.default_backup_path();
-                    let backup_path = if self.auto_approve {
-                        default
-                    } else {
-                        if !Confirm::new()
+                    let create_backup = self.auto_approve
+                        || Confirm::new()
                             .with_prompt("Create a backup before importing?")
                             .default(true)
                             .report(false)
                             .interact()
-                            .map_err(|_| AppError::ImportApprovalCancelled)?
-                        {
-                            return Err(AppError::ImportApprovalCancelled);
-                        }
-                        let default_text = default.to_string_lossy().into_owned();
-                        let selected: String = Input::new()
-                            .with_prompt("Backup path")
-                            .default(default_text.clone())
-                            .report(false)
-                            .interact_text()
                             .map_err(|_| AppError::ImportApprovalCancelled)?;
-                        if selected == default_text {
+                    if create_backup {
+                        let backup_path = if self.auto_approve {
                             default
                         } else {
-                            PathBuf::from(selected)
-                        }
-                    };
-                    snapshot.create_backup_at(&backup_path)?;
+                            let default_text = default.to_string_lossy().into_owned();
+                            let selected: String = Input::new()
+                                .with_prompt("Backup path")
+                                .default(default_text.clone())
+                                .report(false)
+                                .interact_text()
+                                .map_err(|_| AppError::ImportApprovalCancelled)?;
+                            if selected == default_text {
+                                default
+                            } else {
+                                PathBuf::from(selected)
+                            }
+                        };
+                        snapshot.create_backup_at(&backup_path)?;
+                    }
                 }
                 let document = fs::read_to_string(file).map_err(AppError::StackRead)?;
                 let stack = Stack::from_yaml(&document)?;
@@ -172,8 +172,8 @@ impl Import {
                     )?;
                     return Ok(());
                 }
-                // The initial backup already succeeded; apply checks that the
-                // target still matches the snapshot before atomic replacement.
+                // Check that the target still matches the snapshot before
+                // atomic replacement.
                 let added = snapshot.apply(&approved)?;
                 writeln!(
                     output,
