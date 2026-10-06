@@ -103,11 +103,13 @@ and unsupported portable transports before writing. Preserve unrelated settings.
 
 ### Phase 1 boundaries
 
-[*] Preview and approve imports before creating a sibling `config.toml.bak`.
-Create the private backup before writing approved changes; abort if backup
-creation fails or the target changed since preview. Never overwrite an existing
-backup silently. Dry runs, cancelled/skipped imports, and identical entries create
-no backup and change no files.
+[*] Actual imports first ask to create a backup, with sibling `config.toml.bak`
+as the default path and a prompt to choose another path. Declining cancels import.
+`--auto-approve` creates the default backup without prompts. Backup must succeed
+before reading the stack, resolving secrets, or comparing servers; never overwrite
+an existing backup. The chosen path cannot be the config itself. Later failures,
+cancellation, skipped servers, and identical entries retain the created backup.
+Dry-run skips backup creation entirely.
 
 Import means merging server definitions into Codex config, not installing or
 starting server software. Validate before writing and leave the config unchanged
@@ -290,11 +292,14 @@ It preserves unrelated settings, comments, and servers, skips identical
 definitions, and rejects differing entries. Redacted section-level unified diffs
 show changed lines with unchanged context before approvals. Known secret changes
 are displayed as `<redacted: changed>` without revealing values. Dry-run also previews conflicting
-sections with warnings; actual imports still reject conflicts. The preview is for review, not an
+sections; actual imports still reject conflicts. Dry-run logs one initial warning
+that no changes will be committed. Missing masked values prompt without warnings
+when interactive input is available. The preview is for review, not an
 patch for automatic application. Literal credentials recognized by export and all resolved or entered
 reference values are masked; unrelated existing config is never printed.
-A private sibling `.bak` is created only when approved additions will be written;
-an existing backup must be moved aside explicitly. Dry-run previews work on all
+A private backup is confirmed and created at the chosen path before any stack
+processing; `-y` uses the default sibling `.bak`. Existing backup paths are never
+overwritten. Backup failure aborts before stack reads or secret prompts. Dry-run previews work on all
 platforms without creating config files, backups, directories, or temporary files.
 The original is checked for changes before atomic replacement using a synced private temporary file. Native
 entries retain all supported schema fields. Private writes support Unix only;

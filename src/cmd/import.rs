@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::{env, fs};
 
 use clap::{Args, Subcommand};
-use dialoguer::{Password, Select};
+use dialoguer::{Confirm, Input, Password, Select};
 
 use crate::error::AppError;
 use crate::importers::codex::prepare;
@@ -43,20 +43,54 @@ impl Import {
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {
+        if self.dry_run {
+            tracing::warn!("Dry run; no changes will be committed.");
+        }
         match self.client {
             Client::Codex { file, config } => {
                 let path = config
                     .or_else(super::export::default_config)
                     .ok_or(AppError::ConfigPath)?;
                 let snapshot = Snapshot::read(&path)?;
+                let interactive =
+                    !non_interactive && stdin().is_terminal() && stderr().is_terminal();
+                if !self.dry_run {
+                    if !self.auto_approve && !interactive {
+                        return Err(AppError::ImportApprovalRequired);
+                    }
+                    let default = snapshot.default_backup_path();
+                    let backup_path = if self.auto_approve {
+                        default
+                    } else {
+                        if !Confirm::new()
+                            .with_prompt("Create a backup before importing?")
+                            .default(true)
+                            .report(false)
+                            .interact()
+                            .map_err(|_| AppError::ImportApprovalCancelled)?
+                        {
+                            return Err(AppError::ImportApprovalCancelled);
+                        }
+                        let default_text = default.to_string_lossy().into_owned();
+                        let selected: String = Input::new()
+                            .with_prompt("Backup path")
+                            .default(default_text.clone())
+                            .report(false)
+                            .interact_text()
+                            .map_err(|_| AppError::ImportApprovalCancelled)?;
+                        if selected == default_text {
+                            default
+                        } else {
+                            PathBuf::from(selected)
+                        }
+                    };
+                    snapshot.create_backup_at(&backup_path)?;
+                }
                 let document = fs::read_to_string(file).map_err(AppError::StackRead)?;
                 let stack = Stack::from_yaml(&document)?;
                 let mut resolver = SecretResolver {
                     dry_run: self.dry_run,
-                    interactive: (self.dry_run || !self.auto_approve)
-                        && !non_interactive
-                        && stdin().is_terminal()
-                        && stderr().is_terminal(),
+                    interactive: (self.dry_run || !self.auto_approve) && interactive,
                     values: BTreeMap::new(),
                     cancelled: false,
                 };
@@ -69,13 +103,6 @@ impl Import {
                 let definitions = prepared?;
                 let changes = snapshot.preview(&definitions)?;
                 let additions = if self.dry_run {
-                    for (name, (existing, _)) in &changes {
-                        if existing.is_some() {
-                            tracing::warn!(
-                                "Server {name:?} differs from the existing configuration; actual import requires this conflict to be resolved."
-                            );
-                        }
-                    }
                     changes
                         .iter()
                         .map(|(name, (_, definition))| (name.clone(), definition.clone()))
@@ -139,12 +166,14 @@ impl Import {
                     })?
                 };
                 if approved.is_empty() {
-                    writeln!(output, "No servers approved; no files were changed.")?;
+                    writeln!(
+                        output,
+                        "No servers approved; client configuration was not changed."
+                    )?;
                     return Ok(());
                 }
-                // All selections complete before backup or writes. Backup uses
-                // the reviewed snapshot and fails if the target has changed.
-                snapshot.create_backup()?;
+                // The initial backup already succeeded; apply checks that the
+                // target still matches the snapshot before atomic replacement.
                 let added = snapshot.apply(&approved)?;
                 writeln!(
                     output,
@@ -201,15 +230,10 @@ impl SecretResolver {
             .ok()
             .filter(|value| !value.is_empty() && !value.contains('\0'));
         if value.is_none() {
-            tracing::warn!(
-                "Environment variable {name} is unset or unusable; this masked field needs a value before import."
-            );
             if self.interactive {
                 match Password::new()
                     .with_prompt(if self.dry_run {
-                        format!(
-                            "Enter secret for {name} (comparison only; no files will be written)"
-                        )
+                        format!("Enter secret for {name}")
                     } else {
                         format!("Enter secret for {name} (written as a literal in config)")
                     })
@@ -226,6 +250,10 @@ impl SecretResolver {
                     Ok(secret) => value = Some(secret),
                     Err(_) => self.cancelled = true,
                 }
+            } else {
+                tracing::warn!(
+                    "Environment variable {name} is unset or unusable; this masked field needs a value before import."
+                );
             }
         }
         self.values.insert(name.into(), value.clone());

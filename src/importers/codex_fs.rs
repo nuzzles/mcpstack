@@ -12,13 +12,13 @@ use toml_edit::{DocumentMut, Item, Table};
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum FileError {
     #[error(
-        "Cannot create private backup. Move any existing .bak file aside and check the target path and permissions. Import was not processed."
+        "Cannot create private backup at the chosen path. Choose an unused file path and check permissions. Import was not processed."
     )]
     Backup,
     #[error("Invalid target TOML or mcp_servers table. Original config and backup are unchanged.")]
     Config,
     #[error(
-        "An existing server differs from the stack. Resolve the conflict explicitly; no config changes were written."
+        "Import refused: a server with the same name already has different settings. Existing servers are not overwritten. Update or rename that stack entry before importing; client configuration was not changed."
     )]
     Conflict,
     #[error(
@@ -57,23 +57,38 @@ impl Snapshot {
         Ok(snapshot)
     }
 
-    /// Back up exactly the bytes reviewed, after approval and before any writes.
+    pub fn default_backup_path(&self) -> PathBuf {
+        let mut path = self.path.as_os_str().to_os_string();
+        path.push(".bak");
+        path.into()
+    }
+
+    #[cfg(all(test, unix))]
     pub fn create_backup(&self) -> Result<(), FileError> {
+        self.create_backup_at(&self.default_backup_path())
+    }
+
+    /// Back up the original before reading the stack or resolving secrets.
+    pub fn create_backup_at(&self, backup_path: &Path) -> Result<(), FileError> {
         #[cfg(not(unix))]
         {
+            let _ = backup_path;
             Err(FileError::Platform)
         }
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
             self.check_unchanged()?;
-            let mut backup_name = self.path.as_os_str().to_os_string();
-            backup_name.push(".bak");
+            if file_identity(&self.path).map_err(|_| FileError::Backup)?
+                == file_identity(backup_path).map_err(|_| FileError::Backup)?
+            {
+                return Err(FileError::Backup);
+            }
             let mut backup = OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .mode(0o600)
-                .open(PathBuf::from(backup_name))
+                .open(backup_path)
                 .map_err(|_| FileError::Backup)?;
             // Retain a partial private backup on failure rather than deleting
             // a path another process might have replaced.
@@ -193,6 +208,18 @@ impl Snapshot {
     }
 }
 
+#[cfg(unix)]
+fn file_identity(path: &Path) -> Result<PathBuf, std::io::Error> {
+    let parent = path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("missing filename"))?;
+    Ok(parent.canonicalize()?.join(name))
+}
+
 fn read_regular(path: &Path) -> Result<Option<Vec<u8>>, std::io::Error> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_file() => fs::read(path).map(Some),
@@ -256,6 +283,28 @@ mod tests {
             ))
             .unwrap(),
         )])
+    }
+
+    #[test]
+    fn custom_backups_are_private_and_cannot_use_the_target_or_overwrite_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let absent = Snapshot::read(&path).unwrap();
+        let alias = dir.path().join(".").join("config.toml");
+        assert_eq!(absent.create_backup_at(&alias), Err(FileError::Backup));
+        assert!(!path.exists());
+        fs::write(&path, "# private fixture").unwrap();
+        let snapshot = Snapshot::read(&path).unwrap();
+        let custom = dir.path().join("backup with spaces.toml");
+        snapshot.create_backup_at(&custom).unwrap();
+        assert_eq!(fs::read_to_string(&custom).unwrap(), "# private fixture");
+        assert_eq!(
+            fs::metadata(&custom).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(!snapshot.default_backup_path().exists());
+        assert_eq!(snapshot.create_backup_at(&custom), Err(FileError::Backup));
+        assert_eq!(fs::read_to_string(&custom).unwrap(), "# private fixture");
     }
 
     #[test]

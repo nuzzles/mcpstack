@@ -76,7 +76,9 @@ pub enum AppError {
         "Import approval requires a terminal. Use --auto-approve (-y) to write or --dry-run to preview."
     )]
     ImportApprovalRequired,
-    #[error("Import approval was cancelled or could not be completed. No files were changed.")]
+    #[error(
+        "Import approval was cancelled or could not be completed. Client configuration was not changed."
+    )]
     ImportApprovalCancelled,
     #[error("{0}")]
     ImportFile(#[from] crate::importers::codex_fs::FileError),

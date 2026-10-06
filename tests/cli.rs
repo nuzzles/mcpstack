@@ -679,7 +679,7 @@ fn import_merges_resolved_stacks_with_private_backup_and_noop_repeat() {
         0o600
     );
     let output = execute();
-    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.status.code(), Some(11));
     assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
     std::fs::rename(&backup, fixture.directory.path().join("prior-backup")).unwrap();
     let modified = std::fs::metadata(&config).unwrap().modified().unwrap();
@@ -695,7 +695,7 @@ fn import_merges_resolved_stacks_with_private_backup_and_noop_repeat() {
 
 #[cfg(unix)]
 #[test]
-fn import_validation_failures_leave_config_and_backup_unchanged() {
+fn import_backs_up_before_validation_and_preserves_original_on_failure() {
     let original = "[mcp_servers.shared]\ncommand='original'\n";
     for (document, status) in [
         ("broken: [fixture-secret", 4),
@@ -729,7 +729,10 @@ fn import_validation_failures_leave_config_and_backup_unchanged() {
         assert!(output.stdout.is_empty());
         assert!(!String::from_utf8_lossy(&output.stderr).contains("fixture-secret"));
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
-        assert!(!fixture.directory.path().join("config.toml.bak").exists());
+        assert_eq!(
+            std::fs::read_to_string(fixture.directory.path().join("config.toml.bak")).unwrap(),
+            original
+        );
     }
     let fixture = StackFixture::new(
         "schema_version: 1\nservers:\n  added:\n    client: codex\n    config: {command: tool}\n",
@@ -738,6 +741,8 @@ fn import_validation_failures_leave_config_and_backup_unchanged() {
     let backup = fixture.directory.path().join("config.toml.bak");
     std::fs::write(&config, original).unwrap();
     std::fs::write(&backup, "keep backup").unwrap();
+    // Backup failure must happen before even trying to read the stack file.
+    std::fs::remove_file(&fixture.file).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
         .args(["import", "codex", "--auto-approve"])
         .arg(&fixture.file)
@@ -941,15 +946,38 @@ fn masked_import_rejects_missing_values_without_interactive_input() {
             .stdin(Stdio::null())
             .output()
             .unwrap();
+        #[cfg(not(unix))]
+        if flag != "--dry-run" {
+            assert_eq!(output.status.code(), Some(13));
+            assert!(!fixture.directory.path().join("config.toml.bak").exists());
+            continue;
+        }
         assert!(!output.status.success(), "{output:?}");
         let diagnostics = String::from_utf8_lossy(&output.stderr);
         assert!(diagnostics.contains("WARN"));
         assert!(diagnostics.contains("MCPSTACK_MASKED_SECRET"));
+        if flag == "--dry-run" {
+            assert!(
+                diagnostics
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .contains("Dry run; no changes will be committed.")
+            );
+        } else {
+            assert!(!diagnostics.contains("Dry run;"));
+        }
         assert_eq!(output.status.code(), Some(10));
         assert!(diagnostics.contains("interactive import"));
         assert!(output.stdout.is_empty());
         assert!(!config.exists());
-        assert!(!fixture.directory.path().join("config.toml.bak").exists());
+        let backup = fixture.directory.path().join("config.toml.bak");
+        if flag == "--dry-run" {
+            assert!(!backup.exists());
+        } else {
+            assert_eq!(std::fs::read(&backup).unwrap(), b"");
+            std::fs::remove_file(backup).unwrap();
+        }
     }
 }
 
@@ -1039,7 +1067,10 @@ fn dry_run_shows_redacted_conflicts_without_overwriting_existing_config() {
     let diff = String::from_utf8_lossy(&preview.stdout);
     assert!(diff.contains("-command = \"old-tool\""));
     assert!(diff.contains("+command = \"new-tool\""));
-    assert!(String::from_utf8_lossy(&preview.stderr).contains("Server \"shared\" differs"));
+    let diagnostics = String::from_utf8_lossy(&preview.stderr);
+    assert!(diagnostics.contains("Dry run; no changes will be committed."));
+    assert_eq!(diagnostics.lines().count(), 1);
+    assert!(!diagnostics.contains("differs"));
     for secret in ["old-private-secret", "old-api-secret", "private-model"] {
         assert!(!diff.contains(secret));
         assert!(!String::from_utf8_lossy(&preview.stderr).contains(secret));
@@ -1055,8 +1086,21 @@ fn dry_run_shows_redacted_conflicts_without_overwriting_existing_config() {
         .stdin(Stdio::null())
         .output()
         .unwrap();
+    #[cfg(unix)]
     assert_eq!(actual.status.code(), Some(12));
+    #[cfg(not(unix))]
+    assert_eq!(actual.status.code(), Some(13));
+    #[cfg(unix)]
+    assert!(
+        String::from_utf8_lossy(&actual.stderr).contains("Existing servers are not overwritten")
+    );
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    #[cfg(unix)]
+    assert_eq!(
+        std::fs::read_to_string(fixture.directory.path().join("config.toml.bak")).unwrap(),
+        original
+    );
+    #[cfg(not(unix))]
     assert!(!fixture.directory.path().join("config.toml.bak").exists());
 }
 
@@ -1151,7 +1195,9 @@ fn dry_run_compares_real_secrets_and_marks_only_changed_lines() {
         } else {
             assert!(diff.contains("No changes"));
             assert!(!diff.contains("@@"));
-            assert!(output.stderr.is_empty());
+            let diagnostics = String::from_utf8_lossy(&output.stderr);
+            assert!(diagnostics.contains("Dry run; no changes will be committed."));
+            assert_eq!(diagnostics.lines().count(), 1);
         }
         for secret in ["existing-fixture-secret", "new-fixture-secret"] {
             assert!(!diff.contains(secret));
