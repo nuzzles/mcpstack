@@ -2,11 +2,10 @@
 pub mod codex;
 mod v1;
 
-use crate::schema::{StackV1, ValidationError};
+use crate::schema::{Stack, ValidationError};
 
-pub fn to_yaml(stack: &StackV1) -> Result<String, ValidationError> {
-    match stack.schema_version {
-        1 => v1::to_yaml(stack),
-        _ => Err(ValidationError::UnsupportedVersion),
+pub fn to_yaml(stack: &Stack) -> Result<String, ValidationError> {
+    match stack {
+        Stack::V1(stack) => v1::to_yaml(stack),
     }
 }

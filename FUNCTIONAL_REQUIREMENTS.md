@@ -94,7 +94,8 @@ to its entry in Current status at the bottom.\
 
 ### Version compatibility
 
-[*] Stack schema versions are independent of Codex configuration fields. Codex
+[*] Stack files decode into `Stack::V1(StackV1)`; readers and writers dispatch
+through this enum. Stack schema versions are independent of Codex configuration fields. Codex
 config.toml has no format-version field. Import and export use a bundled snapshot
 of the current official MCP config schema without detecting or running Codex.
 Reject unsupported stack schemas, obsolete or unknown MCP fields, invalid values,

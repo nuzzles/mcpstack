@@ -69,7 +69,7 @@ impl Export {
                     })?
                 };
                 // Prepare the complete result before exposing any content on stdout.
-                let yaml = to_yaml(&stack).map_err(|_| ExportError::Stack)?;
+                let yaml = to_yaml(&stack.into()).map_err(|_| ExportError::Stack)?;
                 write!(output, "{yaml}")?;
                 Ok(())
             }

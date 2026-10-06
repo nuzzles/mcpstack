@@ -353,10 +353,13 @@ client_secret = "another-fixture-secret"
             serde_json::json!({"$env":"MCPSTACK_LOCAL_OAUTH_CLIENT_SECRET"})
         );
         assert_eq!(value["servers"]["local"]["config"]["startup_timeout_ms"], 0);
-        let yaml = to_yaml(&stack).unwrap();
+        let yaml = to_yaml(&stack.into()).unwrap();
         assert!(!yaml.contains("fixture-secret"));
         assert!(yaml.contains("example"));
-        assert_eq!(yaml, to_yaml(&export(CONFIG, false).unwrap()).unwrap());
+        assert_eq!(
+            yaml,
+            to_yaml(&export(CONFIG, false).unwrap().into()).unwrap()
+        );
         let restored = StackV1::from_yaml(&yaml).unwrap();
         assert_eq!(serde_json::to_value(restored).unwrap(), value);
     }
@@ -421,7 +424,7 @@ bearer_token_env_var = "SERVICE_TOKEN"
         assert_eq!(config["tools"]["read"]["output_token_limit"], 512);
         assert_eq!(config["env"]["tokenCount"], "12");
         assert_eq!(config["env"]["tokenBudget"], "2048");
-        assert!(!to_yaml(&stack).unwrap().contains("synthetic"));
+        assert!(!to_yaml(&stack.into()).unwrap().contains("synthetic"));
     }
 
     #[test]

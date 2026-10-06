@@ -9,7 +9,7 @@ use dialoguer::Select;
 use crate::error::AppError;
 use crate::importers::codex::prepare;
 use crate::importers::codex_fs::Snapshot;
-use crate::schema::StackV1;
+use crate::schema::Stack;
 
 /// Preview and approve server additions without installing server software.
 #[derive(Args)]
@@ -45,15 +45,17 @@ impl Import {
                     .ok_or(AppError::ConfigPath)?;
                 let snapshot = Snapshot::read(&path)?;
                 let document = fs::read_to_string(file).map_err(AppError::StackRead)?;
-                let stack = StackV1::from_yaml(&document)?;
+                let stack = Stack::from_yaml(&document)?;
                 let mut secrets = Vec::new();
-                let definitions = prepare(&stack, |name| {
-                    let value = env::var(name).ok();
-                    if let Some(value) = &value {
-                        secrets.push(value.clone());
-                    }
-                    value
-                })?;
+                let definitions = match &stack {
+                    Stack::V1(stack) => prepare(stack, |name| {
+                        let value = env::var(name).ok();
+                        if let Some(value) = &value {
+                            secrets.push(value.clone());
+                        }
+                        value
+                    })?,
+                };
                 let additions = snapshot.additions(&definitions)?;
                 let diffs: BTreeMap<_, _> = additions
                     .iter()
