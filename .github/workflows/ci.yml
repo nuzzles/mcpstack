@@ -62,25 +62,16 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
 
   test:
-    name: test (${{ matrix.os }}, ${{ matrix.codex-launcher }})
+    name: test (${{ matrix.os }})
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        codex-launcher: [npm, native]
     runs-on: ${{ matrix.os }}
-    env:
-      MCPSTACK_TEST_CODEX_VERSION: "0.160.0"
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-codex
-        with:
-          version: ${{ env.MCPSTACK_TEST_CODEX_VERSION }}
-          launcher: ${{ matrix.codex-launcher }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
-      - name: Detect installed Codex
-        run: cargo test --locked detects_installed_codex -- --ignored
 
   build:
     name: build

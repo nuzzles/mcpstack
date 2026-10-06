@@ -65,26 +65,6 @@ Windows. Do not name a specific OS or its installation paths in a cross-platform
 error message; put platform-specific guidance in documentation or a diagnostic
 that is compiled only for that platform.
 
-Test Codex discovery on all three platforms. Standard CLI installations (npm,
-Homebrew, and native binaries) are discovered through PATH; Windows supports
-native `codex.exe` and npm `codex.cmd` launchers. The macOS desktop fallback checks
-system and user Applications folders, with `MCPSTACK_CODEX_APP` as an explicit
-bundle override. Test PATH order, paths with spaces, missing launchers, and
-version-command failures without depending on a real Codex installation.
-
-CI also uses the reusable `.github/actions/setup-codex` composite action to
-install an exact Codex version on all three platforms, testing both npm launchers
-and the native binaries shipped in the npm package. Its `version` input is
-required; `launcher` accepts `npm` (default) or `native`. The version in the CI
-matrix must match the adapter's checked stable version.
-
-The installed-client test is ignored by default. To run it locally with that
-Codex version on PATH:
-
-```sh
-MCPSTACK_TEST_CODEX_VERSION=0.160.0 cargo test --locked detects_installed_codex -- --ignored
-```
-
 ## Changing the MSRV
 
 Update `package.rust-version` in Cargo.toml, the README's current MSRV statement,

@@ -1,4 +1,4 @@
-//! Read-only conversion to the checked Codex MCP configuration subset.
+//! Read-only conversion to the current Codex MCP configuration schema.
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -23,10 +23,9 @@ pub enum ImportError {
     Definition,
 }
 
-// Fail closed on unknown fields rather than silently dropping future or historical
-// options. Source: https://developers.openai.com/codex/config-reference/
+// Core fields used for semantic validation. The bundled schema validates all
+// supported fields; native definitions retain their complete original data.
 #[derive(Deserialize, Serialize, Default)]
-#[serde(deny_unknown_fields)]
 struct Definition {
     #[serde(skip_serializing_if = "Option::is_none")]
     command: Option<String>,
@@ -35,7 +34,7 @@ struct Definition {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     env: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    env_vars: Vec<String>,
+    env_vars: Vec<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -112,6 +111,7 @@ fn native(
 
 /// Convert every server before any writes. The caller supplies secret lookup,
 /// allowing tests to avoid mutating process-global environment variables.
+#[allow(dead_code, reason = "foundation for the stacked import CLI PR")]
 pub fn prepare(
     stack: &StackV1,
     mut lookup: impl FnMut(&str) -> Option<String>,
@@ -130,8 +130,7 @@ pub fn prepare(
                         .iter()
                         .map(|(key, value)| Ok((key.clone(), native(value, &mut lookup)?)))
                         .collect::<Result<serde_json::Map<_, _>, ImportError>>()?;
-                    serde_json::from_value::<Definition>(values.into())
-                        .map_err(|_| ImportError::Unsupported)?
+                    serde_json::Value::Object(values)
                 }
                 Server::ClientSpecific { .. } => return Err(ImportError::Unsupported),
                 Server::Portable {
@@ -164,7 +163,11 @@ pub fn prepare(
                                 .iter()
                                 .map(|(key, value)| Ok((key.clone(), source(value, &mut lookup)?)))
                                 .collect::<Result<_, ImportError>>()?;
-                            definition.env_vars = env_vars.clone();
+                            definition.env_vars = env_vars
+                                .iter()
+                                .cloned()
+                                .map(serde_json::Value::String)
+                                .collect();
                             definition.cwd = cwd.clone();
                         }
                         Transport::Http {
@@ -184,10 +187,16 @@ pub fn prepare(
                         }
                         _ => return Err(ImportError::Unsupported),
                     }
-                    definition
+                    serde_json::to_value(definition).map_err(|_| ImportError::Definition)?
                 }
             };
-            definition.validate()?;
+            if !crate::adapters::codex::supports(&definition) {
+                return Err(ImportError::Unsupported);
+            }
+            let core: Definition =
+                serde_json::from_value(definition.clone()).map_err(|_| ImportError::Definition)?;
+            core.validate()?;
+            validate_transport_fields(&definition)?;
             let toml::Value::Table(table) =
                 toml::Value::try_from(definition).map_err(|_| ImportError::Definition)?
             else {
@@ -196,6 +205,44 @@ pub fn prepare(
             Ok((name.clone(), table))
         })
         .collect()
+}
+
+fn validate_transport_fields(definition: &serde_json::Value) -> Result<(), ImportError> {
+    let incompatible: &[&str] = if definition.get("command").is_some() {
+        &[
+            "url",
+            "http_headers_helper",
+            "http_headers",
+            "env_http_headers",
+            "bearer_token_env_var",
+            "oauth",
+            "oauth_resource",
+            "auth",
+        ]
+    } else {
+        &["command", "args", "env", "env_vars", "cwd"]
+    };
+    if incompatible
+        .iter()
+        .any(|field| definition.get(field).is_some())
+    {
+        return Err(ImportError::Definition);
+    }
+    if definition
+        .get("env_vars")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|values| {
+            values.iter().any(|value| {
+                value
+                    .get("source")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|source| !matches!(source, "local" | "remote"))
+            })
+        })
+    {
+        return Err(ImportError::Definition);
+    }
+    Ok(())
 }
 
 impl Definition {
@@ -219,7 +266,17 @@ impl Definition {
                         .iter()
                         .map(|(k, v)| (k.clone(), ValueSource::Literal(v.clone())))
                         .collect(),
-                    env_vars: self.env_vars.clone(),
+                    env_vars: self
+                        .env_vars
+                        .iter()
+                        .map(|value| {
+                            value
+                                .as_str()
+                                .or_else(|| value.get("name").and_then(serde_json::Value::as_str))
+                                .map(str::to_owned)
+                                .ok_or(ImportError::Definition)
+                        })
+                        .collect::<Result<_, _>>()?,
                     cwd: self.cwd.clone(),
                 }
             }
@@ -340,5 +397,20 @@ mod tests {
             prepared["tool"]["env"]["API_KEY"].as_str(),
             Some("fixture-secret")
         );
+    }
+
+    #[test]
+    fn preserves_current_native_fields_and_rejects_removed_credentials() {
+        let original = "[mcp_servers.process]\ncommand='tool'\nenv_vars=[{name='REMOTE_TOKEN',source='remote'}]\n[mcp_servers.process.tools.read]\napproval_mode='prompt'\noutput_token_limit=2000\n[mcp_servers.remote]\nurl='https://example.com/mcp'\nauth='oauth'\nscopes=['read']\n[mcp_servers.remote.oauth]\nclient_id='public-client'\nclient_secret='fixture-secret'\ncallback_port=1234\n";
+        let stack = crate::exporters::codex::export(original, false).unwrap();
+        let prepared = prepare(&stack, |_| Some("fixture-secret".into())).unwrap();
+        let before: toml::Table = toml::from_str(original).unwrap();
+        for (name, definition) in before["mcp_servers"].as_table().unwrap() {
+            assert_eq!(&toml::Value::Table(prepared[name].clone()), definition);
+        }
+        let stack = StackV1::from_yaml("schema_version: 1\nservers:\n  remote:\n    client: codex\n    config: {url: 'https://example.com/mcp', bearer_token: fixture-secret}\n").unwrap();
+        let error = prepare(&stack, |_| None).unwrap_err();
+        assert_eq!(error, ImportError::Unsupported);
+        assert!(!error.to_string().contains("fixture-secret"));
     }
 }
