@@ -16,8 +16,7 @@ to its entry in Current status at the bottom.\
 | Done | Read MCP server entries from the default Codex config for export. [*](#codex-export) |
 | Done | Read MCP config at an explicit path for export. |
 | Unsupported | Write MCP config at the default or an explicit path for import. |
-| Done | Detect the installed Codex version. |
-| Partial [*](#codex-version-adapters) | Select a Codex adapter supporting the installed version; reject missing adapters or unsupported fields before writes. [*](#version-compatibility) |
+| Done | Validate MCP fields against the bundled current Codex config schema; reject obsolete or unknown fields. [*](#codex-config-schema) |
 | Unsupported | On import, preserve unrelated settings/servers; skip identical entries and reject differing ones. |
 
 ### Logging and ANSI
@@ -48,7 +47,7 @@ to its entry in Current status at the bottom.\
 | Unsupported | Resolve secret references from environment variables; reject missing values. [*](#secrets) |
 | Unsupported | Create a `.bak` copy of the target config before beginning import; abort if backup creation fails. |
 | Unsupported | Atomic config writes with restrictive permissions; preserve originals on failure. |
-| Partial [*](#stack-workflow-tests) | Test round trips, repeat imports, version compatibility, missing secrets, and write failures. |
+| Partial [*](#stack-workflow-tests) | Test round trips, repeat imports, config schema compatibility, missing secrets, and write failures. |
 
 ## Phase 2
 
@@ -95,14 +94,11 @@ to its entry in Current status at the bottom.\
 
 ### Version compatibility
 
-[*] Stack schema versions and harness versions are independent. Shared stacks
-carry only their schema version; client compatibility is owned by mcpstack's
-adapters. Before import/merge, detect the target client and installed version and
-delegate to an adapter supporting that version. Adapters can support a range of
-versions when the client's configuration format is stable. Reject unsupported
-stack schemas, undetectable client versions, missing adapters, or fields the
-selected adapter cannot represent before writing. The adapter also owns reading
-for export and preserving unrelated client settings during import.
+[*] Stack schema versions are independent of Codex configuration fields. Codex
+config.toml has no format-version field. Import and export use a bundled snapshot
+of the current official MCP config schema without detecting or running Codex.
+Reject unsupported stack schemas, obsolete or unknown MCP fields, invalid values,
+and unsupported portable transports before writing. Preserve unrelated settings.
 
 ### Phase 1 boundaries
 
@@ -200,9 +196,9 @@ CLI exit statuses are 0 for success/help/version, 1 for output failures
 (`OUTPUT_ERROR`), 2 for invalid arguments (`INVALID_ARGUMENT`), 3 for stack read
 failures (`STACK_READ_ERROR`), and 4 for invalid stacks (`INVALID_STACK`).
 Config read failures use 5 (`CONFIG_READ_ERROR`); export failures use 6
-(`EXPORT_ERROR`). Codex detection failures use 7 (`CLIENT_VERSION_ERROR`);
-newer 0.x versions warn on stderr and continue export. Codex 1.x and later,
-including prereleases, fail with exit 8 (`UNSUPPORTED_CLIENT_VERSION`). Logging initialization/filter failures use exit 9 (`LOGGING_ERROR`). Import errors are pending.
+(`EXPORT_ERROR`). Logging initialization/filter failures use exit 9
+(`LOGGING_ERROR`). Removed client-version statuses 7 and 8 are not reused.
+Import errors are pending.
 
 ### Deterministic output
 
@@ -222,8 +218,8 @@ operation results are pending.
 Stack serialization round trips, client-independent documents, reference syntax,
 unsupported shared fields, native client fields and secret references, transport
 URL schemes, validation file preservation, and CLI output failures are
-covered. Codex version parsing, detection failures, and adapter selection are
-also covered. Repeat imports, missing secret resolution, and atomic configuration
+covered. Current Codex schema validation and export without a Codex installation
+are also covered. Repeat imports, missing secret resolution, and atomic configuration
 write failures are pending.
 
 
@@ -256,17 +252,12 @@ keys remain visible. `export codex --config <path>` reads an explicit TOML file 
 config. Relative paths resolve from the current working directory. Imports are pending.
 
 
-### Codex version adapters
+### Codex config schema
 
-`export codex` runs `codex --version` and selects an adapter before reading the
-configuration. The native TOML adapter covers versions from 0.0.0 through the
-checked stable release 0.160.0, retaining historical field names and values.
-Newer 0.x versions (including future 0.x prereleases) warn on stderr and export
-using the existing adapter. Codex 1.0.0 and later, including major-version
-prereleases, require an explicit adapter and fail before configuration reads. This range describes the reader's policy,
-not runtime testing of every historical release; it reads only the configured
-TOML file, not legacy non-TOML or effective layered configuration.
-Detection failures use exit 7 (`CLIENT_VERSION_ERROR`). Tests use a fake Codex
-executable and cover older/current/newer versions, warnings, and detection failures. Version-aware import field validation
-and config writes remain pending. Backup creation is required for the future
-importer and is not implemented in this step.
+Import conversion and export validate MCP entries against
+`schemas/codex-mcp.schema.json`, extracted from the current official Codex config
+schema. Validation is offline and does not require Codex to be installed. Native
+entries preserve supported fields; obsolete inline `bearer_token` and unknown
+fields are rejected without exposing values. Refresh the snapshot deliberately
+when adding support for schema changes. Portable conversion supports STDIO/HTTP;
+the import command and safe filesystem merge are pending.

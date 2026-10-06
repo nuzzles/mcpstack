@@ -11,6 +11,8 @@ pub enum ExportError {
     Config,
     #[error("Codex mcp_servers and each server entry must be tables.")]
     Servers,
+    #[error("MCP server fields do not match the supported current Codex config schema.")]
+    Schema,
     #[error("Exported configuration cannot be represented by stack schema v1.")]
     Stack,
     #[error("Secret selection was cancelled or could not be completed. No stack was exported.")]
@@ -47,6 +49,9 @@ pub fn export_with_decisions(
     };
     if servers.values().any(|server| !server.is_object()) {
         return Err(ExportError::Servers);
+    }
+    if !servers.values().all(crate::adapters::codex::supports) {
+        return Err(ExportError::Schema);
     }
     let definitions: BTreeMap<_, _> = servers
         .into_iter()
@@ -358,16 +363,17 @@ client_secret = "another-fixture-secret"
 
     #[test]
     fn preserves_references_and_disambiguates_generated_names() {
-        let config = r#"
-[mcp_servers.x]
-"api-key" = "first-secret"
-"api_key" = "second-secret"
-pin = 1234
-enabled = true
-[mcp_servers.x.existing]
-"$env" = "MCPSTACK_X_API_KEY"
-"#;
-        let value = serde_json::to_value(export(config, false).unwrap()).unwrap();
+        // Reference preservation is a stack/redaction invariant; reference
+        // objects are not valid literal Codex config fields.
+        let mut stack = StackV1::from_yaml("schema_version: 1\nservers:\n  x:\n    client: codex\n    config:\n      api-key: first-secret\n      api_key: second-secret\n      pin: 1234\n      enabled: true\n      existing: {'$env': MCPSTACK_X_API_KEY}\n").unwrap();
+        let mut names = BTreeSet::new();
+        if let Server::ClientSpecific { config, .. } = &stack.servers["x"] {
+            for value in config.values() {
+                collect_references(value, &mut names);
+            }
+        }
+        visit_credentials(&mut stack, &mut names, &mut |_| Ok(false)).unwrap();
+        let value = serde_json::to_value(stack).unwrap();
         let config = &value["servers"]["x"]["config"];
         assert_eq!(config["existing"]["$env"], "MCPSTACK_X_API_KEY");
         assert_eq!(config["api-key"]["$env"], "MCPSTACK_X_API_KEY_2");
@@ -382,17 +388,19 @@ enabled = true
         let document = r#"
 [mcp_servers.example]
 command = "example"
-url = "https://example.com/mcp"
-bearer_token_env_var = "SERVICE_TOKEN"
+[mcp_servers.example.tools.read]
 output_token_limit = 512
-tokenCount = 12
-tokenBudget = 2048
 [mcp_servers.example.env]
+tokenCount = "12"
+tokenBudget = "2048"
 TOKEN_VALUE = "first-synthetic-secret"
 tokenValue = "second-synthetic-secret"
 GITHUB_TOKEN_RAW = "third-synthetic-secret"
 API_KEY_VALUE = "fourth-synthetic-secret"
 AWS_ACCESS_KEY_ID = "synthetic-key-id"
+[mcp_servers.remote]
+url = "https://example.com/mcp"
+bearer_token_env_var = "SERVICE_TOKEN"
 "#;
         let stack = export(document, false).unwrap();
         let value = serde_json::to_value(&stack).unwrap();
@@ -407,11 +415,12 @@ AWS_ACCESS_KEY_ID = "synthetic-key-id"
             assert!(config["env"][key]["$env"].is_string(), "{key}");
         }
         assert_eq!(config["command"], "example");
-        assert_eq!(config["url"], "https://example.com/mcp");
-        assert_eq!(config["bearer_token_env_var"], "SERVICE_TOKEN");
-        assert_eq!(config["output_token_limit"], 512);
-        assert_eq!(config["tokenCount"], 12);
-        assert_eq!(config["tokenBudget"], 2048);
+        let remote = &value["servers"]["remote"]["config"];
+        assert_eq!(remote["url"], "https://example.com/mcp");
+        assert_eq!(remote["bearer_token_env_var"], "SERVICE_TOKEN");
+        assert_eq!(config["tools"]["read"]["output_token_limit"], 512);
+        assert_eq!(config["env"]["tokenCount"], "12");
+        assert_eq!(config["env"]["tokenBudget"], "2048");
         assert!(!to_yaml(&stack).unwrap().contains("synthetic"));
     }
 
@@ -441,7 +450,6 @@ command = "example"
 [mcp_servers.example.env]
 FIRST_TOKEN = "first-synthetic-secret"
 SECOND_TOKEN = "second-synthetic-secret"
-THIRD_TOKEN = { "$env" = "EXISTING_TOKEN" }
 "#;
         let mut seen = Vec::new();
         let stack = export_with_decisions(document, |path, current, total| {
@@ -464,10 +472,6 @@ THIRD_TOKEN = { "$env" = "EXISTING_TOKEN" }
         assert_eq!(
             value["servers"]["example"]["config"]["env"]["SECOND_TOKEN"],
             "second-synthetic-secret"
-        );
-        assert_eq!(
-            value["servers"]["example"]["config"]["env"]["THIRD_TOKEN"],
-            serde_json::json!({"$env":"EXISTING_TOKEN"})
         );
         assert!(!format!("{seen:?}").contains("synthetic-secret"));
     }

@@ -1,4 +1,5 @@
 //! Stack readers selected by the document's schema version.
+pub mod codex;
 mod v1;
 
 use crate::schema::{StackV1, StackVersion, ValidationError};

@@ -5,9 +5,11 @@ use std::{env, fs};
 use clap::{Args, Subcommand};
 use dialoguer::Select;
 
-use crate::adapters::codex::detect;
 use crate::error::AppError;
-use crate::exporters::{codex::ExportError, to_yaml};
+use crate::exporters::{
+    codex::{ExportError, export, export_with_decisions},
+    to_yaml,
+};
 
 /// Export client server definitions as a YAML stack on stdout.
 #[derive(Args)]
@@ -33,19 +35,15 @@ impl Export {
         match self.client {
             Client::Codex { config } => {
                 tracing::debug!("Exporting Codex MCP configuration");
-                let adapter = detect()?;
-                if let Some(warning) = adapter.warning() {
-                    tracing::warn!("{warning}");
-                }
                 let path = config.or_else(default_config).ok_or(AppError::ConfigPath)?;
                 let document = fs::read_to_string(path).map_err(AppError::ConfigRead)?;
                 let stack = if self.expose_secrets {
-                    adapter.export(&document, true)?
+                    export(&document, true)?
                 } else if non_interactive || !stdin().is_terminal() || !stderr().is_terminal() {
-                    adapter.export(&document, false)?
+                    export(&document, false)?
                 } else {
                     let mut remaining_choice = None;
-                    adapter.export_with_decisions(&document, |path, current, total| {
+                    export_with_decisions(&document, |path, current, total| {
                         if let Some(choice) = remaining_choice {
                             return Ok(choice);
                         }

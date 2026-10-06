@@ -23,10 +23,6 @@ pub enum ErrorCode {
     ConfigReadError = 5,
     #[error("Unable to export client configuration.")]
     ExportError = 6,
-    #[error("Unable to detect the installed client version.")]
-    ClientVersionError = 7,
-    #[error("No adapter supports the installed client major version.")]
-    UnsupportedClientVersion = 8,
     #[error("Unable to initialize logging. Check the log filter.")]
     LoggingError = 9,
 }
@@ -66,8 +62,6 @@ pub enum AppError {
     ConfigPath,
     #[error("{0}")]
     Export(#[from] crate::exporters::codex::ExportError),
-    #[error("{0}")]
-    Adapter(#[from] crate::adapters::codex::AdapterError),
 }
 
 impl AppError {
@@ -80,12 +74,6 @@ impl AppError {
             Self::Stack(_) => ErrorCode::InvalidStack,
             Self::ConfigRead(_) | Self::ConfigPath => ErrorCode::ConfigReadError,
             Self::Export(_) => ErrorCode::ExportError,
-            Self::Adapter(crate::adapters::codex::AdapterError::Detection) => {
-                ErrorCode::ClientVersionError
-            }
-            Self::Adapter(crate::adapters::codex::AdapterError::UnsupportedMajor) => {
-                ErrorCode::UnsupportedClientVersion
-            }
         }
     }
 }

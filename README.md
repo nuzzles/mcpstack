@@ -16,9 +16,9 @@ cargo run
 
 This crate's [Minimum Supported Rust Version (MSRV)][MSRV] is currently **1.98**.
 
-| mcpstack | Minimum Rust version |
-| --- | --- |
-| 0.0.0 (unpublished) | 1.98 |
+| mcpstack | Minimum Rust version | Codex version | Claude Code version |
+| --- | --- | --- | --- |
+| 0.0.0 (unpublished) | 1.98 | < 1.0 | Unsupported |
 
 See [CONTRIBUTING.md](CONTRIBUTING.md#changing-the-msrv) for how to change
 the MSRV.
