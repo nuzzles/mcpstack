@@ -242,7 +242,7 @@ fn validation_reports_safe_typed_errors_and_missing_arguments() {
 }
 
 #[test]
-fn native_validation_reports_adapter_boundary_without_executing_helpers() {
+fn native_validation_preserves_inputs_without_executing_helpers() {
     let document = r#"{
         "schema_version":1,
         "servers":{"native":{
@@ -258,7 +258,7 @@ fn native_validation_reports_adapter_boundary_without_executing_helpers() {
     let output = fixture.validate();
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout).unwrap();
-    assert!(text.contains("require client adapter validation"));
+    assert_eq!(text, "Valid stack (schema 1, 1 servers).\n");
     assert!(!text.contains("MCPSTACK_MISSING_TEST_TOKEN"));
     assert_eq!(std::fs::read_to_string(&fixture.file).unwrap(), document);
     assert_eq!(
