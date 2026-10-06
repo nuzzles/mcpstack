@@ -924,16 +924,12 @@ fn import_requires_explicit_approval_without_a_terminal() {
 }
 
 #[test]
-fn masked_import_previews_missing_values_but_rejects_unattended_writes() {
+fn masked_import_rejects_missing_values_without_interactive_input() {
     let fixture = StackFixture::new(
         "schema_version: 1\nservers:\n  process:\n    client: codex\n    config:\n      command: tool\n      args: [{'$env': MCPSTACK_MASKED_SECRET}]\n      env: {API_KEY: {'$env': MCPSTACK_MASKED_SECRET}}\n  remote:\n    client: codex\n    config:\n      url: {'$env': MCPSTACK_MASKED_ENDPOINT}\n      oauth: {client_id: test-client, client_secret: {'$env': MCPSTACK_MASKED_SECRET}}\n",
     );
     let config = fixture.directory.path().join("config.toml");
-    for (flag, success) in [
-        ("--dry-run", true),
-        ("-y", false),
-        ("--auto-approve", false),
-    ] {
+    for flag in ["--dry-run", "-y", "--auto-approve"] {
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
             .args(["import", "codex", flag])
             .arg(&fixture.file)
@@ -945,25 +941,13 @@ fn masked_import_previews_missing_values_but_rejects_unattended_writes() {
             .stdin(Stdio::null())
             .output()
             .unwrap();
-        assert_eq!(output.status.success(), success, "{output:?}");
+        assert!(!output.status.success(), "{output:?}");
         let diagnostics = String::from_utf8_lossy(&output.stderr);
         assert!(diagnostics.contains("WARN"));
         assert!(diagnostics.contains("MCPSTACK_MASKED_SECRET"));
-        if success {
-            let diff = String::from_utf8_lossy(&output.stdout);
-            assert!(diff.contains("+[mcp_servers.process]"));
-            assert!(diff.contains("<unresolved: MCPSTACK_MASKED_ENDPOINT>"));
-            assert!(!diff.contains("unresolved.invalid"));
-            assert_eq!(
-                diagnostics
-                    .matches("Environment variable MCPSTACK_MASKED_SECRET ")
-                    .count(),
-                1
-            );
-        } else {
-            assert_eq!(output.status.code(), Some(10));
-            assert!(diagnostics.contains("interactive import"));
-        }
+        assert_eq!(output.status.code(), Some(10));
+        assert!(diagnostics.contains("interactive import"));
+        assert!(output.stdout.is_empty());
         assert!(!config.exists());
         assert!(!fixture.directory.path().join("config.toml.bak").exists());
     }
@@ -1044,7 +1028,7 @@ fn dry_run_shows_redacted_conflicts_without_overwriting_existing_config() {
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
-            .env_remove("MCPSTACK_CONFLICT_SECRET")
+            .env("MCPSTACK_CONFLICT_SECRET", "new-api-secret")
             .env_remove("RUST_LOG")
             .stdin(Stdio::null())
             .output()
@@ -1128,5 +1112,52 @@ fn import_diff_color_honors_modes_environment_and_no_color() {
         } else {
             assert_eq!(text.as_bytes(), plain.stdout);
         }
+    }
+}
+
+#[test]
+fn dry_run_compares_real_secrets_and_marks_only_changed_lines() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config:\n      url: https://example.com/mcp\n      http_headers: {Authorization: {'$env': MCPSTACK_COMPARE_SECRET}}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    let original = "[mcp_servers.shared]\nurl='https://example.com/mcp'\n[mcp_servers.shared.http_headers]\nAuthorization='existing-fixture-secret'\n";
+    std::fs::write(&config, original).unwrap();
+    for (value, changed) in [
+        ("existing-fixture-secret", false),
+        ("new-fixture-secret", true),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["import", "codex", "--dry-run"])
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .env("MCPSTACK_COMPARE_SECRET", value)
+            .env_remove("RUST_LOG")
+            .env_remove("MCPSTACK_COLOR")
+            .env_remove("NO_COLOR")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let diff = String::from_utf8_lossy(&output.stdout);
+        if changed {
+            assert!(diff.contains("-Authorization = \"<redacted>\""));
+            assert!(diff.contains("+Authorization = \"<redacted: changed>\""));
+            assert!(!diff.contains("-url ="));
+            assert!(!diff.contains("+url ="));
+            assert!(!diff.contains("-[mcp_servers.shared.http_headers]"));
+            assert!(!diff.contains("+[mcp_servers.shared.http_headers]"));
+        } else {
+            assert!(diff.contains("No changes"));
+            assert!(!diff.contains("@@"));
+            assert!(output.stderr.is_empty());
+        }
+        for secret in ["existing-fixture-secret", "new-fixture-secret"] {
+            assert!(!diff.contains(secret));
+            assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+        }
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+        assert!(!fixture.directory.path().join("config.toml.bak").exists());
     }
 }

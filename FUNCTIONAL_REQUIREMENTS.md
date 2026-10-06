@@ -143,8 +143,10 @@ printed on stdout.
 Codex import shows redacted per-server diffs and requires approval for each new
 server, with import/skip-all choices for the remaining servers. All choices finish
 before any writes. `--auto-approve` (`-y`) approves all additions without prompting;
-`--dry-run` prints only the proposed diffs and never writes or prompts, even with
-`-y`. Noninteractive imports require `-y` or `--dry-run` when changes are needed.
+`--dry-run` prints the proposed diffs without writing files or asking for write
+approval. It still asks for missing masked values in interactive terminals, even
+with `-y`, so comparisons always use real values. Noninteractive imports require
+`-y` or `--dry-run` when changes are needed.
 
 ### Claude support
 
@@ -176,9 +178,9 @@ Transactional mode must not silently commit a partially installed stack.
 [*] Masked `$env` references in literal fields use values from the importing
 shell or hidden interactive input. Missing values reject unattended imports,
 including `--auto-approve`; it approves writes without supplying secrets.
-Dry-run never prompts: unresolved references appear as preview placeholders with
-warnings and are never written. Secret input is cached per variable and redacted
-from previews. Native `env_vars`, `bearer_token_env_var`, and `env_http_headers`
+Dry-run also asks for missing masked values with hidden input; unattended
+previews reject missing values instead of comparing placeholders. Secret input
+is cached per variable and redacted from previews. Native `env_vars`, `bearer_token_env_var`, and `env_http_headers`
 retain their runtime bindings without reading or embedding their values; missing
 local bindings warn without blocking approval. No native-field conversion is
 performed for masked references. Phase 2 adds secret providers.
@@ -286,7 +288,8 @@ safe filesystem writes currently support Unix only.
 secrets and validates against the bundled MCP schema without running Codex.
 It preserves unrelated settings, comments, and servers, skips identical
 definitions, and rejects differing entries. Redacted section-level unified diffs
-show every proposed addition before approvals. Dry-run also previews conflicting
+show changed lines with unchanged context before approvals. Known secret changes
+are displayed as `<redacted: changed>` without revealing values. Dry-run also previews conflicting
 sections with warnings; actual imports still reject conflicts. The preview is for review, not an
 patch for automatic application. Literal credentials recognized by export and all resolved or entered
 reference values are masked; unrelated existing config is never printed.

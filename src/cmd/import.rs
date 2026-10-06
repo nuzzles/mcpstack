@@ -14,7 +14,7 @@ use crate::schema::Stack;
 /// Preview and approve server additions without installing server software.
 #[derive(Args)]
 pub struct Import {
-    /// Print redacted per-server diffs without changing any files or prompting.
+    /// Preview redacted diffs without writing files; ask for missing masked values.
     #[arg(long, global = true)]
     dry_run: bool,
     /// Approve all server additions without prompting.
@@ -53,12 +53,11 @@ impl Import {
                 let stack = Stack::from_yaml(&document)?;
                 let mut resolver = SecretResolver {
                     dry_run: self.dry_run,
-                    interactive: !self.auto_approve
+                    interactive: (self.dry_run || !self.auto_approve)
                         && !non_interactive
                         && stdin().is_terminal()
                         && stderr().is_terminal(),
                     values: BTreeMap::new(),
-                    unresolved: BTreeSet::new(),
                     cancelled: false,
                 };
                 let prepared = match &stack {
@@ -73,7 +72,7 @@ impl Import {
                     for (name, (existing, _)) in &changes {
                         if existing.is_some() {
                             tracing::warn!(
-                                "Server {name:?} differs from the existing configuration; actual import requires this conflict to be resolved. Unresolved preview values may affect this comparison."
+                                "Server {name:?} differs from the existing configuration; actual import requires this conflict to be resolved."
                             );
                         }
                     }
@@ -85,28 +84,17 @@ impl Import {
                     snapshot.additions(&definitions)?
                 };
                 warn_runtime_bindings(&additions);
-                let secrets: Vec<_> = resolver
-                    .values
-                    .iter()
-                    .filter(|(name, _)| !resolver.unresolved.contains(*name))
-                    .filter_map(|(_, value)| value.clone())
-                    .collect();
+                let secrets: Vec<_> = resolver.values.values().flatten().cloned().collect();
                 let diffs: BTreeMap<_, _> = additions
                     .iter()
                     .map(|(name, definition)| {
-                        let mut diff = server_diff(
+                        let diff = server_diff(
                             &path,
                             name,
                             changes[name].0.as_ref(),
                             definition,
                             &secrets,
                         )?;
-                        for variable in &resolver.unresolved {
-                            diff = diff.replace(
-                                &format!("https://unresolved.invalid/{variable}"),
-                                &format!("<unresolved: {variable}>"),
-                            );
-                        }
                         Ok((name.clone(), diff))
                     })
                     .collect::<Result<_, AppError>>()?;
@@ -192,13 +180,12 @@ fn write_diff(output: &mut impl Write, diff: &str, colored: bool) -> std::io::Re
     Ok(())
 }
 
-/// Cache each reference so repeated uses ask only once. Preview sentinels are
-/// confined to dry-run: that path returns before backup or file writes.
+/// Cache each reference so repeated uses ask only once. All comparisons use
+/// real values; dry-run never proceeds to backup or file writes.
 struct SecretResolver {
     dry_run: bool,
     interactive: bool,
     values: BTreeMap<String, Option<String>>,
-    unresolved: BTreeSet<String>,
     cancelled: bool,
 }
 
@@ -217,16 +204,15 @@ impl SecretResolver {
             tracing::warn!(
                 "Environment variable {name} is unset or unusable; this masked field needs a value before import."
             );
-            if self.dry_run {
-                self.unresolved.insert(name.into());
-                // A valid URL also passes string-only command/argument/header
-                // validation. It is never written or executed.
-                value = Some(format!("https://unresolved.invalid/{name}"));
-            } else if self.interactive {
+            if self.interactive {
                 match Password::new()
-                    .with_prompt(format!(
-                        "Enter secret for {name} (written as a literal in config)"
-                    ))
+                    .with_prompt(if self.dry_run {
+                        format!(
+                            "Enter secret for {name} (comparison only; no files will be written)"
+                        )
+                    } else {
+                        format!("Enter secret for {name} (written as a literal in config)")
+                    })
                     .report(false)
                     .validate_with(|value: &String| {
                         if value.contains('\0') {
@@ -322,43 +308,76 @@ fn server_diff(
     secrets: &[String],
 ) -> Result<String, AppError> {
     let before = existing
-        .map(|table| render_server(name, table, secrets))
+        .map(|table| render_server(name, table, None, secrets))
         .transpose()?
         .unwrap_or_default();
-    let after = render_server(name, definition, secrets)?;
+    let after = render_server(name, definition, existing, secrets)?;
+    let label = format!("{} (mcp_servers.{name})", path.display());
     let old_label = if existing.is_some() {
-        format!("{} (mcp_servers.{name})", path.display())
+        &label
     } else {
-        "/dev/null".into()
+        "/dev/null"
     };
-    let old_count = before.lines().count();
-    let mut diff = format!(
-        "--- {old_label}\n+++ {} (mcp_servers.{name})\n@@ -{},{} +1,{} @@\n",
-        path.display(),
-        usize::from(old_count != 0),
-        old_count,
-        after.lines().count()
-    );
-    for (prefix, text) in [('-', before.as_str()), ('+', after.as_str())] {
-        for line in text.lines() {
-            diff.push(prefix);
-            diff.push_str(line);
-            diff.push('\n');
-        }
-    }
-    Ok(diff)
+    Ok(similar::TextDiff::from_lines(&before, &after)
+        .unified_diff()
+        .context_radius(2)
+        .header(old_label, &label)
+        .to_string())
 }
 
 fn render_server(
     name: &str,
     definition: &toml::Table,
+    existing: Option<&toml::Table>,
     secrets: &[String],
 ) -> Result<String, AppError> {
     let mut config = crate::exporters::codex::mask_for_preview(name, definition)?;
     redact_references(&mut config);
     redact_resolved(&mut config, secrets);
+    let source = serde_json::to_value(definition)
+        .map_err(|_| crate::importers::codex::ImportError::Definition)?;
+    let previous = existing
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|_| crate::importers::codex::ImportError::Definition)?;
+    annotate_preview(&mut config, &source, previous.as_ref());
     toml::to_string(&serde_json::json!({"mcp_servers": {name: config}}))
         .map_err(|_| crate::importers::codex::ImportError::Definition.into())
+}
+
+/// Mark known hidden value changes without exposing the value, length, or hash.
+fn annotate_preview(
+    masked: &mut serde_json::Value,
+    source: &serde_json::Value,
+    previous: Option<&serde_json::Value>,
+) {
+    if masked.as_str() == Some("<redacted>") {
+        if previous.is_some_and(|previous| previous != source) {
+            *masked = "<redacted: changed>".into();
+        }
+    } else {
+        match masked {
+            serde_json::Value::Object(values) => {
+                for (key, value) in values {
+                    if let Some(source) = source.get(key) {
+                        annotate_preview(value, source, previous.and_then(|value| value.get(key)));
+                    }
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for (index, value) in values.iter_mut().enumerate() {
+                    if let Some(source) = source.get(index) {
+                        annotate_preview(
+                            value,
+                            source,
+                            previous.and_then(|value| value.get(index)),
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn redact_resolved(value: &mut serde_json::Value, secrets: &[String]) {
