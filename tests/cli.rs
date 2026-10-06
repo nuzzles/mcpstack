@@ -850,7 +850,7 @@ fn import_dry_run_is_read_only_redacted_and_available_without_a_terminal() {
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
-            .arg("-y") // dry-run takes precedence over approval
+            .arg("-y") // approve unattended previews
             .env("MCPSTACK_PREVIEW_ARGUMENT", "arbitrary-preview-secret")
             .env_remove("RUST_LOG")
             .stdin(Stdio::null())
@@ -884,7 +884,7 @@ fn import_dry_run_is_read_only_redacted_and_available_without_a_terminal() {
     }
     std::fs::remove_file(&backup).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["import", "codex", "--dry-run"])
+        .args(["import", "codex", "--dry-run", "-y"])
         .arg(&fixture.file)
         .arg("--config")
         .arg(&config)
@@ -903,13 +903,16 @@ fn import_requires_explicit_approval_without_a_terminal() {
         "schema_version: 1\nservers:\n  new:\n    client: codex\n    config: {command: tool}\n",
     );
     let config = fixture.directory.path().join("config.toml");
-    for non_interactive in [false, true] {
+    for (non_interactive, dry_run) in [(false, false), (true, false), (false, true), (true, true)] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
         if non_interactive {
             command.arg("--non-interactive");
         }
+        command.args(["import", "codex"]);
+        if dry_run {
+            command.arg("--dry-run");
+        }
         let output = command
-            .args(["import", "codex"])
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
@@ -932,7 +935,12 @@ fn masked_import_rejects_missing_values_without_interactive_input() {
     let config = fixture.directory.path().join("config.toml");
     for flag in ["--dry-run", "-y", "--auto-approve"] {
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["import", "codex", flag])
+            .args(["import", "codex"])
+            .args(if flag == "--dry-run" {
+                vec![flag, "-y"]
+            } else {
+                vec![flag]
+            })
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
@@ -985,7 +993,12 @@ fn native_runtime_bindings_are_preserved_without_resolving_values() {
     let config = fixture.directory.path().join("config.toml");
     let execute = |flag| {
         Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["import", "codex", flag])
+            .args(["import", "codex"])
+            .args(if flag == "--dry-run" {
+                vec![flag, "-y"]
+            } else {
+                vec![flag]
+            })
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
@@ -1048,7 +1061,12 @@ fn dry_run_shows_redacted_conflicts_without_overwriting_existing_config() {
     std::fs::write(&config, original).unwrap();
     let execute = |flag| {
         Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["import", "codex", flag])
+            .args(["import", "codex"])
+            .args(if flag == "--dry-run" {
+                vec![flag, "-y"]
+            } else {
+                vec![flag]
+            })
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
@@ -1113,7 +1131,7 @@ fn import_diff_color_honors_modes_environment_and_no_color() {
     let execute = |flags: &[&str], mode: Option<&str>, no_color: Option<&str>| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
         command
-            .args(["import", "codex", "--dry-run"])
+            .args(["import", "codex", "--dry-run", "-y"])
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
@@ -1171,7 +1189,7 @@ fn dry_run_compares_real_secrets_and_marks_only_changed_lines() {
         ("new-fixture-secret", true),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["import", "codex", "--dry-run"])
+            .args(["import", "codex", "--dry-run", "-y"])
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)

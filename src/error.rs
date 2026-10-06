@@ -71,7 +71,7 @@ pub enum AppError {
     #[error("{0}")]
     Import(#[from] crate::importers::codex::ImportError),
     #[error(
-        "Import approval requires a terminal. Use --auto-approve (-y) to write or --dry-run to preview."
+        "Import approval requires a terminal or --auto-approve (-y), including during dry-run."
     )]
     ImportApprovalRequired,
     #[error(

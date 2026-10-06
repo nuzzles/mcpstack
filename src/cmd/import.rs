@@ -14,7 +14,7 @@ use crate::schema::Stack;
 /// Preview and approve server additions and replacements.
 #[derive(Args)]
 pub struct Import {
-    /// Preview redacted diffs without writing files; ask for missing masked values.
+    /// Preview and approve changes without writing files; prompts still apply.
     #[arg(long, global = true)]
     dry_run: bool,
     /// Approve all server additions and replacements without prompting.
@@ -128,10 +128,7 @@ impl Import {
                     )?;
                     return Ok(());
                 }
-                if !self.dry_run
-                    && !self.auto_approve
-                    && (non_interactive || !stdin().is_terminal() || !stderr().is_terminal())
-                {
+                if !self.auto_approve && !interactive {
                     return Err(AppError::ImportApprovalRequired);
                 }
                 // Show the whole proposal before even a bulk approval choice.
@@ -139,9 +136,6 @@ impl Import {
                     write_diff(output, diff, colored)?;
                 }
                 output.flush()?;
-                if self.dry_run {
-                    return Ok(());
-                }
                 let approved = if self.auto_approve {
                     additions
                 } else {
@@ -172,6 +166,10 @@ impl Import {
                         output,
                         "No servers approved; client configuration was not changed."
                     )?;
+                    return Ok(());
+                }
+                if self.dry_run {
+                    writeln!(output, "Would import {} server(s).", approved.len())?;
                     return Ok(());
                 }
                 // Check that the target still matches the snapshot before
