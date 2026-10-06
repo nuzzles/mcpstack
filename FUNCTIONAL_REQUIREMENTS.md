@@ -15,9 +15,9 @@ to its entry in Current status at the bottom.\
 | --- | --- |
 | Done | Read MCP server entries from the default Codex config for export. [*](#codex-export) |
 | Done | Read MCP config at an explicit path for export. |
-| Unsupported | Write MCP config at the default or an explicit path for import. |
+| Partial [*](#codex-import) | Write MCP config at the default or an explicit path for import. |
 | Done | Validate MCP fields against the bundled current Codex config schema; reject obsolete or unknown fields. [*](#codex-config-schema) |
-| Unsupported | On import, preserve unrelated settings/servers; skip identical entries and reject differing ones. |
+| Done | On import, preserve unrelated settings/servers; skip identical entries and reject differing ones. |
 
 ### Logging and ANSI
 
@@ -43,10 +43,10 @@ to its entry in Current status at the bottom.\
 | Done | Validate schema versions, server definitions, names, and secret references. |
 | Done | Export Codex server entries as a YAML stack to stdout with safe defaults. [*](#codex-export) |
 | Done | Replace recognized credentials with secret references by default; allow interactive selections or `--expose-secrets` to include values. |
-| Unsupported | Import/merge a stack into Codex without losing supported fields. [*](#phase-1-boundaries) |
-| Unsupported | Resolve secret references from environment variables; reject missing values. [*](#secrets) |
-| Unsupported | Create a `.bak` copy of the target config before beginning import; abort if backup creation fails. |
-| Unsupported | Atomic config writes with restrictive permissions; preserve originals on failure. |
+| Partial [*](#codex-import) | Import/merge a stack into Codex without losing supported fields. [*](#phase-1-boundaries) |
+| Done | Resolve secret references from environment variables; reject missing values. [*](#secrets) |
+| Partial [*](#codex-import) | Create a `.bak` copy of the target config before beginning import; abort if backup creation fails. |
+| Partial [*](#codex-import) | Atomic config writes with restrictive permissions; preserve originals on failure. |
 | Partial [*](#stack-workflow-tests) | Test round trips, repeat imports, config schema compatibility, missing secrets, and write failures. |
 
 ## Phase 2
@@ -187,8 +187,8 @@ scope. Publishing and release/deployment automation require explicit authorizati
 
 ### Commands and help
 
-Help, version, `--schema`, `validate <file>`, `export codex`, and runnable help
-examples are implemented. Import commands are pending.
+Help, version, `--schema`, `validate <file>`, `export codex`, `import codex <file>`, and runnable help
+examples are implemented.
 
 ### Exit statuses and error codes
 
@@ -198,7 +198,9 @@ failures (`STACK_READ_ERROR`), and 4 for invalid stacks (`INVALID_STACK`).
 Config read failures use 5 (`CONFIG_READ_ERROR`); export failures use 6
 (`EXPORT_ERROR`). Logging initialization/filter failures use exit 9
 (`LOGGING_ERROR`). Removed client-version statuses 7 and 8 are not reused.
-Import errors are pending.
+Import failures use 10 (`IMPORT_ERROR`), backup failures use 11 (`BACKUP_ERROR`),
+conflicts use 12 (`IMPORT_CONFLICT`), and safe-write failures use 13
+(`CONFIG_WRITE_ERROR`).
 
 ### Deterministic output
 
@@ -219,8 +221,8 @@ Stack serialization round trips, client-independent documents, reference syntax,
 unsupported shared fields, native client fields and secret references, transport
 URL schemes, validation file preservation, and CLI output failures are
 covered. Current Codex schema validation and export without a Codex installation
-are also covered. Repeat imports, missing secret resolution, and atomic configuration
-write failures are pending.
+are also covered. Repeat imports, secret resolution, backups, atomic writes, and failure
+preservation are covered on Unix; other platforms reject import safely.
 
 
 ### Codex export
@@ -260,4 +262,16 @@ schema. Validation is offline and does not require Codex to be installed. Native
 entries preserve supported fields; obsolete inline `bearer_token` and unknown
 fields are rejected without exposing values. Refresh the snapshot deliberately
 when adding support for schema changes. Portable conversion supports STDIO/HTTP;
-the import command and safe filesystem merge are pending.
+safe filesystem writes currently support Unix only.
+
+### Codex import
+
+`import codex <file> [--config <path>]` resolves secrets and validates against the
+bundled current MCP schema without finding or running Codex. It preserves
+unrelated settings, comments, and servers, skips identical definitions, and
+rejects differing entries. A private sibling `.bak` is created before processing;
+an existing backup must be moved aside explicitly. The original is checked for
+changes before atomic replacement using a synced private temporary file. Native
+entries retain all supported schema fields. Private writes support Unix only;
+other platforms reject import before processing. A final check/rename race with
+external editors remains; avoid concurrent editing.

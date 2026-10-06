@@ -111,7 +111,6 @@ fn native(
 
 /// Convert every server before any writes. The caller supplies secret lookup,
 /// allowing tests to avoid mutating process-global environment variables.
-#[allow(dead_code, reason = "foundation for the stacked import CLI PR")]
 pub fn prepare(
     stack: &StackV1,
     mut lookup: impl FnMut(&str) -> Option<String>,
