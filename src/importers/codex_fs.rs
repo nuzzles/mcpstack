@@ -1,4 +1,4 @@
-//! Backup-first, preserving, atomic Codex config merges.
+//! Optional private backups and atomic Codex config merges.
 use std::collections::BTreeMap;
 use std::fs;
 #[cfg(unix)]
@@ -15,15 +15,11 @@ pub enum FileError {
         "Cannot create private backup at the chosen path. Choose an unused file path and check permissions. Import was not processed."
     )]
     Backup,
-    #[error("Invalid target TOML or mcp_servers table. Original config and backup are unchanged.")]
+    #[error("Invalid target TOML or mcp_servers table. Client configuration was not changed.")]
     Config,
-    #[error(
-        "The target changed during import. No config changes were written; retry with a fresh backup."
-    )]
+    #[error("The target changed during import. No config changes were written; retry the import.")]
     Changed,
-    #[error(
-        "Unable to write config atomically. The original config and private backup remain available."
-    )]
+    #[error("Unable to write config atomically. The original config was not replaced.")]
     Write,
     #[error(
         "Private config writes currently require Unix permissions. This platform is not supported for import."
@@ -38,6 +34,18 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// Guard every write path, including imports that decline a backup.
+    pub fn ensure_write_supported(&self) -> Result<(), FileError> {
+        #[cfg(unix)]
+        {
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            Err(FileError::Platform)
+        }
+    }
+
     /// Read a plan snapshot without creating files, including on non-Unix hosts.
     pub fn read(path: &Path) -> Result<Self, FileError> {
         Ok(Self {
@@ -129,7 +137,7 @@ impl Snapshot {
         }
     }
 
-    /// Compare without writes so dry-run can show conflicts as well as additions.
+    /// Compare additions and replacements without writes.
     pub fn preview(
         &self,
         definitions: &BTreeMap<String, toml::Table>,
@@ -198,6 +206,7 @@ impl Snapshot {
     }
 
     pub fn apply(self, definitions: &BTreeMap<String, toml::Table>) -> Result<usize, FileError> {
+        self.ensure_write_supported()?;
         let (added, document) = self.proposal(definitions)?;
         self.check_unchanged()?;
         if added == 0 {
@@ -532,5 +541,25 @@ mod tests {
             fs::read_to_string(path.with_extension("toml.~1~")).unwrap(),
             "# original"
         );
+    }
+}
+
+#[cfg(all(test, not(unix)))]
+mod platform_tests {
+    use super::*;
+
+    #[test]
+    fn apply_without_backup_refuses_unsupported_private_writes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        let original = "# original\n";
+        fs::write(&path, original).unwrap();
+        let snapshot = Snapshot::read(&path).unwrap();
+        let definitions =
+            BTreeMap::from([("added".into(), toml::from_str("command='tool'").unwrap())]);
+        assert_eq!(snapshot.ensure_write_supported(), Err(FileError::Platform));
+        assert_eq!(snapshot.apply(&definitions), Err(FileError::Platform));
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 }
