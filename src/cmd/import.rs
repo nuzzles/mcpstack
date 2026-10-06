@@ -1,10 +1,10 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write, stderr, stdin};
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
 use clap::{Args, Subcommand};
-use dialoguer::Select;
+use dialoguer::{Password, Select};
 
 use crate::error::AppError;
 use crate::importers::codex::prepare;
@@ -46,24 +46,63 @@ impl Import {
                 let snapshot = Snapshot::read(&path)?;
                 let document = fs::read_to_string(file).map_err(AppError::StackRead)?;
                 let stack = Stack::from_yaml(&document)?;
-                let mut secrets = Vec::new();
-                let definitions = match &stack {
-                    Stack::V1(stack) => prepare(stack, |name| {
-                        let value = env::var(name).ok();
-                        if let Some(value) = &value {
-                            secrets.push(value.clone());
-                        }
-                        value
-                    })?,
+                let mut resolver = SecretResolver {
+                    dry_run: self.dry_run,
+                    interactive: !self.auto_approve
+                        && !non_interactive
+                        && stdin().is_terminal()
+                        && stderr().is_terminal(),
+                    values: BTreeMap::new(),
+                    unresolved: BTreeSet::new(),
+                    cancelled: false,
                 };
-                let additions = snapshot.additions(&definitions)?;
+                let prepared = match &stack {
+                    Stack::V1(stack) => prepare(stack, |name| resolver.resolve(name)),
+                };
+                if resolver.cancelled {
+                    return Err(AppError::ImportApprovalCancelled);
+                }
+                let definitions = prepared?;
+                let changes = snapshot.preview(&definitions)?;
+                let additions = if self.dry_run {
+                    for (name, (existing, _)) in &changes {
+                        if existing.is_some() {
+                            tracing::warn!(
+                                "Server {name} differs from the existing configuration; actual import requires this conflict to be resolved. Unresolved preview values may affect this comparison."
+                            );
+                        }
+                    }
+                    changes
+                        .iter()
+                        .map(|(name, (_, definition))| (name.clone(), definition.clone()))
+                        .collect()
+                } else {
+                    snapshot.additions(&definitions)?
+                };
+                warn_runtime_bindings(&additions);
+                let secrets: Vec<_> = resolver
+                    .values
+                    .iter()
+                    .filter(|(name, _)| !resolver.unresolved.contains(*name))
+                    .filter_map(|(_, value)| value.clone())
+                    .collect();
                 let diffs: BTreeMap<_, _> = additions
                     .iter()
                     .map(|(name, definition)| {
-                        Ok((
-                            name.clone(),
-                            server_diff(&path, name, definition, &secrets)?,
-                        ))
+                        let mut diff = server_diff(
+                            &path,
+                            name,
+                            changes[name].0.as_ref(),
+                            definition,
+                            &secrets,
+                        )?;
+                        for variable in &resolver.unresolved {
+                            diff = diff.replace(
+                                &format!("https://unresolved.invalid/{variable}"),
+                                &format!("<unresolved: {variable}>"),
+                            );
+                        }
+                        Ok((name.clone(), diff))
                     })
                     .collect::<Result<_, AppError>>()?;
                 if additions.is_empty() {
@@ -124,6 +163,103 @@ impl Import {
     }
 }
 
+/// Cache each reference so repeated uses ask only once. Preview sentinels are
+/// confined to dry-run: that path returns before backup or file writes.
+struct SecretResolver {
+    dry_run: bool,
+    interactive: bool,
+    values: BTreeMap<String, Option<String>>,
+    unresolved: BTreeSet<String>,
+    cancelled: bool,
+}
+
+impl SecretResolver {
+    fn resolve(&mut self, name: &str) -> Option<String> {
+        if self.cancelled {
+            return None;
+        }
+        if let Some(value) = self.values.get(name) {
+            return value.clone();
+        }
+        let mut value = env::var(name)
+            .ok()
+            .filter(|value| !value.is_empty() && !value.contains('\0'));
+        if value.is_none() {
+            tracing::warn!(
+                "Environment variable {name} is unset or unusable; this masked field needs a value before import."
+            );
+            if self.dry_run {
+                self.unresolved.insert(name.into());
+                // A valid URL also passes string-only command/argument/header
+                // validation. It is never written or executed.
+                value = Some(format!("https://unresolved.invalid/{name}"));
+            } else if self.interactive {
+                match Password::new()
+                    .with_prompt(format!(
+                        "Enter secret for {name} (written as a literal in config)"
+                    ))
+                    .report(false)
+                    .validate_with(|value: &String| {
+                        if value.contains('\0') {
+                            Err("Value must not contain NUL")
+                        } else {
+                            Ok(())
+                        }
+                    })
+                    .interact()
+                {
+                    Ok(secret) => value = Some(secret),
+                    Err(_) => self.cancelled = true,
+                }
+            }
+        }
+        self.values.insert(name.into(), value.clone());
+        value
+    }
+}
+
+fn warn_runtime_bindings(additions: &BTreeMap<String, toml::Table>) {
+    let mut names = BTreeSet::new();
+    for definition in additions.values() {
+        if let Some(name) = definition
+            .get("bearer_token_env_var")
+            .and_then(toml::Value::as_str)
+        {
+            names.insert(name);
+        }
+        if let Some(headers) = definition
+            .get("env_http_headers")
+            .and_then(toml::Value::as_table)
+        {
+            names.extend(headers.values().filter_map(toml::Value::as_str));
+        }
+        if let Some(variables) = definition.get("env_vars").and_then(toml::Value::as_array) {
+            names.extend(
+                variables
+                    .iter()
+                    .filter(|value| {
+                        value.get("source").and_then(toml::Value::as_str) != Some("remote")
+                    })
+                    .filter_map(|value| {
+                        value
+                            .as_str()
+                            .or_else(|| value.get("name").and_then(toml::Value::as_str))
+                    }),
+            );
+        }
+    }
+    for name in names {
+        if env::var(name)
+            .ok()
+            .is_none_or(|value| value.is_empty() || value.contains('\0'))
+        {
+            tracing::warn!(
+                "Runtime environment variable {name} is unset or unusable in this shell. Import may not work as intended until it is available to Codex; its binding will be preserved."
+            );
+        }
+    }
+}
+
 fn select_servers(
     additions: BTreeMap<String, toml::Table>,
     mut choose: impl FnMut(&str, usize, usize) -> Result<usize, AppError>,
@@ -148,39 +284,52 @@ fn select_servers(
     Ok(approved)
 }
 
-/// Diff only the new server section, so unrelated private config never reaches
-/// output. References and recognized literal credentials are redacted.
+/// Section-level unified preview; include no unrelated private config.
 fn server_diff(
     path: &Path,
+    name: &str,
+    existing: Option<&toml::Table>,
+    definition: &toml::Table,
+    secrets: &[String],
+) -> Result<String, AppError> {
+    let before = existing
+        .map(|table| render_server(name, table, secrets))
+        .transpose()?
+        .unwrap_or_default();
+    let after = render_server(name, definition, secrets)?;
+    let old_label = if existing.is_some() {
+        format!("{} (mcp_servers.{name})", path.display())
+    } else {
+        "/dev/null".into()
+    };
+    let old_count = before.lines().count();
+    let mut diff = format!(
+        "--- {old_label}\n+++ {} (mcp_servers.{name})\n@@ -{},{} +1,{} @@\n",
+        path.display(),
+        usize::from(old_count != 0),
+        old_count,
+        after.lines().count()
+    );
+    for (prefix, text) in [('-', before.as_str()), ('+', after.as_str())] {
+        for line in text.lines() {
+            diff.push(prefix);
+            diff.push_str(line);
+            diff.push('\n');
+        }
+    }
+    Ok(diff)
+}
+
+fn render_server(
     name: &str,
     definition: &toml::Table,
     secrets: &[String],
 ) -> Result<String, AppError> {
-    let native = serde_json::to_value(definition)
-        .map_err(|_| crate::importers::codex::ImportError::Definition)?;
-    let config = toml::to_string(&serde_json::json!({"mcp_servers": {name: native}}))
-        .map_err(|_| crate::importers::codex::ImportError::Definition)?;
-    let masked = crate::exporters::codex::export(&config, false)?;
-    let mut value = serde_json::to_value(&masked)
-        .map_err(|_| crate::importers::codex::ImportError::Definition)?;
-    redact_references(&mut value);
-    let config = &mut value["servers"][name]["config"];
-    redact_resolved(config, secrets);
-    let rendered = toml::to_string(&serde_json::json!({"mcp_servers": {name: config}}))
-        .map_err(|_| crate::importers::codex::ImportError::Definition)?;
-    // Section-level unified diff: imports only add missing servers, never
-    // overwrite existing definitions. This is a review preview, not a patch.
-    let mut diff = format!(
-        "--- /dev/null\n+++ {} (mcp_servers.{name})\n@@ -0,0 +1,{} @@\n",
-        path.display(),
-        rendered.lines().count()
-    );
-    for line in rendered.lines() {
-        diff.push('+');
-        diff.push_str(line);
-        diff.push('\n');
-    }
-    Ok(diff)
+    let mut config = crate::exporters::codex::mask_for_preview(name, definition)?;
+    redact_references(&mut config);
+    redact_resolved(&mut config, secrets);
+    toml::to_string(&serde_json::json!({"mcp_servers": {name: config}}))
+        .map_err(|_| crate::importers::codex::ImportError::Definition.into())
 }
 
 fn redact_resolved(value: &mut serde_json::Value, secrets: &[String]) {

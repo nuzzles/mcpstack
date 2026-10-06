@@ -922,3 +922,156 @@ fn import_requires_explicit_approval_without_a_terminal() {
         assert!(!fixture.directory.path().join("config.toml.bak").exists());
     }
 }
+
+#[test]
+fn masked_import_previews_missing_values_but_rejects_unattended_writes() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  process:\n    client: codex\n    config:\n      command: tool\n      args: [{'$env': MCPSTACK_MASKED_SECRET}]\n      env: {API_KEY: {'$env': MCPSTACK_MASKED_SECRET}}\n  remote:\n    client: codex\n    config:\n      url: {'$env': MCPSTACK_MASKED_ENDPOINT}\n      oauth: {client_id: test-client, client_secret: {'$env': MCPSTACK_MASKED_SECRET}}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    for (flag, success) in [
+        ("--dry-run", true),
+        ("-y", false),
+        ("--auto-approve", false),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["import", "codex", flag])
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .env_remove("MCPSTACK_MASKED_SECRET")
+            .env_remove("MCPSTACK_MASKED_ENDPOINT")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.success(), success, "{output:?}");
+        let diagnostics = String::from_utf8_lossy(&output.stderr);
+        assert!(diagnostics.contains("WARN"));
+        assert!(diagnostics.contains("MCPSTACK_MASKED_SECRET"));
+        if success {
+            let diff = String::from_utf8_lossy(&output.stdout);
+            assert!(diff.contains("+[mcp_servers.process]"));
+            assert!(diff.contains("<unresolved: MCPSTACK_MASKED_ENDPOINT>"));
+            assert!(!diff.contains("unresolved.invalid"));
+            assert_eq!(
+                diagnostics
+                    .matches("Environment variable MCPSTACK_MASKED_SECRET ")
+                    .count(),
+                1
+            );
+        } else {
+            assert_eq!(output.status.code(), Some(10));
+            assert!(diagnostics.contains("interactive import"));
+        }
+        assert!(!config.exists());
+        assert!(!fixture.directory.path().join("config.toml.bak").exists());
+    }
+}
+
+#[test]
+fn native_runtime_bindings_are_preserved_without_resolving_values() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  process:\n    client: codex\n    config: {command: tool, env_vars: [MCPSTACK_RUNTIME_ENV, {name: MCPSTACK_REMOTE_ENV, source: remote}]}\n  remote:\n    client: codex\n    config:\n      url: https://example.com/mcp\n      bearer_token_env_var: MCPSTACK_RUNTIME_TOKEN\n      env_http_headers: {X-Key: MCPSTACK_RUNTIME_HEADER}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    let execute = |flag| {
+        Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["import", "codex", flag])
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .env_remove("MCPSTACK_RUNTIME_ENV")
+            .env_remove("MCPSTACK_RUNTIME_TOKEN")
+            .env_remove("MCPSTACK_RUNTIME_HEADER")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let preview = execute("--dry-run");
+    assert!(preview.status.success(), "{preview:?}");
+    assert!(!config.exists());
+    let warnings = String::from_utf8_lossy(&preview.stderr);
+    assert!(!warnings.contains("MCPSTACK_REMOTE_ENV"));
+    for name in [
+        "MCPSTACK_RUNTIME_ENV",
+        "MCPSTACK_RUNTIME_TOKEN",
+        "MCPSTACK_RUNTIME_HEADER",
+    ] {
+        assert!(warnings.contains(name));
+    }
+    #[cfg(unix)]
+    {
+        let output = execute("-y");
+        assert!(output.status.success(), "{output:?}");
+        let definitions: toml::Table =
+            toml::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        let servers = &definitions["mcp_servers"];
+        assert_eq!(
+            servers["process"]["env_vars"][0].as_str(),
+            Some("MCPSTACK_RUNTIME_ENV")
+        );
+        assert_eq!(
+            servers["remote"]["bearer_token_env_var"].as_str(),
+            Some("MCPSTACK_RUNTIME_TOKEN")
+        );
+        assert_eq!(
+            servers["remote"]["env_http_headers"]["X-Key"].as_str(),
+            Some("MCPSTACK_RUNTIME_HEADER")
+        );
+        assert!(!servers["process"].as_table().unwrap().contains_key("env"));
+        assert!(
+            !servers["remote"]
+                .as_table()
+                .unwrap()
+                .contains_key("http_headers")
+        );
+    }
+}
+
+#[test]
+fn dry_run_shows_redacted_conflicts_without_overwriting_existing_config() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: new-tool, env: {API_KEY: {'$env': MCPSTACK_CONFLICT_SECRET}}}\n",
+    );
+    let config = fixture.directory.path().join("config.toml");
+    let original = "# private\nmodel='private-model'\n[mcp_servers.shared]\ncommand='old-tool'\ncustom_secret='old-private-secret'\n[mcp_servers.shared.env]\nAPI_KEY='old-api-secret'\n";
+    std::fs::write(&config, original).unwrap();
+    let execute = |flag| {
+        Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["import", "codex", flag])
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .env_remove("MCPSTACK_CONFLICT_SECRET")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let preview = execute("--dry-run");
+    assert!(preview.status.success(), "{preview:?}");
+    let diff = String::from_utf8_lossy(&preview.stdout);
+    assert!(diff.contains("-command = \"old-tool\""));
+    assert!(diff.contains("+command = \"new-tool\""));
+    assert!(String::from_utf8_lossy(&preview.stderr).contains("conflict"));
+    for secret in ["old-private-secret", "old-api-secret", "private-model"] {
+        assert!(!diff.contains(secret));
+        assert!(!String::from_utf8_lossy(&preview.stderr).contains(secret));
+    }
+    // Supplying a real value still cannot authorize replacing an existing server.
+    let actual = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["import", "codex", "-y"])
+        .arg(&fixture.file)
+        .arg("--config")
+        .arg(&config)
+        .env("MCPSTACK_CONFLICT_SECRET", "new-api-secret")
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(actual.status.code(), Some(12));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    assert!(!fixture.directory.path().join("config.toml.bak").exists());
+}

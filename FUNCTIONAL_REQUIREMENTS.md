@@ -111,7 +111,7 @@ no backup and change no files.
 
 Import means merging server definitions into Codex config, not installing or
 starting server software. Validate before writing and leave the config unchanged
-on invalid input, unsupported fields, unresolved references, or differing entries
+on invalid input, unsupported fields, unresolved literal references, or differing entries
 with the same name. Compare parsed definitions after resolving references; skip
 identical entries without rewriting an unchanged config. Write changes atomically
 with restrictive permissions. Keep credentials out of exports and diagnostics.
@@ -173,7 +173,15 @@ Transactional mode must not silently commit a partially installed stack.
 
 ### Secrets
 
-[*] Phase 1 resolves references from environment variables; Phase 2 adds providers.
+[*] Masked `$env` references in literal fields use values from the importing
+shell or hidden interactive input. Missing values reject unattended imports,
+including `--auto-approve`; it approves writes without supplying secrets.
+Dry-run never prompts: unresolved references appear as preview placeholders with
+warnings and are never written. Secret input is cached per variable and redacted
+from previews. Native `env_vars`, `bearer_token_env_var`, and `env_http_headers`
+retain their runtime bindings without reading or embedding their values; missing
+local bindings warn without blocking approval. No native-field conversion is
+performed for masked references. Phase 2 adds secret providers.
 Document reference syntax. Export replaces recognized credential fields and values
 with environment references; commands, URLs, and ordinary settings stay literal.
 `--expose-secrets` explicitly opts into exporting credential literals; its output
@@ -278,8 +286,9 @@ safe filesystem writes currently support Unix only.
 secrets and validates against the bundled MCP schema without running Codex.
 It preserves unrelated settings, comments, and servers, skips identical
 definitions, and rejects differing entries. Redacted section-level unified diffs
-show every proposed addition before approvals. The preview is for review, not an
-patch for automatic application. Literal credentials recognized by export and all resolved
+show every proposed addition before approvals. Dry-run also previews conflicting
+sections with warnings; actual imports still reject conflicts. The preview is for review, not an
+patch for automatic application. Literal credentials recognized by export and all resolved or entered
 reference values are masked; unrelated existing config is never printed.
 A private sibling `.bak` is created only when approved additions will be written;
 an existing backup must be moved aside explicitly. Dry-run previews work on all

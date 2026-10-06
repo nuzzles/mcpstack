@@ -85,27 +85,45 @@ impl Snapshot {
         }
     }
 
-    /// Filter identical entries and reject conflicts before approval or backup.
+    /// Compare without writes so dry-run can show conflicts as well as additions.
+    pub fn preview(
+        &self,
+        definitions: &BTreeMap<String, toml::Table>,
+    ) -> Result<BTreeMap<String, (Option<toml::Table>, toml::Table)>, FileError> {
+        let document = self.document()?;
+        let mut changes = BTreeMap::new();
+        for (name, definition) in definitions {
+            let existing = document
+                .get("mcp_servers")
+                .and_then(Item::as_table_like)
+                .and_then(|servers| servers.get(name))
+                .map(existing_table)
+                .transpose()?;
+            if existing.as_ref().is_some_and(|existing| {
+                canonical(existing.clone()) == canonical(definition.clone())
+            }) {
+                continue;
+            }
+            changes.insert(name.clone(), (existing, definition.clone()));
+        }
+        Ok(changes)
+    }
+
+    /// Reject conflicts before approval or backup, skipping identical entries.
     pub fn additions(
         &self,
         definitions: &BTreeMap<String, toml::Table>,
     ) -> Result<BTreeMap<String, toml::Table>, FileError> {
-        let document = self.document()?;
-        let mut additions = BTreeMap::new();
-        for (name, definition) in definitions {
-            if let Some(existing) = document
-                .get("mcp_servers")
-                .and_then(Item::as_table_like)
-                .and_then(|servers| servers.get(name))
-            {
-                if canonical(existing_table(existing)?) != canonical(definition.clone()) {
-                    return Err(FileError::Conflict);
+        self.preview(definitions)?
+            .into_iter()
+            .map(|(name, (existing, definition))| {
+                if existing.is_some() {
+                    Err(FileError::Conflict)
+                } else {
+                    Ok((name, definition))
                 }
-            } else {
-                additions.insert(name.clone(), definition.clone());
-            }
-        }
-        Ok(additions)
+            })
+            .collect()
     }
 
     fn document(&self) -> Result<DocumentMut, FileError> {

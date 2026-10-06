@@ -81,6 +81,22 @@ pub fn export_with_decisions(
     Ok(stack)
 }
 
+/// Redact a private section for a preview, including existing fields outside
+/// the supported import schema. This does not validate or transform config.
+pub fn mask_for_preview(
+    name: &str,
+    definition: &toml::Table,
+) -> Result<serde_json::Value, ExportError> {
+    let document = serde_json::json!({"schema_version": SCHEMA_VERSION, "servers": {
+        name: {"client": "codex", "config": definition}
+    }});
+    let mut stack: StackV1 = serde_json::from_value(document).map_err(|_| ExportError::Config)?;
+    let mut names = BTreeSet::new();
+    visit_credentials(&mut stack, &mut names, &mut |_| Ok(false))?;
+    let value = serde_json::to_value(stack).map_err(|_| ExportError::Config)?;
+    Ok(value["servers"][name]["config"].clone())
+}
+
 fn visit_credentials(
     stack: &mut StackV1,
     names: &mut BTreeSet<String>,
