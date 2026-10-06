@@ -1,5 +1,4 @@
-//! Client configuration readers and version-specific stack serialization.
-pub mod codex;
+//! Version-specific stack serialization.
 mod v1;
 
 use crate::schema::{Stack, ValidationError};

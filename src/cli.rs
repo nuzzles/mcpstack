@@ -10,14 +10,7 @@ use crate::logging::Logging;
 use clap::{CommandFactory, Parser, Subcommand};
 use std::io::Write;
 
-pub const EXAMPLES: &[&str] = &[
-    "mcpstack --schema",
-    "mcpstack --help",
-    "mcpstack validate --help",
-    "mcpstack export codex --help",
-    "mcpstack import codex --help",
-    "mcpstack diff codex --help",
-];
+pub use crate::integrations::EXAMPLES;
 
 /// Install MCP servers, version-control stacks, and share setups across teams.
 #[derive(Parser)]

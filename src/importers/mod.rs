@@ -1,5 +1,4 @@
 //! Stack readers selected by the document's schema version.
-pub mod codex;
 mod v1;
 
 use crate::schema::{Stack, StackVersion, ValidationError};
@@ -12,4 +11,3 @@ pub fn from_yaml(document: &str) -> Result<Stack, ValidationError> {
         _ => Err(ValidationError::UnsupportedVersion),
     }
 }
-pub mod codex_fs;

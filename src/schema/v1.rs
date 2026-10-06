@@ -1,3 +1,5 @@
+pub use crate::integrations::Client;
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
@@ -27,14 +29,6 @@ pub enum Server {
         #[serde(deserialize_with = "unique_map")]
         config: BTreeMap<String, ClientValue>,
     },
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Client {
-    Codex,
-    ClaudeCode,
-    ClaudeDesktop,
 }
 
 /// Native configuration data, not permission to write it to a client.

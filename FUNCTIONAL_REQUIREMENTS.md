@@ -253,7 +253,7 @@ config. Relative paths resolve from the current working directory.
 ### Codex config schema
 
 Import conversion and export validate MCP entries against
-`schemas/codex-mcp.schema.json`, extracted from the current official Codex config
+`src/integrations/codex/mcp.schema.json`, extracted from the current official Codex config
 schema. Validation is offline and does not require Codex to be installed. Native
 entries preserve supported fields; obsolete inline `bearer_token` and unknown
 fields are rejected without exposing values. Refresh the snapshot deliberately

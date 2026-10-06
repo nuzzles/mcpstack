@@ -1,9 +1,9 @@
-mod adapters;
 mod cli;
 mod cmd;
 mod error;
 mod exporters;
 mod importers;
+mod integrations;
 mod logging;
 mod schema;
 
