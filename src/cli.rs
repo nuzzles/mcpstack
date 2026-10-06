@@ -28,7 +28,7 @@ pub const EXAMPLES: &[&str] = &[
 pub struct Cli {
     #[command(flatten)]
     pub logging: Logging,
-    /// Disable prompts; import requires --auto-approve or --dry-run.
+    /// Disable all prompts; missing masked values fail even during dry-run.
     #[arg(long, global = true)]
     non_interactive: bool,
     /// Print the complete CLI interface as versioned JSON.
