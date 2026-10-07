@@ -37,8 +37,8 @@ to its entry in Current status at the bottom.\
 | Done | Export the entire CLI argument schema for AI consumption. [*](#cli-schema) |
 | Partial [*](#exit-statuses-and-error-codes) | Stable exit statuses and actionable error codes. |
 | Partial [*](#interaction) | Default interactive prompts and explicit noninteractive operation. |
-| Partial [*](#deterministic-output) | Deterministic stack files, plans, and structured output. |
-| Partial [*](#output-formats) | Human-readable output and structured JSON results; diagnostics on stderr. |
+| Partial [*](#deterministic-output) | Deterministic stack files and plans. |
+| Done | Human-readable operation results; diagnostics on stderr. [*](#output-formats) |
 | Done | Define a versioned, client-independent stack format. |
 | Done | Validate schema versions, server definitions, names, and secret references. |
 | Done | Export Codex server entries as a YAML stack to stdout with safe defaults. [*](#codex-export) |
@@ -116,8 +116,7 @@ additions or replacements. Backups and private writes are described under
 [*] `--schema` emits a versioned JSON description of every implemented command,
 argument, option, type, default, requirement, constraint, and example. An AI can
 read it without scraping help text. Generate it from the command definitions to
-avoid drift. Schema output is independent of future structured operation results
-and interactive controls.
+avoid drift. Schema output is independent of interactive controls.
 
 ### Interaction
 
@@ -203,15 +202,16 @@ and config merge/write failures use 13 (`CONFIG_WRITE_ERROR`).
 
 The CLI schema is generated deterministically from command definitions. Stack v1
 uses ordered maps and passes serialization round-trip tests. Codex export emits
-deterministic native YAML stacks. Plans and structured operation results are pending.
+deterministic native YAML stacks. Plans are pending.
 
 ### Output formats
 
 Help, version, and validation results use text output;
 `--schema` emits JSON; `export codex` emits YAML; `diff` and import dry-run
 emit redacted unified diffs.
-Diagnostics go to stderr without echoing argument values. Structured JSON
-operation results are pending.
+Diagnostics go to stderr without echoing argument values. Automation uses the
+noninteractive commands and stable exit statuses; structured JSON operation
+results are not required.
 
 ### Stack workflow tests
 
