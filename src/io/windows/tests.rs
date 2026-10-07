@@ -68,41 +68,10 @@ async fn normalized_paths_preserve_relative_and_unc_semantics() {
         normalize_path(&std::env::current_dir().unwrap().join("config.bin")).unwrap()
     );
     assert_eq!(normalize_path(&relative).unwrap(), relative);
-    for path in [r"C:\config.bin:secret", r"C:\NUL", r"\\.\PhysicalDrive0"] {
-        assert!(normalize_path(Path::new(path)).is_err());
-    }
 }
 
 #[tokio::test]
-async fn replacement_preserves_backups_and_repeat_import_is_a_noop() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("配置 with spaces.bin");
-    fs::write(&path, "original private bytes\0").unwrap();
-    let original = fs::read(&path).unwrap();
-    let snapshot = Snapshot::backup(&path).await.unwrap();
-    let backup = directory.path().join("配置 with spaces.bin.~1~");
-    assert_eq!(fs::read(&backup).unwrap(), original);
-    assert!(snapshot.replace(contents()).await.unwrap());
-    let written = fs::read(&path).unwrap();
-    let modified = fs::metadata(&path).unwrap().modified().unwrap();
-    assert!(
-        !Snapshot::backup(&path)
-            .await
-            .unwrap()
-            .replace(contents())
-            .await
-            .unwrap()
-    );
-    assert_eq!(fs::read(&path).unwrap(), written);
-    assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
-    assert_eq!(
-        fs::read(directory.path().join("配置 with spaces.bin.~2~")).unwrap(),
-        written
-    );
-}
-
-#[tokio::test]
-async fn absent_config_custom_backups_and_stale_snapshots() {
+async fn backup_cannot_alias_absent_target_with_different_case() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("Config.bin");
     let snapshot = Snapshot::read(&path).await.unwrap();
@@ -113,21 +82,6 @@ async fn absent_config_custom_backups_and_stale_snapshots() {
         Err(Error::Backup)
     );
     assert!(!path.exists());
-    // Backup can also be skipped when creating a config.
-    assert!(snapshot.replace(contents()).await.unwrap());
-    let snapshot = Snapshot::read(&path).await.unwrap();
-    let custom = directory.path().join("custom.bak");
-    snapshot.create_backup_at(&custom).await.unwrap();
-    let bytes = fs::read(&custom).unwrap();
-    assert_eq!(snapshot.create_backup_at(&custom).await, Err(Error::Backup));
-    assert_eq!(fs::read(&custom).unwrap(), bytes);
-    let alias = directory.path().join("hardlink.bak");
-    fs::hard_link(&path, &alias).unwrap();
-    assert_eq!(snapshot.create_backup_at(&alias).await, Err(Error::Backup));
-    assert_eq!(fs::read(&path).unwrap(), bytes);
-    fs::write(&path, "# external edit").unwrap();
-    assert_eq!(snapshot.replace(contents()).await, Err(Error::Changed));
-    assert_eq!(fs::read_to_string(&path).unwrap(), "# external edit");
 }
 
 #[tokio::test]

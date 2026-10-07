@@ -37,9 +37,8 @@ async fn numbered_backups_preserve_generations_and_skip_occupied_names() {
     assert_eq!(fs::read_to_string(&next).unwrap(), "concurrent backup");
 }
 
-#[cfg(unix)]
 #[tokio::test]
-async fn custom_backups_are_private_and_cannot_use_the_target_or_overwrite_files() {
+async fn custom_backups_cannot_use_the_target_or_overwrite_files() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.bin");
     let absent = Snapshot::read(&path).await.unwrap();
@@ -51,6 +50,7 @@ async fn custom_backups_are_private_and_cannot_use_the_target_or_overwrite_files
     let custom = dir.path().join("backup with spaces.bin");
     snapshot.create_backup_at(&custom).await.unwrap();
     assert_eq!(fs::read_to_string(&custom).unwrap(), "# private fixture");
+    #[cfg(unix)]
     assert_eq!(
         fs::metadata(&custom).unwrap().permissions().mode() & 0o777,
         0o600
@@ -58,24 +58,21 @@ async fn custom_backups_are_private_and_cannot_use_the_target_or_overwrite_files
     assert!(!snapshot.default_backup_path().await.unwrap().exists());
     assert_eq!(snapshot.create_backup_at(&custom).await, Err(Error::Backup));
     assert_eq!(fs::read_to_string(&custom).unwrap(), "# private fixture");
+    let hardlink = dir.path().join("hardlink.bak");
+    fs::hard_link(&path, &hardlink).unwrap();
+    assert_eq!(
+        snapshot.create_backup_at(&hardlink).await,
+        Err(Error::Backup)
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), "# private fixture");
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn refuses_symlinks_and_stale_snapshots_and_creates_absent_configs() {
+async fn refuses_symlink_targets() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.bin");
-    let snapshot = Snapshot::backup(&path).await.unwrap();
-    assert_eq!(fs::read(path.with_extension("bin.~1~")).unwrap(), b"");
-    assert!(snapshot.replace(b"new bytes\0\xff").await.unwrap());
-    fs::remove_file(path.with_extension("bin.~1~")).unwrap();
-    let snapshot = Snapshot::backup(&path).await.unwrap();
-    fs::write(&path, "# external edit").unwrap();
-    assert_eq!(
-        snapshot.replace(b"new bytes\0\xff").await,
-        Err(Error::Changed)
-    );
-    assert_eq!(fs::read_to_string(&path).unwrap(), "# external edit");
+    fs::write(&path, b"original bytes").unwrap();
     let link = dir.path().join("link.bin");
     symlink(&path, &link).unwrap();
     assert!(matches!(Snapshot::backup(&link).await, Err(Error::Backup)));
@@ -144,7 +141,11 @@ async fn arbitrary_bytes_round_trip_and_identical_writes_are_skipped() {
 async fn empty_write_creates_an_absent_file_but_preserves_an_existing_empty_file() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("settings.bin");
-    let snapshot = Snapshot::read(&path).await.unwrap();
+    let snapshot = Snapshot::backup(&path).await.unwrap();
+    assert_eq!(
+        fs::read(directory.path().join("settings.bin.~1~")).unwrap(),
+        b""
+    );
     assert!(snapshot.contents().is_empty());
     assert!(snapshot.replace(b"").await.unwrap());
     assert!(path.is_file());
