@@ -210,8 +210,13 @@ impl Snapshot {
         if added == 0 {
             return Ok(0);
         }
-        let parent = self
-            .path
+        #[cfg(windows)]
+        let normalized = windows::normalize_path(&self.path).map_err(|_| FileError::Write)?;
+        #[cfg(windows)]
+        let path = normalized.as_path();
+        #[cfg(not(windows))]
+        let path = self.path.as_path();
+        let parent = path
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
@@ -227,12 +232,10 @@ impl Snapshot {
             .map_err(|_| FileError::Write)?;
         self.check_unchanged()?;
         if self.original.is_some() {
-            temporary
-                .persist(&self.path)
-                .map_err(|_| FileError::Write)?;
+            temporary.persist(path).map_err(|_| FileError::Write)?;
         } else {
             temporary
-                .persist_noclobber(&self.path)
+                .persist_noclobber(path)
                 .map_err(|_| FileError::Write)?;
         }
         Ok(added)

@@ -1,10 +1,10 @@
 //! Private Windows files: explicit user-only DACL at creation, before any data.
-use std::ffi::c_void;
+use std::ffi::{OsString, c_void};
 use std::fs::File;
 use std::io;
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::ptr::{addr_of, null_mut};
 
 use windows_sys::Win32::Foundation::{
@@ -22,7 +22,7 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE,
-    FILE_SHARE_READ, GetVolumeInformationByHandleW,
+    FILE_SHARE_READ, GetVolumeInformationW, GetVolumePathNameW,
 };
 use windows_sys::Win32::System::SystemServices::{ACCESS_ALLOWED_ACE_TYPE, FILE_PERSISTENT_ACLS};
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -45,7 +45,6 @@ pub(super) fn validate_path(path: &Path) -> io::Result<()> {
     for component in path.components() {
         match component {
             Component::Prefix(prefix) => {
-                use std::path::Prefix;
                 if !matches!(
                     prefix.kind(),
                     Prefix::Disk(_)
@@ -98,6 +97,28 @@ pub(super) fn validate_path(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Normalize separators and relative components before adding a verbatim prefix.
+/// All path-based Win32 calls (including tempfile's rename) need this form to
+/// support long paths without machine-wide policy or application manifest changes.
+pub(super) fn normalize_path(path: &Path) -> io::Result<PathBuf> {
+    validate_path(path)?;
+    let absolute = std::path::absolute(path)?;
+    let Some(Component::Prefix(prefix)) = absolute.components().next() else {
+        return Err(io::Error::other("expected an absolute file path"));
+    };
+    let (prefix, skip) = match prefix.kind() {
+        Prefix::VerbatimDisk(_) | Prefix::VerbatimUNC(_, _) => return Ok(absolute),
+        Prefix::Disk(_) => (r"\\?\", 0),
+        Prefix::UNC(_, _) => (r"\\?\UNC\", 2),
+        _ => return Err(io::Error::other("unsupported file namespace")),
+    };
+    let wide: Vec<_> = prefix
+        .encode_utf16()
+        .chain(absolute.as_os_str().encode_wide().skip(skip))
+        .collect();
+    Ok(OsString::from_wide(&wide).into())
+}
+
 pub(super) fn same_path(left: &Path, right: &Path) -> bool {
     let left: Vec<_> = left.as_os_str().encode_wide().collect();
     let right: Vec<_> = right.as_os_str().encode_wide().collect();
@@ -141,7 +162,7 @@ fn current_user() -> io::Result<Vec<usize>> {
 }
 
 pub(super) fn create_private(path: &Path) -> io::Result<File> {
-    validate_path(path)?;
+    let path = normalize_path(path)?;
     let user = current_user()?;
     // SAFETY: TOKEN_USER and its SID reside in the aligned buffer, which stays
     // alive until the security descriptor and file have been constructed.
@@ -193,11 +214,18 @@ pub(super) fn create_private(path: &Path) -> io::Result<File> {
             return Err(io::Error::last_os_error());
         }
         let file = File::from_raw_handle(handle);
+        // Query the volume by path: the handle-based API does not support SMB.
+        // GetVolumePathNameW also resolves mounted volumes and mapped drives.
+        let mut root = vec![0u16; 32768];
+        if GetVolumePathNameW(path.as_ptr(), root.as_mut_ptr(), root.len() as u32) == 0 {
+            return Err(io::Error::last_os_error());
+        }
         // Filesystems such as FAT may silently ignore security descriptors.
-        // Refuse them before any credential data is written.
+        // Refuse them before any credential data is written, then independently
+        // verify the actual file's DACL through its handle.
         let mut flags = 0;
-        if GetVolumeInformationByHandleW(
-            handle,
+        if GetVolumeInformationW(
+            root.as_ptr(),
             null_mut(),
             0,
             null_mut(),
@@ -308,6 +336,82 @@ mod tests {
             "added".into(),
             toml::from_str("command='tool'\nenv={API_KEY='fixture-secret'}").unwrap(),
         )])
+    }
+
+    fn check_long_path_imports(root: &Path) {
+        let mut parent = root.to_path_buf();
+        for _ in 0..6 {
+            parent.push("long directory with spaces and unicode 配置".repeat(2));
+        }
+        fs::create_dir_all(&parent).unwrap();
+        let path = parent.join("config.toml");
+        assert!(path.as_os_str().encode_wide().count() > 260);
+        // Creation uses persist_noclobber; replacement uses persist.
+        let snapshot = Snapshot::read(&path).unwrap();
+        let custom = parent.join("custom backup.toml");
+        snapshot.create_backup_at(&custom).unwrap();
+        assert_eq!(snapshot.apply(&definitions()).unwrap(), 1);
+        verify_private(&File::open(&path).unwrap()).unwrap();
+        verify_private(&File::open(&custom).unwrap()).unwrap();
+        let original = fs::read(&path).unwrap();
+        let snapshot = Snapshot::backup(&path).unwrap();
+        let mut changed = definitions();
+        changed
+            .get_mut("added")
+            .unwrap()
+            .insert("command".into(), "new-tool".into());
+        assert_eq!(snapshot.apply(&changed).unwrap(), 1);
+        verify_private(&File::open(&path).unwrap()).unwrap();
+        let backup = parent.join("config.toml.~1~");
+        assert_eq!(fs::read(&backup).unwrap(), original);
+        verify_private(&File::open(&backup).unwrap()).unwrap();
+        assert_eq!(Snapshot::read(&path).unwrap().apply(&changed).unwrap(), 0);
+        assert_eq!(fs::read_dir(&parent).unwrap().count(), 3);
+    }
+
+    #[test]
+    fn long_paths_support_creation_backups_and_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        // Deliberately pass an ordinary path even if TEMP was already verbatim.
+        let path = normalize_path(directory.path()).unwrap();
+        let wide: Vec<_> = path.as_os_str().encode_wide().collect();
+        assert!(
+            matches!(path.components().next(), Some(Component::Prefix(p)) if matches!(p.kind(), Prefix::VerbatimDisk(_)))
+        );
+        check_long_path_imports(Path::new(&OsString::from_wide(&wide[4..])));
+    }
+
+    #[test]
+    fn normalized_paths_preserve_relative_and_unc_semantics() {
+        for path in [r"C:/folder/child/../config.toml", r"C:\folder\config.toml"] {
+            assert_eq!(
+                normalize_path(Path::new(path)).unwrap(),
+                Path::new(r"\\?\C:\folder\config.toml")
+            );
+        }
+        assert_eq!(
+            normalize_path(Path::new(r"\\server\share\child\..\config.toml")).unwrap(),
+            Path::new(r"\\?\UNC\server\share\config.toml")
+        );
+        let relative = normalize_path(Path::new("config.toml")).unwrap();
+        assert_eq!(
+            relative,
+            normalize_path(&std::env::current_dir().unwrap().join("config.toml")).unwrap()
+        );
+        assert_eq!(normalize_path(&relative).unwrap(), relative);
+        for path in [r"C:\config.toml:secret", r"C:\NUL", r"\\.\PhysicalDrive0"] {
+            assert!(normalize_path(Path::new(path)).is_err());
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the temporary SMB share provisioned by test-smb.ps1"]
+    fn smb_imports_support_unc_and_mapped_drive_paths() {
+        for variable in ["MCPSTACK_TEST_SMB_UNC", "MCPSTACK_TEST_SMB_DRIVE"] {
+            let root = std::env::var_os(variable).expect("SMB fixture must be configured");
+            let directory = tempfile::tempdir_in(root).unwrap();
+            check_long_path_imports(directory.path());
+        }
     }
 
     #[test]

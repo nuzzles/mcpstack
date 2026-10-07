@@ -223,6 +223,9 @@ export without a Codex installation are also covered. Repeat imports, secret
 resolution, backups, atomic writes, and failure preservation are covered on Unix
 and Windows. Windows tests also verify protected user-only ACLs under a permissive
 parent folder, case-insensitive backup names, and locked-file replacement failures.
+Long paths cover config creation, custom/numbered backups, replacement, and repeat
+imports. Windows CI provisions a temporary SMB share to exercise UNC and mapped-drive
+paths with the same ACL checks.
 Other platforms reject import safely.
 
 ### Codex export
@@ -290,7 +293,9 @@ snapshot before atomic replacement. Unix files are created with mode `0600`.
 Windows backups and temporary configs are created with a protected DACL granting
 full access only to the current user, without inheriting parent permissions. The
 filesystem must support persistent ACLs, and the applied DACL is verified before
-writing credential bytes. Replacement retains the temporary file's private ACL;
+writing credential bytes. Paths are normalized for long-path support, and filesystem
+capabilities are queried by volume path to support SMB shares and mapped drives.
+Replacement retains the temporary file's private ACL;
 locked or read-only targets fail without replacing the original. Windows device
 paths, alternate data streams, and config reparse points are rejected. A failed
 permission check may leave an empty file; later backup write failures may leave a

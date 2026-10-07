@@ -75,6 +75,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
+      - name: Test imports over a temporary SMB share
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./src/integrations/codex/config/test-smb.ps1
 
   build:
     name: build
