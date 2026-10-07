@@ -107,7 +107,7 @@ async fn temporary_write_failure_leaves_original_and_backup_intact() {
 }
 
 #[tokio::test]
-async fn arbitrary_bytes_round_trip_privately_and_identical_writes_are_skipped() {
+async fn arbitrary_bytes_round_trip_and_identical_writes_are_skipped() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("settings.bin");
     let contents = b"private bytes\0\xff";

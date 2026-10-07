@@ -1,13 +1,10 @@
-//! Windows paths and the private-file backend used by shared I/O.
+//! Windows path handling used by shared I/O.
 use std::ffi::OsString;
 use std::io;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf, Prefix};
 
 use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
-
-mod security;
-pub(super) use security::create_private;
 
 /// Reject alternate streams, device namespaces, and DOS filename aliases. These
 /// are not standalone config files and can bypass create-new/path comparisons.

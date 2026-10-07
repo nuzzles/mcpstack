@@ -1,29 +1,8 @@
 use super::super::{Error, Snapshot};
-use super::security::{SecurityDescriptor, verify_private};
 use super::*;
-use std::fs::{self, File};
+use std::fs;
 use std::os::windows::fs::OpenOptionsExt;
-use windows_sys::Win32::Security::{
-    DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, SetFileSecurityW,
-};
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
-
-fn allow_inherited_access(directory: &Path) {
-    // Synthetic fixtures only: prove that files do not inherit Everyone access.
-    let descriptor = SecurityDescriptor::from_sddl("D:P(A;OICI;FA;;;WD)").unwrap();
-    let path: Vec<_> = directory.as_os_str().encode_wide().chain([0]).collect();
-    // SAFETY: path is terminated and the descriptor remains alive through the call.
-    assert_ne!(
-        unsafe {
-            SetFileSecurityW(
-                path.as_ptr(),
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                descriptor.as_ptr(),
-            )
-        },
-        0
-    );
-}
 
 fn contents() -> &'static [u8] {
     b"private fixture bytes\0\xff"
@@ -42,16 +21,12 @@ async fn check_long_path_writes(root: &Path) {
     let custom = parent.join("custom backup.bin");
     snapshot.create_backup_at(&custom).await.unwrap();
     assert!(snapshot.replace(contents()).await.unwrap());
-    verify_private(&File::open(&path).unwrap()).unwrap();
-    verify_private(&File::open(&custom).unwrap()).unwrap();
     let original = fs::read(&path).unwrap();
     let snapshot = Snapshot::backup(&path).await.unwrap();
     let changed = b"different private bytes\0\xfe";
     assert!(snapshot.replace(changed).await.unwrap());
-    verify_private(&File::open(&path).unwrap()).unwrap();
     let backup = parent.join("config.bin.~1~");
     assert_eq!(fs::read(&backup).unwrap(), original);
-    verify_private(&File::open(&backup).unwrap()).unwrap();
     assert!(
         !Snapshot::read(&path)
             .await
@@ -99,36 +74,15 @@ async fn normalized_paths_preserve_relative_and_unc_semantics() {
 }
 
 #[tokio::test]
-#[ignore = "requires the temporary SMB share provisioned by test-smb.ps1"]
-async fn smb_writes_support_unc_and_mapped_drive_paths() {
-    for variable in ["MCPSTACK_TEST_SMB_UNC", "MCPSTACK_TEST_SMB_DRIVE"] {
-        let root = std::env::var_os(variable).expect("SMB fixture must be configured");
-        let directory = tempfile::tempdir_in(root).unwrap();
-        check_long_path_writes(directory.path()).await;
-    }
-}
-
-#[tokio::test]
-async fn private_creation_and_replacement_keep_user_only_acls() {
+async fn replacement_preserves_backups_and_repeat_import_is_a_noop() {
     let directory = tempfile::tempdir().unwrap();
-    allow_inherited_access(directory.path());
-    // Inspect the temporary file while empty, before any credential write.
-    let temporary = tempfile::Builder::new()
-        .make_in(directory.path(), create_private)
-        .unwrap();
-    assert_eq!(temporary.as_file().metadata().unwrap().len(), 0);
-    verify_private(temporary.as_file()).unwrap();
-    drop(temporary);
     let path = directory.path().join("配置 with spaces.bin");
     fs::write(&path, "original private bytes\0").unwrap();
-    assert!(verify_private(&File::open(&path).unwrap()).is_err());
     let original = fs::read(&path).unwrap();
     let snapshot = Snapshot::backup(&path).await.unwrap();
     let backup = directory.path().join("配置 with spaces.bin.~1~");
-    verify_private(&File::open(&backup).unwrap()).unwrap();
     assert_eq!(fs::read(&backup).unwrap(), original);
     assert!(snapshot.replace(contents()).await.unwrap());
-    verify_private(&File::open(&path).unwrap()).unwrap();
     let written = fs::read(&path).unwrap();
     let modified = fs::metadata(&path).unwrap().modified().unwrap();
     assert!(
@@ -141,8 +95,10 @@ async fn private_creation_and_replacement_keep_user_only_acls() {
     );
     assert_eq!(fs::read(&path).unwrap(), written);
     assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
-    verify_private(&File::open(directory.path().join("配置 with spaces.bin.~2~")).unwrap())
-        .unwrap();
+    assert_eq!(
+        fs::read(directory.path().join("配置 with spaces.bin.~2~")).unwrap(),
+        written
+    );
 }
 
 #[tokio::test]
@@ -157,16 +113,14 @@ async fn absent_config_custom_backups_and_stale_snapshots() {
         Err(Error::Backup)
     );
     assert!(!path.exists());
-    // Backup can also be skipped; the config must still be private.
+    // Backup can also be skipped when creating a config.
     assert!(snapshot.replace(contents()).await.unwrap());
-    verify_private(&File::open(&path).unwrap()).unwrap();
     let snapshot = Snapshot::read(&path).await.unwrap();
     let custom = directory.path().join("custom.bak");
     snapshot.create_backup_at(&custom).await.unwrap();
     let bytes = fs::read(&custom).unwrap();
     assert_eq!(snapshot.create_backup_at(&custom).await, Err(Error::Backup));
     assert_eq!(fs::read(&custom).unwrap(), bytes);
-    verify_private(&File::open(&custom).unwrap()).unwrap();
     let alias = directory.path().join("hardlink.bak");
     fs::hard_link(&path, &alias).unwrap();
     assert_eq!(snapshot.create_backup_at(&alias).await, Err(Error::Backup));
@@ -187,7 +141,6 @@ async fn numbered_backups_recognize_case_insensitive_generations() {
     assert_eq!(backup, directory.path().join("Config.bin.~4~"));
     snapshot.create_backup_at(&backup).await.unwrap();
     assert_eq!(fs::read_to_string(&backup).unwrap(), "# original");
-    verify_private(&File::open(&backup).unwrap()).unwrap();
 }
 
 #[tokio::test]

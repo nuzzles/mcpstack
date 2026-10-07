@@ -75,10 +75,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
-      - name: Test private file I/O over a temporary SMB share
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./src/io/test-smb.ps1
 
   build:
     name: build

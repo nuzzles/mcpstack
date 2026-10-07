@@ -1,4 +1,4 @@
-//! Codex TOML comparison and merge policy over shared private file I/O.
+//! Codex TOML comparison and merge policy over shared file I/O.
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -10,7 +10,7 @@ use crate::io;
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum FileError {
     #[error(
-        "Cannot create private backup at the chosen path. Choose an unused file path and check permissions. Import was not processed."
+        "Cannot create backup at the chosen path. Choose an unused file path and check permissions. Import was not processed."
     )]
     Backup,
     #[error("Invalid target TOML or mcp_servers table. Client configuration was not changed.")]
@@ -19,7 +19,7 @@ pub enum FileError {
     Changed,
     #[error("Unable to write config atomically. The original config was not replaced.")]
     Write,
-    #[error("Private config writes are not supported on this platform.")]
+    #[error("Config writes are not supported on this platform.")]
     #[cfg(not(any(unix, windows)))]
     Platform,
 }

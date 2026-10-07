@@ -1,8 +1,8 @@
-//! Private, format-independent snapshots, backups, and atomic file replacement.
+//! Format-independent snapshots, backups, and atomic file replacement.
 //! Callers own parsing and merge policy; this module never interprets file contents.
 #![deny(unsafe_code)]
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -11,13 +11,13 @@ use tokio::io::AsyncWriteExt;
 use thiserror::Error;
 
 #[cfg(windows)]
-#[allow(unsafe_code)] // Only the Windows backend may call native security/path APIs.
+#[allow(unsafe_code)] // Only the Windows backend may call native path APIs.
 mod windows;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum Error {
     #[error(
-        "Cannot create private backup at the chosen path. Choose an unused file path and check permissions."
+        "Cannot create backup at the chosen path. Choose an unused file path and check permissions."
     )]
     Backup,
     #[error("Cannot read a regular file at the target path.")]
@@ -26,7 +26,7 @@ pub enum Error {
     Changed,
     #[error("Unable to write the file atomically. The original was not replaced.")]
     Write,
-    #[error("Private file writes are not supported on this platform.")]
+    #[error("File writes are not supported on this platform.")]
     #[cfg(not(any(unix, windows)))]
     Platform,
 }
@@ -110,7 +110,7 @@ impl Snapshot {
             .await
     }
 
-    /// Create a private recovery copy of the original bytes without overwriting files.
+    /// Create a recovery copy of the original bytes without overwriting files.
     pub async fn create_backup_at(&self, backup_path: &Path) -> Result<(), Error> {
         #[cfg(not(any(unix, windows)))]
         {
@@ -128,12 +128,12 @@ impl Snapshot {
                 return Err(Error::Backup);
             }
             let backup_path = backup_path.to_path_buf();
-            let file = tokio::task::spawn_blocking(move || create_private(&backup_path))
+            let file = tokio::task::spawn_blocking(move || create_new(&backup_path))
                 .await
                 .map_err(|_| Error::Backup)?
                 .map_err(|_| Error::Backup)?;
             let mut backup = fs::File::from_std(file);
-            // Retain a partial private backup on failure rather than deleting
+            // Retain a partial backup on failure rather than deleting
             // a path another process might have replaced.
             backup
                 .write_all(self.original.as_deref().unwrap_or_default())
@@ -170,7 +170,7 @@ impl Snapshot {
             .unwrap_or(Path::new("."));
         let parent = parent.to_path_buf();
         let temporary = tokio::task::spawn_blocking(move || {
-            tempfile::Builder::new().make_in(parent, create_private)
+            tempfile::Builder::new().make_in(parent, create_new)
         })
         .await
         .map_err(|_| Error::Write)?
@@ -210,23 +210,25 @@ impl Snapshot {
     }
 }
 
-#[cfg(unix)]
-fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
+/// Create without overwriting: Unix uses 0600; Windows inherits directory ACLs.
+#[cfg(any(unix, windows))]
+fn create_new(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
 }
 
 #[cfg(windows)]
-use windows::{create_private, same_path};
+use windows::same_path;
 
 #[cfg(not(any(unix, windows)))]
-fn create_private(_path: &Path) -> std::io::Result<std::fs::File> {
-    Err(std::io::Error::other("private writes are unsupported"))
+fn create_new(_path: &Path) -> std::io::Result<std::fs::File> {
+    Err(std::io::Error::other("writes are unsupported"))
 }
 
 #[cfg(not(windows))]
@@ -278,7 +280,7 @@ mod platform_tests {
     use std::fs;
 
     #[tokio::test]
-    async fn apply_without_backup_refuses_unsupported_private_writes() {
+    async fn apply_without_backup_refuses_unsupported_writes() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.bin");
         let original = "# original\n";
