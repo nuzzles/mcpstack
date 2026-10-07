@@ -302,7 +302,11 @@ prompts, never overwrite existing files, and remain after later failures,
 cancellation, or no-op imports.
 
 Replacements update the complete server definition. Unrelated settings, comments,
-and servers are preserved; identical entries do not rewrite the config. Private
+and servers are preserved; identical entries do not rewrite the config. Shared
+`src/io/` handles byte snapshots, backups, and file replacement for integrations;
+Codex retains TOML parsing and merge policy. The CLI uses a Tokio runtime and
+`tokio::fs`, with native private-file creation and atomic persistence on the
+blocking pool. Filesystem tests use client-independent byte fixtures. Private
 writes use a synced temporary file in the same directory and check the original
 snapshot before atomic replacement. Unix files are created with mode `0600`.
 Windows backups and temporary configs are created with a protected DACL granting

@@ -14,8 +14,9 @@ pub struct Export {
 }
 
 impl Export {
-    pub fn run(self, output: &mut impl Write, non_interactive: bool) -> Result<(), AppError> {
+    pub async fn run(self, output: &mut impl Write, non_interactive: bool) -> Result<(), AppError> {
         self.client
             .run(output, non_interactive, self.expose_secrets)
+            .await
     }
 }

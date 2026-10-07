@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
 use std::io::{IsTerminal, Write, stderr, stdin};
 use std::path::{Path, PathBuf};
-use std::{env, fs};
+use tokio::fs;
 
 use dialoguer::{Confirm, Input, Password, Select};
 
@@ -13,7 +14,7 @@ use crate::error::AppError;
 use crate::exporters::to_yaml;
 use crate::schema::Stack;
 
-pub(super) fn run_export(
+pub(super) async fn run_export(
     config: Option<PathBuf>,
     output: &mut impl Write,
     non_interactive: bool,
@@ -21,7 +22,9 @@ pub(super) fn run_export(
 ) -> Result<(), AppError> {
     tracing::debug!("Exporting Codex MCP configuration");
     let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
-    let document = fs::read_to_string(path).map_err(AppError::ConfigRead)?;
+    let document = fs::read_to_string(path)
+        .await
+        .map_err(AppError::ConfigRead)?;
     let stack = if expose_secrets {
         export(&document, true)?
     } else if non_interactive || !stdin().is_terminal() || !stderr().is_terminal() {
@@ -59,7 +62,7 @@ pub(super) fn run_export(
     Ok(())
 }
 
-pub(super) fn run_import(
+pub(super) async fn run_import(
     file: PathBuf,
     config: Option<PathBuf>,
     output: &mut impl Write,
@@ -72,7 +75,7 @@ pub(super) fn run_import(
         tracing::warn!("Dry run; no changes will be committed.");
     }
     let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
-    let snapshot = Snapshot::read(&path)?;
+    let snapshot = Snapshot::read(&path).await?;
     let interactive = !non_interactive && stdin().is_terminal() && stderr().is_terminal();
     if !dry_run {
         if !auto_approve && !interactive {
@@ -111,12 +114,15 @@ pub(super) fn run_import(
                     Ok(PathBuf::from(selected))
                 }
             },
-        )?;
+        )
+        .await?;
         if let Some(backup_path) = backup_path {
-            snapshot.create_backup_at(&backup_path)?;
+            snapshot.create_backup_at(&backup_path).await?;
         }
     }
-    let document = fs::read_to_string(file).map_err(AppError::StackRead)?;
+    let document = fs::read_to_string(file)
+        .await
+        .map_err(AppError::StackRead)?;
     let stack = Stack::from_yaml(&document)?;
     let mut resolver = SecretResolver {
         dry_run,
@@ -195,7 +201,7 @@ pub(super) fn run_import(
     }
     // Check that the target still matches the snapshot before
     // atomic replacement.
-    let added = snapshot.apply(&approved)?;
+    let added = snapshot.apply(&approved).await?;
     writeln!(
         output,
         "Imported {added} server(s); existing identical entries were unchanged."
@@ -205,19 +211,19 @@ pub(super) fn run_import(
 
 /// Discover numbered backups only after the user requests one. Interactive
 /// callers can still choose a custom path when default discovery fails.
-fn choose_backup_path(
+async fn choose_backup_path(
     snapshot: &Snapshot,
     auto_approve: bool,
     confirm: impl FnOnce() -> Result<bool, AppError>,
     choose: impl FnOnce(Option<&Path>) -> Result<PathBuf, AppError>,
 ) -> Result<Option<PathBuf>, AppError> {
     if auto_approve {
-        return Ok(Some(snapshot.default_backup_path()?));
+        return Ok(Some(snapshot.default_backup_path().await?));
     }
     if !confirm()? {
         return Ok(None);
     }
-    let default = snapshot.default_backup_path().ok();
+    let default = snapshot.default_backup_path().await.ok();
     choose(default.as_deref()).map(Some)
 }
 
@@ -342,9 +348,10 @@ fn select_servers(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
-    #[test]
-    fn unavailable_default_backup_can_be_skipped_or_replaced_with_custom_path() {
+    #[tokio::test]
+    async fn unavailable_default_backup_can_be_skipped_or_replaced_with_custom_path() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.toml");
         // An unrepresentable generation makes numbered discovery fail on every
@@ -354,8 +361,8 @@ mod tests {
             "existing",
         )
         .unwrap();
-        let snapshot = Snapshot::read(&path).unwrap();
-        assert!(snapshot.default_backup_path().is_err());
+        let snapshot = Snapshot::read(&path).await.unwrap();
+        assert!(snapshot.default_backup_path().await.is_err());
         assert!(
             choose_backup_path(
                 &snapshot,
@@ -363,6 +370,7 @@ mod tests {
                 || Ok(false),
                 |_| { panic!("skipping backup must not ask for a path") }
             )
+            .await
             .unwrap()
             .is_none()
         );
@@ -376,6 +384,7 @@ mod tests {
                 Ok(custom.clone())
             },
         )
+        .await
         .unwrap();
         assert_eq!(selected, Some(custom));
         assert!(
@@ -385,6 +394,7 @@ mod tests {
                 || panic!("automatic backup must not prompt"),
                 |_| { panic!("automatic backup must not ask for a path") }
             )
+            .await
             .is_err()
         );
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);

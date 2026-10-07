@@ -42,7 +42,7 @@ enum Commands {
 }
 
 impl Cli {
-    pub fn run(self, output: &mut impl Write) -> Result<(), AppError> {
+    pub async fn run(self, output: &mut impl Write) -> Result<(), AppError> {
         if self.schema && self.command.is_some() {
             return Err(AppError::Arguments);
         }
@@ -51,13 +51,17 @@ impl Cli {
             Ok(())
         } else if let Some(command) = self.command {
             match command {
-                Commands::Validate(inner) => inner.run(output),
-                Commands::Export(inner) => inner.run(output, self.non_interactive),
+                Commands::Validate(inner) => inner.run(output).await,
+                Commands::Export(inner) => inner.run(output, self.non_interactive).await,
                 Commands::Import(inner) => {
-                    inner.run(output, self.non_interactive, self.logging.output_ansi())
+                    inner
+                        .run(output, self.non_interactive, self.logging.output_ansi())
+                        .await
                 }
                 Commands::Diff(inner) => {
-                    inner.run(output, self.non_interactive, self.logging.output_ansi())
+                    inner
+                        .run(output, self.non_interactive, self.logging.output_ansi())
+                        .await
                 }
             }
         } else {

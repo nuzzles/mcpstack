@@ -11,12 +11,12 @@ pub struct Diff {
 }
 
 impl Diff {
-    pub fn run(
+    pub async fn run(
         self,
         output: &mut impl Write,
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {
-        self.client.diff(output, non_interactive, colored)
+        self.client.diff(output, non_interactive, colored).await
     }
 }

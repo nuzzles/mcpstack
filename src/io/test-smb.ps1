@@ -18,8 +18,8 @@ try {
     $driveMapped = $true
     $env:MCPSTACK_TEST_SMB_UNC = $remotePath
     $env:MCPSTACK_TEST_SMB_DRIVE = "$drive\"
-    & cargo test --locked smb_imports_support_unc_and_mapped_drive_paths -- --ignored
-    if ($LASTEXITCODE -ne 0) { throw 'SMB import tests failed.' }
+    & cargo test --locked smb_writes_support_unc_and_mapped_drive_paths -- --ignored
+    if ($LASTEXITCODE -ne 0) { throw 'SMB file I/O tests failed.' }
 } finally {
     Remove-Item Env:MCPSTACK_TEST_SMB_UNC, Env:MCPSTACK_TEST_SMB_DRIVE -ErrorAction SilentlyContinue
     if ($driveMapped) { & net.exe use $drive /delete /y }
