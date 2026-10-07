@@ -1,5 +1,6 @@
 use crate::error::AppError;
 use crate::integrations::StackClient;
+use crate::results::OperationOutput;
 use clap::Args;
 use std::io::Write;
 
@@ -13,7 +14,7 @@ pub struct Diff {
 impl Diff {
     pub fn run(
         self,
-        output: &mut impl Write,
+        output: &mut OperationOutput<impl Write>,
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {

@@ -38,7 +38,7 @@ to its entry in Current status at the bottom.\
 | Partial [*](#exit-statuses-and-error-codes) | Stable exit statuses and actionable error codes. |
 | Partial [*](#interaction) | Default interactive prompts and explicit noninteractive operation. |
 | Partial [*](#deterministic-output) | Deterministic stack files, plans, and structured output. |
-| Partial [*](#output-formats) | Human-readable output and structured JSON results; diagnostics on stderr. |
+| Done | Human-readable output and structured JSON results; diagnostics on stderr. [*](#output-formats) |
 | Done | Define a versioned, client-independent stack format. |
 | Done | Validate schema versions, server definitions, names, and secret references. |
 | Done | Export Codex server entries as a YAML stack to stdout with safe defaults. [*](#codex-export) |
@@ -116,7 +116,7 @@ additions or replacements. Backups and private writes are described under
 [*] `--schema` emits a versioned JSON description of every implemented command,
 argument, option, type, default, requirement, constraint, and example. An AI can
 read it without scraping help text. Generate it from the command definitions to
-avoid drift. Schema output is independent of future structured operation results
+avoid drift. Schema output is independent of structured operation results
 and interactive controls.
 
 ### Interaction
@@ -203,15 +203,51 @@ and config merge/write failures use 13 (`CONFIG_WRITE_ERROR`).
 
 The CLI schema is generated deterministically from command definitions. Stack v1
 uses ordered maps and passes serialization round-trip tests. Codex export emits
-deterministic native YAML stacks. Plans and structured operation results are pending.
+deterministic native YAML stacks. Operation JSON uses ordered server results and a
+fixed schema; repeated equivalent previews are deterministic. Installation plans remain pending.
 
 ### Output formats
 
 Help, version, and validation results use text output;
 `--schema` emits JSON; `export codex` emits YAML; `diff` and import dry-run
 emit redacted unified diffs.
-Diagnostics go to stderr without echoing argument values. Structured JSON
-operation results are pending.
+`--json` selects a single versioned JSON document for `validate`, `diff`, and
+`import`, including failures. The flag may appear before or after subcommands.
+Export keeps its YAML stack format and rejects `--json`; `--schema` also conflicts
+with it. Help and version retain their normal output.
+
+The result contains `schema_version: 1`, `operation`, `integration`, `status`
+(`success` or `failure`), `dry_run`, `stack_schema_version`, `config_path`, ordered
+`servers`, `backup`, `diff`, and `error`. Unknown or inapplicable metadata is null;
+servers are empty until definitions have been prepared. Parse failures may have a
+null operation. Each server has `name`, `action` (`add`, `replace`, `unchanged`, or
+`validate`), and `outcome` (`pending`, `proposed`, `approved`, `skipped`, `unchanged`,
+`applied`, or `validated`). Pending decisions have not completed; approved dry-run
+entries have not been written. Actual imports mark applied entries only after the
+atomic config write succeeds.
+
+Backup metadata contains `status` (`not_requested`, `skipped`, `created`, or
+`failed`) and `path`. A created backup remains reported if a later step fails;
+a failed backup may leave a partial private file. Config and backup paths are
+strings with non-UTF-8 components displayed lossily. Diffs and import dry-runs
+include the existing redacted preview as an uncolored string; actual import and
+validation use null. No-op previews use an empty diff string. JSON includes no
+raw server definitions or secret values beyond the documented limits of preview
+redaction. Failures contain the stable `error.code`, numeric `error.exit_status`,
+and a safe `error.message`; process exit statuses are unchanged.
+
+JSON mode does not disable prompts or approve imports. For unattended use, choose
+`--non-interactive`, set required secret variables, and add `-y` for import.
+Diagnostics remain on stderr without echoing argument values. If stdout cannot
+be written, the process reports `OUTPUT_ERROR` on stderr and may be unable to
+produce a complete JSON document.
+
+```sh
+mcpstack validate stack.yml --json
+mcpstack --non-interactive diff codex stack.yml --json
+mcpstack --non-interactive import codex stack.yml --dry-run -y --json
+mcpstack --non-interactive import codex stack.yml -y --json
+```
 
 ### Stack workflow tests
 

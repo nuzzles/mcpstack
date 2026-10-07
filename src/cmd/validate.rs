@@ -1,3 +1,4 @@
+use crate::results::{Action, OperationOutput, Outcome, ServerResult};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -15,10 +16,20 @@ pub struct Validate {
 }
 
 impl Validate {
-    pub fn run(self, output: &mut impl Write) -> Result<(), AppError> {
+    pub fn run(self, output: &mut OperationOutput<impl Write>) -> Result<(), AppError> {
         let document = fs::read_to_string(self.file).map_err(AppError::StackRead)?;
         let stack = Stack::from_yaml(&document)?;
         let Stack::V1(stack) = stack;
+        output.report.stack_schema_version = Some(stack.schema_version);
+        output.report.servers = stack
+            .servers
+            .keys()
+            .map(|name| ServerResult {
+                name: name.clone(),
+                action: Action::Validate,
+                outcome: Outcome::Validated,
+            })
+            .collect();
         writeln!(
             output,
             "Valid stack (schema {}, {} servers).",

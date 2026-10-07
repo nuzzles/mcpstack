@@ -28,6 +28,8 @@ pub enum FileError {
     Platform,
 }
 
+pub(super) type Changes = BTreeMap<String, (Option<toml::Table>, toml::Table)>;
+
 pub struct Snapshot {
     path: PathBuf,
     original: Option<Vec<u8>>,
@@ -141,7 +143,7 @@ impl Snapshot {
     pub fn preview(
         &self,
         definitions: &BTreeMap<String, toml::Table>,
-    ) -> Result<BTreeMap<String, (Option<toml::Table>, toml::Table)>, FileError> {
+    ) -> Result<Changes, FileError> {
         let document = self.document()?;
         let mut changes = BTreeMap::new();
         for (name, definition) in definitions {

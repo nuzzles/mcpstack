@@ -1,3 +1,4 @@
+use crate::results::{Action, BackupStatus, OperationOutput, Outcome, ServerResult};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write, stderr, stdin};
 use std::path::{Path, PathBuf};
@@ -5,7 +6,7 @@ use std::{env, fs};
 
 use dialoguer::{Confirm, Input, Password, Select};
 
-use super::config::Snapshot;
+use super::config::{Changes, Snapshot};
 use super::export::{ExportError, export, export_with_decisions};
 use super::import::prepare;
 use super::{Error, default_config};
@@ -62,7 +63,7 @@ pub(super) fn run_export(
 pub(super) fn run_import(
     file: PathBuf,
     config: Option<PathBuf>,
-    output: &mut impl Write,
+    output: &mut OperationOutput<impl Write>,
     non_interactive: bool,
     colored: bool,
     dry_run: bool,
@@ -72,6 +73,7 @@ pub(super) fn run_import(
         tracing::warn!("Dry run; no changes will be committed.");
     }
     let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
+    output.report.config_path = Some(path.to_string_lossy().into_owned());
     let snapshot = Snapshot::read(&path)?;
     let interactive = !non_interactive && stdin().is_terminal() && stderr().is_terminal();
     if !dry_run {
@@ -111,9 +113,20 @@ pub(super) fn run_import(
                     Ok(PathBuf::from(selected))
                 }
             },
-        )?;
+        )
+        .inspect_err(|error| {
+            if matches!(error.code(), crate::error::ErrorCode::BackupError) {
+                output.report.backup.status = BackupStatus::Failed;
+            }
+        })?;
         if let Some(backup_path) = backup_path {
-            snapshot.create_backup_at(&backup_path)?;
+            output.report.backup.path = Some(backup_path.to_string_lossy().into_owned());
+            snapshot.create_backup_at(&backup_path).inspect_err(|_| {
+                output.report.backup.status = BackupStatus::Failed;
+            })?;
+            output.report.backup.status = BackupStatus::Created;
+        } else {
+            output.report.backup.status = BackupStatus::Skipped;
         }
     }
     let document = fs::read_to_string(file).map_err(AppError::StackRead)?;
@@ -125,19 +138,26 @@ pub(super) fn run_import(
         cancelled: false,
     };
     let prepared = match &stack {
-        Stack::V1(stack) => prepare(stack, |name| resolver.resolve(name)),
+        Stack::V1(stack) => {
+            output.report.stack_schema_version = Some(stack.schema_version);
+            prepare(stack, |name| resolver.resolve(name))
+        }
     };
     if resolver.cancelled {
         return Err(AppError::ImportApprovalCancelled);
     }
     let definitions = prepared?;
     let changes = snapshot.preview(&definitions)?;
+    output.report.servers = server_results(&definitions, &changes, Outcome::Pending);
     let additions: BTreeMap<_, _> = changes
         .iter()
         .map(|(name, (_, definition))| (name.clone(), definition.clone()))
         .collect();
     warn_runtime_bindings(&additions);
     if additions.is_empty() {
+        if dry_run {
+            output.report.diff = Some(String::new());
+        }
         writeln!(
             output,
             "No changes; existing identical entries were unchanged."
@@ -180,7 +200,11 @@ pub(super) fn run_import(
                 .ok_or(AppError::ImportApprovalCancelled)
         })?
     };
+    record_approvals(&mut output.report.servers, &approved);
     if approved.is_empty() {
+        if dry_run {
+            output.report.diff = Some(String::new());
+        }
         writeln!(
             output,
             "No servers approved; client configuration was not changed."
@@ -189,18 +213,58 @@ pub(super) fn run_import(
     }
     if dry_run {
         let secrets: Vec<_> = resolver.values.into_values().flatten().collect();
-        super::diff::show_diff(&snapshot, &path, &approved, &secrets, output, colored)?;
+        super::diff::show_preview(&snapshot, &path, &approved, &secrets, output, colored)?;
         writeln!(output, "Would import {} server(s).", approved.len())?;
         return Ok(());
     }
     // Check that the target still matches the snapshot before
     // atomic replacement.
     let added = snapshot.apply(&approved)?;
+    for server in &mut output.report.servers {
+        if approved.contains_key(&server.name) {
+            server.outcome = Outcome::Applied;
+        }
+    }
     writeln!(
         output,
         "Imported {added} server(s); existing identical entries were unchanged."
     )?;
     Ok(())
+}
+
+/// Record names and actions only; configuration values never enter results.
+pub(super) fn server_results(
+    definitions: &BTreeMap<String, toml::Table>,
+    changes: &Changes,
+    outcome: Outcome,
+) -> Vec<ServerResult> {
+    definitions
+        .keys()
+        .map(|name| {
+            let (action, outcome) = match changes.get(name) {
+                Some((Some(_), _)) => (Action::Replace, outcome),
+                Some((None, _)) => (Action::Add, outcome),
+                None => (Action::Unchanged, Outcome::Unchanged),
+            };
+            ServerResult {
+                name: name.clone(),
+                action,
+                outcome,
+            }
+        })
+        .collect()
+}
+
+fn record_approvals(servers: &mut [ServerResult], approved: &BTreeMap<String, toml::Table>) {
+    for server in servers {
+        if matches!(server.action, Action::Add | Action::Replace) {
+            server.outcome = if approved.contains_key(&server.name) {
+                Outcome::Approved
+            } else {
+                Outcome::Skipped
+            };
+        }
+    }
 }
 
 /// Discover numbered backups only after the user requests one. Interactive
@@ -388,6 +452,34 @@ mod tests {
             .is_err()
         );
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn selective_approvals_report_skips_and_preserve_identical_servers() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("config.toml");
+        fs::write(&config, "[mcp_servers.same]\ncommand='tool'\n").unwrap();
+        let definitions: BTreeMap<_, _> = ["a", "b", "c", "same"]
+            .map(|name| (name.to_owned(), toml::from_str("command='tool'").unwrap()))
+            .into();
+        let changes = Snapshot::read(&config)
+            .unwrap()
+            .preview(&definitions)
+            .unwrap();
+        let incoming = changes
+            .iter()
+            .map(|(name, (_, definition))| (name.clone(), definition.clone()))
+            .collect();
+        let approved =
+            select_servers(incoming, |name, _, _| Ok(if name == "b" { 1 } else { 0 })).unwrap();
+        let mut servers = server_results(&definitions, &changes, Outcome::Pending);
+        record_approvals(&mut servers, &approved);
+        let value = serde_json::to_value(servers).unwrap();
+        assert_eq!(value[0]["outcome"], "skipped");
+        assert_eq!(value[1]["outcome"], "approved");
+        assert_eq!(value[2]["outcome"], "skipped");
+        assert_eq!(value[3]["outcome"], "unchanged");
+        assert_eq!(value[3]["action"], "unchanged");
     }
 
     fn additions() -> BTreeMap<String, toml::Table> {

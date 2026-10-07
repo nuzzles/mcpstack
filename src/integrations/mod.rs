@@ -1,4 +1,5 @@
 //! Integration registration and client-independent dispatch.
+use crate::results::OperationOutput;
 mod codex;
 
 use std::io::Write;
@@ -53,7 +54,7 @@ pub enum StackClient {
 impl StackClient {
     pub fn import(
         self,
-        output: &mut impl Write,
+        output: &mut OperationOutput<impl Write>,
         non_interactive: bool,
         colored: bool,
         dry_run: bool,
@@ -68,7 +69,7 @@ impl StackClient {
 
     pub fn diff(
         self,
-        output: &mut impl Write,
+        output: &mut OperationOutput<impl Write>,
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {

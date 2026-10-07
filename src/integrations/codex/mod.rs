@@ -1,4 +1,5 @@
 //! Codex configuration discovery, validation, conversion, and workflows.
+use crate::results::OperationOutput;
 mod config;
 mod diff;
 mod export;
@@ -52,12 +53,14 @@ pub struct StackArgs {
 impl StackArgs {
     pub(super) fn import(
         self,
-        output: &mut impl Write,
+        output: &mut OperationOutput<impl Write>,
         non_interactive: bool,
         colored: bool,
         dry_run: bool,
         auto_approve: bool,
     ) -> Result<(), AppError> {
+        output.report.integration = Some("codex");
+        output.report.dry_run = dry_run;
         workflow::run_import(
             self.file,
             self.config,
@@ -71,10 +74,11 @@ impl StackArgs {
 
     pub(super) fn diff(
         self,
-        output: &mut impl Write,
+        output: &mut OperationOutput<impl Write>,
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {
+        output.report.integration = Some("codex");
         diff::run(self.file, self.config, output, non_interactive, colored)
     }
 }

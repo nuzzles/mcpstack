@@ -1,3 +1,4 @@
+use crate::results::{OperationOutput, Outcome};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{IsTerminal, Write, stderr, stdin};
@@ -9,7 +10,7 @@ use toml_edit::{Item, Value};
 
 use super::config::{FileError, Snapshot};
 use super::import::prepare;
-use super::workflow::{SecretResolver, warn_runtime_bindings};
+use super::workflow::{SecretResolver, server_results, warn_runtime_bindings};
 use crate::error::AppError;
 use crate::schema::Stack;
 
@@ -18,11 +19,12 @@ use super::{Error, default_config};
 pub(super) fn run(
     file: PathBuf,
     config: Option<PathBuf>,
-    output: &mut impl Write,
+    output: &mut OperationOutput<impl Write>,
     non_interactive: bool,
     colored: bool,
 ) -> Result<(), AppError> {
     let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
+    output.report.config_path = Some(path.to_string_lossy().into_owned());
     let snapshot = Snapshot::read(&path)?;
     let document = fs::read_to_string(file).map_err(AppError::StackRead)?;
     let stack = Stack::from_yaml(&document)?;
@@ -33,14 +35,19 @@ pub(super) fn run(
         cancelled: false,
     };
     let prepared = match &stack {
-        Stack::V1(stack) => prepare(stack, |name| resolver.resolve(name)),
+        Stack::V1(stack) => {
+            output.report.stack_schema_version = Some(stack.schema_version);
+            prepare(stack, |name| resolver.resolve(name))
+        }
     };
     if resolver.cancelled {
         return Err(AppError::ImportApprovalCancelled);
     }
     let definitions = prepared?;
     let changes = snapshot.preview(&definitions)?;
+    output.report.servers = server_results(&definitions, &changes, Outcome::Proposed);
     if changes.is_empty() {
+        output.report.diff = Some(String::new());
         writeln!(
             output,
             "No changes; existing identical entries were unchanged."
@@ -53,7 +60,25 @@ pub(super) fn run(
         .collect();
     warn_runtime_bindings(&incoming);
     let secrets: Vec<_> = resolver.values.into_values().flatten().collect();
-    show_diff(&snapshot, &path, &incoming, &secrets, output, colored)
+    show_preview(&snapshot, &path, &incoming, &secrets, output, colored)
+}
+
+pub(super) fn show_preview(
+    snapshot: &Snapshot,
+    path: &Path,
+    definitions: &BTreeMap<String, toml::Table>,
+    secrets: &[String],
+    output: &mut OperationOutput<impl Write>,
+    colored: bool,
+) -> Result<(), AppError> {
+    if output.json {
+        let mut preview = Vec::new();
+        show_diff(snapshot, path, definitions, secrets, &mut preview, false)?;
+        output.report.diff = Some(String::from_utf8(preview).map_err(std::io::Error::other)?);
+        Ok(())
+    } else {
+        show_diff(snapshot, path, definitions, secrets, output, colored)
+    }
 }
 
 pub(super) fn show_diff(

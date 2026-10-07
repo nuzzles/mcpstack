@@ -41,7 +41,7 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
     let help = run(&["--help"]);
     let help = String::from_utf8(help.stdout).unwrap();
     let options = schema["command"]["options"].as_array().unwrap();
-    assert_eq!(options.len(), 9);
+    assert_eq!(options.len(), 10);
     let non_interactive = options
         .iter()
         .find(|option| option["name"] == "non_interactive")
@@ -95,7 +95,7 @@ fn help_and_version_use_text_output() {
 #[test]
 fn invalid_arguments_use_stderr_without_echoing_values() {
     for args in [
-        vec!["--json"],
+        vec!["--json=true"],
         vec!["--schema=true"],
         vec!["--schema", "--schema"],
         vec!["--schema", "--synthetic-secret=fixture-secret"],
