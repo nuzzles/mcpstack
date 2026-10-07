@@ -637,6 +637,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "windows-sys",
  "yaml_serde",
 ]
 
