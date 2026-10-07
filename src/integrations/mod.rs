@@ -33,14 +33,14 @@ pub enum ExportClient {
 }
 
 impl ExportClient {
-    pub fn run(
+    pub async fn run(
         self,
         output: &mut impl Write,
         non_interactive: bool,
         expose_secrets: bool,
     ) -> Result<(), AppError> {
         match self {
-            Self::Codex(args) => args.run(output, non_interactive, expose_secrets),
+            Self::Codex(args) => args.run(output, non_interactive, expose_secrets).await,
         }
     }
 }
@@ -51,7 +51,7 @@ pub enum StackClient {
 }
 
 impl StackClient {
-    pub fn import(
+    pub async fn import(
         self,
         output: &mut impl Write,
         non_interactive: bool,
@@ -62,18 +62,19 @@ impl StackClient {
         match self {
             Self::Codex(args) => {
                 args.import(output, non_interactive, colored, dry_run, auto_approve)
+                    .await
             }
         }
     }
 
-    pub fn diff(
+    pub async fn diff(
         self,
         output: &mut impl Write,
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {
         match self {
-            Self::Codex(args) => args.diff(output, non_interactive, colored),
+            Self::Codex(args) => args.diff(output, non_interactive, colored).await,
         }
     }
 }

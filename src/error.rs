@@ -27,7 +27,7 @@ pub enum ErrorCode {
     LoggingError = 9,
     #[error("Unable to prepare stack definitions for import.")]
     ImportError = 10,
-    #[error("Unable to create a private configuration backup.")]
+    #[error("Unable to create a configuration backup.")]
     BackupError = 11,
     #[error("Unable to safely write client configuration.")]
     ConfigWriteError = 13,

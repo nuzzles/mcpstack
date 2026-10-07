@@ -11,6 +11,7 @@ description = "A Rust CLI for humans and agents to install multiple MCP servers,
 readme = "README.md"
 
 [dependencies]
+tokio = { version = "1", features = ["fs", "io-util", "macros", "rt"] }
 clap = { version = "4.6.7", features = ["derive", "string", "env"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -31,4 +32,4 @@ jsonschema = { version = "0.58.6", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 nu-ansi-term = "0.50"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_Globalization", "Win32_System_SystemServices"] }
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Globalization"] }

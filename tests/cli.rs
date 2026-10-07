@@ -639,7 +639,7 @@ fn export_reads_explicit_config_and_preserves_inputs() {
 
 #[cfg(any(unix, windows))]
 #[test]
-fn import_merges_resolved_stacks_with_private_backup_and_noop_repeat() {
+fn import_merges_resolved_stacks_with_backup_and_noop_repeat() {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     let fixture = StackFixture::new(
@@ -764,7 +764,7 @@ fn import_backs_up_before_validation_and_preserves_original_on_failure() {
 
 #[cfg(not(any(unix, windows)))]
 #[test]
-fn import_refuses_platforms_without_private_write_support() {
+fn import_refuses_platforms_without_write_support() {
     let fixture = StackFixture::new(
         "schema_version: 1\nservers:\n  new:\n    client: codex\n    config: {command: tool}\n",
     );

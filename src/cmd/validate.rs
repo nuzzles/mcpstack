@@ -1,6 +1,6 @@
-use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+use tokio::fs;
 
 use clap::Args;
 
@@ -15,8 +15,10 @@ pub struct Validate {
 }
 
 impl Validate {
-    pub fn run(self, output: &mut impl Write) -> Result<(), AppError> {
-        let document = fs::read_to_string(self.file).map_err(AppError::StackRead)?;
+    pub async fn run(self, output: &mut impl Write) -> Result<(), AppError> {
+        let document = fs::read_to_string(self.file)
+            .await
+            .map_err(AppError::StackRead)?;
         let stack = Stack::from_yaml(&document)?;
         let Stack::V1(stack) = stack;
         writeln!(

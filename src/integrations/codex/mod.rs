@@ -29,13 +29,13 @@ pub struct ExportArgs {
 }
 
 impl ExportArgs {
-    pub(super) fn run(
+    pub(super) async fn run(
         self,
         output: &mut impl Write,
         non_interactive: bool,
         expose_secrets: bool,
     ) -> Result<(), AppError> {
-        workflow::run_export(self.config, output, non_interactive, expose_secrets)
+        workflow::run_export(self.config, output, non_interactive, expose_secrets).await
     }
 }
 
@@ -50,7 +50,7 @@ pub struct StackArgs {
 }
 
 impl StackArgs {
-    pub(super) fn import(
+    pub(super) async fn import(
         self,
         output: &mut impl Write,
         non_interactive: bool,
@@ -67,15 +67,16 @@ impl StackArgs {
             dry_run,
             auto_approve,
         )
+        .await
     }
 
-    pub(super) fn diff(
+    pub(super) async fn diff(
         self,
         output: &mut impl Write,
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {
-        diff::run(self.file, self.config, output, non_interactive, colored)
+        diff::run(self.file, self.config, output, non_interactive, colored).await
     }
 }
 

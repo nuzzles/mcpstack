@@ -17,18 +17,20 @@ pub struct Import {
 }
 
 impl Import {
-    pub fn run(
+    pub async fn run(
         self,
         output: &mut impl Write,
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {
-        self.client.import(
-            output,
-            non_interactive,
-            colored,
-            self.dry_run,
-            self.auto_approve,
-        )
+        self.client
+            .import(
+                output,
+                non_interactive,
+                colored,
+                self.dry_run,
+                self.auto_approve,
+            )
+            .await
     }
 }

@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::io::{IsTerminal, Write, stderr, stdin};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use tokio::fs;
 
 use serde_json::Value as Json;
 use toml_edit::{Item, Value};
@@ -15,7 +15,7 @@ use crate::schema::Stack;
 
 use super::{Error, default_config};
 
-pub(super) fn run(
+pub(super) async fn run(
     file: PathBuf,
     config: Option<PathBuf>,
     output: &mut impl Write,
@@ -23,8 +23,10 @@ pub(super) fn run(
     colored: bool,
 ) -> Result<(), AppError> {
     let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
-    let snapshot = Snapshot::read(&path)?;
-    let document = fs::read_to_string(file).map_err(AppError::StackRead)?;
+    let snapshot = Snapshot::read(&path).await?;
+    let document = fs::read_to_string(file)
+        .await
+        .map_err(AppError::StackRead)?;
     let stack = Stack::from_yaml(&document)?;
     let mut resolver = SecretResolver {
         dry_run: true,
