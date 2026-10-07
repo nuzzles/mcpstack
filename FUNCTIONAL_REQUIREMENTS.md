@@ -49,6 +49,12 @@ to its entry in Current status at the bottom.\
 | Partial [*](#codex-import) | Atomic config writes with restrictive permissions; preserve originals on failure. |
 | Partial [*](#stack-workflow-tests) | Test round trips, repeat imports, config schema compatibility, missing secrets, and write failures. |
 
+### Testing
+
+| Implementation | Brief description |
+| --- | --- |
+| Done | Run CLI integration tests in CI on macOS, Linux, and Windows. [*](#cross-platform-integration-tests) |
+
 ## Phase 2
 
 ### Harness Support
@@ -212,6 +218,15 @@ emit redacted unified diffs.
 Diagnostics go to stderr without echoing argument values. Automation uses the
 noninteractive commands and stable exit statuses; structured JSON operation
 results are not required.
+
+### Cross-platform integration tests
+
+The Phase 1 CLI must have integration tests that execute the compiled binary on
+macOS, Linux, and Windows. CI runs `tests/cli.rs` through `cargo test --locked` on
+`macos-latest`, `ubuntu-latest`, and `windows-latest`. Keep this matrix as workflows
+are added; cross-compilation and unit tests alone do not satisfy this requirement.
+Workflow coverage and remaining limitations are tracked under
+[Stack workflow tests](#stack-workflow-tests).
 
 ### Stack workflow tests
 
