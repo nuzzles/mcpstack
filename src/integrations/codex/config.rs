@@ -1,6 +1,8 @@
 //! Optional private backups and atomic Codex config merges.
 use std::collections::BTreeMap;
 use std::fs;
+#[cfg(windows)]
+mod windows;
 #[cfg(unix)]
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -21,10 +23,8 @@ pub enum FileError {
     Changed,
     #[error("Unable to write config atomically. The original config was not replaced.")]
     Write,
-    #[error(
-        "Private config writes currently require Unix permissions. This platform is not supported for import."
-    )]
-    #[cfg(not(unix))]
+    #[error("Private config writes are not supported on this platform.")]
+    #[cfg(not(any(unix, windows)))]
     Platform,
 }
 
@@ -36,17 +36,17 @@ pub struct Snapshot {
 impl Snapshot {
     /// Guard every write path, including imports that decline a backup.
     pub fn ensure_write_supported(&self) -> Result<(), FileError> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             Ok(())
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             Err(FileError::Platform)
         }
     }
 
-    /// Read a plan snapshot without creating files, including on non-Unix hosts.
+    /// Read a plan snapshot without creating files on any platform.
     pub fn read(path: &Path) -> Result<Self, FileError> {
         Ok(Self {
             path: path.into(),
@@ -54,7 +54,7 @@ impl Snapshot {
         })
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(all(test, any(unix, windows)))]
     pub fn backup(path: &Path) -> Result<Self, FileError> {
         let snapshot = Self::read(path).map_err(|_| FileError::Backup)?;
         snapshot.create_backup()?;
@@ -77,14 +77,12 @@ impl Snapshot {
         let mut latest = 0_u64;
         for entry in fs::read_dir(parent).map_err(|_| FileError::Backup)? {
             let name = entry.map_err(|_| FileError::Backup)?.file_name();
-            let Some(suffix) = name
+            let Some(number) = name
                 .as_encoded_bytes()
-                .strip_prefix(prefix.as_encoded_bytes())
-            else {
-                continue;
-            };
-            let Some(number) = suffix
-                .strip_suffix(b"~")
+                .rsplit(|byte| *byte == b'.')
+                .next()
+                .and_then(|suffix| suffix.strip_prefix(b"~"))
+                .and_then(|suffix| suffix.strip_suffix(b"~"))
                 .and_then(|bytes| std::str::from_utf8(bytes).ok())
                 .filter(|number| {
                     !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
@@ -92,6 +90,12 @@ impl Snapshot {
             else {
                 continue;
             };
+            let mut expected = prefix.clone();
+            expected.push(number);
+            expected.push("~");
+            if !same_path(Path::new(&name), Path::new(&expected)) {
+                continue;
+            }
             latest = latest.max(number.parse::<u64>().map_err(|_| FileError::Backup)?);
         }
         let next = latest.checked_add(1).ok_or(FileError::Backup)?;
@@ -100,33 +104,27 @@ impl Snapshot {
         Ok(path.into())
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(all(test, any(unix, windows)))]
     pub fn create_backup(&self) -> Result<(), FileError> {
         self.create_backup_at(&self.default_backup_path()?)
     }
 
     /// Back up the original before reading the stack or resolving secrets.
     pub fn create_backup_at(&self, backup_path: &Path) -> Result<(), FileError> {
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = backup_path;
             Err(FileError::Platform)
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
-            use std::os::unix::fs::OpenOptionsExt;
             self.check_unchanged()?;
-            if file_identity(&self.path).map_err(|_| FileError::Backup)?
-                == file_identity(backup_path).map_err(|_| FileError::Backup)?
-            {
+            let target = file_identity(&self.path).map_err(|_| FileError::Backup)?;
+            let backup = file_identity(backup_path).map_err(|_| FileError::Backup)?;
+            if same_path(&target, &backup) {
                 return Err(FileError::Backup);
             }
-            let mut backup = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(backup_path)
-                .map_err(|_| FileError::Backup)?;
+            let mut backup = create_private(backup_path).map_err(|_| FileError::Backup)?;
             // Retain a partial private backup on failure rather than deleting
             // a path another process might have replaced.
             backup
@@ -217,8 +215,9 @@ impl Snapshot {
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
-        let mut temporary =
-            tempfile::NamedTempFile::new_in(parent).map_err(|_| FileError::Write)?;
+        let mut temporary = tempfile::Builder::new()
+            .make_in(parent, create_private)
+            .map_err(|_| FileError::Write)?;
         temporary
             .write_all(document.as_bytes())
             .map_err(|_| FileError::Write)?;
@@ -248,7 +247,33 @@ impl Snapshot {
 }
 
 #[cfg(unix)]
+fn create_private(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+}
+
+#[cfg(windows)]
+use windows::{create_private, same_path};
+
+#[cfg(not(any(unix, windows)))]
+fn create_private(_path: &Path) -> std::io::Result<fs::File> {
+    Err(std::io::Error::other("private writes are unsupported"))
+}
+
+#[cfg(not(windows))]
+fn same_path(left: &Path, right: &Path) -> bool {
+    left == right
+}
+
+#[cfg(any(unix, windows))]
 fn file_identity(path: &Path) -> Result<PathBuf, std::io::Error> {
+    #[cfg(windows)]
+    windows::validate_path(path)?;
     let parent = path
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -260,8 +285,20 @@ fn file_identity(path: &Path) -> Result<PathBuf, std::io::Error> {
 }
 
 fn read_regular(path: &Path) -> Result<Option<Vec<u8>>, std::io::Error> {
+    #[cfg(windows)]
+    windows::validate_path(path)?;
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_file() => fs::read(path).map(Some),
+        Ok(metadata) if metadata.file_type().is_file() => {
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+                if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                    return Err(std::io::Error::other("not a regular file"));
+                }
+            }
+            fs::read(path).map(Some)
+        }
         Ok(_) => Err(std::io::Error::other("not a regular file")),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
@@ -544,7 +581,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, not(unix)))]
+#[cfg(all(test, not(any(unix, windows))))]
 mod platform_tests {
     use super::*;
 

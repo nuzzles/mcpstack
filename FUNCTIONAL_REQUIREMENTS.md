@@ -15,7 +15,7 @@ to its entry in Current status at the bottom.\
 | --- | --- |
 | Done | Read MCP server entries from the default Codex config for export. [*](#codex-export) |
 | Done | Read MCP config at an explicit path for export. |
-| Partial [*](#codex-import) | Write MCP config at the default or an explicit path for import. |
+| Done | Write MCP config at the default or an explicit path for import. [*](#codex-import) |
 | Done | Validate MCP fields against the bundled current Codex config schema; reject obsolete or unknown fields. [*](#codex-config-schema) |
 | Done | On import, preserve unrelated settings/servers; skip identical entries and require approval for replacements. |
 
@@ -43,11 +43,11 @@ to its entry in Current status at the bottom.\
 | Done | Validate schema versions, server definitions, names, and secret references. |
 | Done | Export Codex server entries as a YAML stack to stdout with safe defaults. [*](#codex-export) |
 | Done | Replace recognized credentials with secret references by default; allow interactive selections or `--expose-secrets` to include values. |
-| Partial [*](#codex-import) | Import/merge a stack into Codex without losing supported fields. [*](#phase-1-boundaries) |
+| Done | Import/merge a stack into Codex without losing supported fields. [*](#phase-1-boundaries) |
 | Done | Resolve masked literals from environment variables or hidden prompts; preserve native runtime bindings. [*](#secrets) |
-| Partial [*](#codex-import) | Offer a unique numbered backup before processing import; abort if a requested backup fails. |
-| Partial [*](#codex-import) | Atomic config writes with restrictive permissions; preserve originals on failure. |
-| Partial [*](#stack-workflow-tests) | Test round trips, repeat imports, config schema compatibility, missing secrets, and write failures. |
+| Done | Offer a unique numbered backup before processing import; abort if a requested backup fails. [*](#codex-import) |
+| Done | Atomic config writes with restrictive permissions; preserve originals on failure. [*](#codex-import) |
+| Done | Test round trips, repeat imports, config schema compatibility, missing secrets, and write failures. [*](#stack-workflow-tests) |
 
 ## Phase 2
 
@@ -219,8 +219,11 @@ Stack serialization round trips, client-independent documents, reference syntax,
 unsupported shared fields, native client fields and secret references, transport
 URL schemes, validation file preservation, and CLI output failures are
 covered. Current Codex schema validation, diff redaction and file line numbers, and
-export without a Codex installation are also covered. Repeat imports, secret resolution, backups, atomic writes, and failure
-preservation are covered on Unix; other platforms reject import safely.
+export without a Codex installation are also covered. Repeat imports, secret
+resolution, backups, atomic writes, and failure preservation are covered on Unix
+and Windows. Windows tests also verify protected user-only ACLs under a permissive
+parent folder, case-insensitive backup names, and locked-file replacement failures.
+Other platforms reject import safely.
 
 ### Codex export
 
@@ -258,7 +261,7 @@ schema. Validation is offline and does not require Codex to be installed. Native
 entries preserve supported fields; obsolete inline `bearer_token` and unknown
 fields are rejected without exposing values. Refresh the snapshot deliberately
 when adding support for schema changes. Portable conversion supports STDIO/HTTP;
-safe filesystem writes currently support Unix only.
+safe filesystem writes support Unix and Windows filesystems with persistent ACLs.
 
 ### Codex import
 
@@ -282,9 +285,17 @@ cancellation, or no-op imports.
 
 Replacements update the complete server definition. Unrelated settings, comments,
 and servers are preserved; identical entries do not rewrite the config. Private
-writes use a synced temporary file and check the original snapshot before atomic
-replacement. Writes support Unix only; previews work on all platforms. Concurrent
-editing still has a final check/rename race.
+writes use a synced temporary file in the same directory and check the original
+snapshot before atomic replacement. Unix files are created with mode `0600`.
+Windows backups and temporary configs are created with a protected DACL granting
+full access only to the current user, without inheriting parent permissions. The
+filesystem must support persistent ACLs, and the applied DACL is verified before
+writing credential bytes. Replacement retains the temporary file's private ACL;
+locked or read-only targets fail without replacing the original. Windows device
+paths, alternate data streams, and config reparse points are rejected. A failed
+permission check may leave an empty file; later backup write failures may leave a
+partial private backup. Previews work on all platforms. Concurrent editing still
+has a final check/rename race.
 
 Diffs use the original and proposed file line numbers. Recognized credentials and
 resolved secrets are redacted; hidden changes display `<redacted: changed>`.

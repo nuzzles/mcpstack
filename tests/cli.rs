@@ -637,9 +637,10 @@ fn export_reads_explicit_config_and_preserves_inputs() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn import_merges_resolved_stacks_with_private_backup_and_noop_repeat() {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     let fixture = StackFixture::new(
         "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config:\n      command: tool\n      env: {API_KEY: {'$env': MCPSTACK_IMPORT_TEST_SECRET}}\n",
@@ -674,6 +675,7 @@ fn import_merges_resolved_stacks_with_private_backup_and_noop_repeat() {
     );
     let backup = fixture.directory.path().join("config.toml.~1~");
     assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
+    #[cfg(unix)]
     assert_eq!(
         std::fs::metadata(&config).unwrap().permissions().mode() & 0o777,
         0o600
@@ -696,7 +698,7 @@ fn import_merges_resolved_stacks_with_private_backup_and_noop_repeat() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn import_backs_up_before_validation_and_preserves_original_on_failure() {
     let original = "[mcp_servers.shared]\ncommand='original'\n";
@@ -760,7 +762,7 @@ fn import_backs_up_before_validation_and_preserves_original_on_failure() {
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 #[test]
 fn import_refuses_platforms_without_private_write_support() {
     let fixture = StackFixture::new(
@@ -781,7 +783,7 @@ fn import_refuses_platforms_without_private_write_support() {
     assert!(!fixture.directory.path().join("config.toml.~1~").exists());
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn codex_export_import_round_trip_preserves_supported_fields() {
     let fixture = StackFixture::new("placeholder");
@@ -960,7 +962,7 @@ fn masked_import_rejects_missing_values_without_interactive_input() {
             .stdin(Stdio::null())
             .output()
             .unwrap();
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         if flag != "--dry-run" {
             assert_eq!(output.status.code(), Some(13));
             assert!(!fixture.directory.path().join("config.toml.~1~").exists());
@@ -1032,7 +1034,7 @@ fn native_runtime_bindings_are_preserved_without_resolving_values() {
     ] {
         assert!(warnings.contains(name));
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let output = execute("-y");
         assert!(output.status.success(), "{output:?}");
@@ -1104,24 +1106,24 @@ fn diff_shows_redacted_replacements_without_overwriting_existing_config() {
         .stdin(Stdio::null())
         .output()
         .unwrap();
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     assert!(actual.status.success());
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     assert_eq!(actual.status.code(), Some(13));
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     assert!(
         std::fs::read_to_string(&config)
             .unwrap()
             .contains("new-api-secret")
     );
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     assert_eq!(
         std::fs::read_to_string(fixture.directory.path().join("config.toml.~1~")).unwrap(),
         original
     );
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     assert!(!fixture.directory.path().join("config.toml.~1~").exists());
 }
 
@@ -1271,7 +1273,7 @@ fn previews_redact_old_values_at_incoming_secret_reference_locations() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn auto_approve_replaces_existing_servers_and_preserves_unrelated_settings() {
     let fixture = StackFixture::new(
@@ -1307,7 +1309,7 @@ fn auto_approve_replaces_existing_servers_and_preserves_unrelated_settings() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn diff_hunk_positions_match_original_and_imported_files() {
     let fixture = StackFixture::new(
