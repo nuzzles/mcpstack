@@ -50,7 +50,7 @@ pub fn export_with_decisions(
     if servers.values().any(|server| !server.is_object()) {
         return Err(ExportError::Servers);
     }
-    if !servers.values().all(crate::adapters::codex::supports) {
+    if !servers.values().all(super::schema::supports) {
         return Err(ExportError::Schema);
     }
     let definitions: BTreeMap<_, _> = servers

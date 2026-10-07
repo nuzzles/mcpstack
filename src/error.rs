@@ -64,12 +64,8 @@ pub enum AppError {
     Stack(#[from] ValidationError),
     #[error("{code}", code = ErrorCode::ConfigReadError)]
     ConfigRead(#[source] io::Error),
-    #[error("Cannot determine the Codex config path. Set CODEX_HOME.")]
-    ConfigPath,
     #[error("{0}")]
-    Export(#[from] crate::exporters::codex::ExportError),
-    #[error("{0}")]
-    Import(#[from] crate::importers::codex::ImportError),
+    Integration(#[from] crate::integrations::Error),
     #[error(
         "Import approval requires a terminal or --auto-approve (-y), including during dry-run."
     )]
@@ -78,8 +74,6 @@ pub enum AppError {
         "Import approval was cancelled or could not be completed. Client configuration was not changed."
     )]
     ImportApprovalCancelled,
-    #[error("{0}")]
-    ImportFile(#[from] crate::importers::codex_fs::FileError),
 }
 
 impl AppError {
@@ -90,15 +84,9 @@ impl AppError {
             Self::Output(_) => ErrorCode::OutputError,
             Self::StackRead(_) => ErrorCode::StackReadError,
             Self::Stack(_) => ErrorCode::InvalidStack,
-            Self::ConfigRead(_) | Self::ConfigPath => ErrorCode::ConfigReadError,
-            Self::Export(_) => ErrorCode::ExportError,
-            Self::Import(_) | Self::ImportApprovalRequired | Self::ImportApprovalCancelled => {
-                ErrorCode::ImportError
-            }
-            Self::ImportFile(error) => match error {
-                crate::importers::codex_fs::FileError::Backup => ErrorCode::BackupError,
-                _ => ErrorCode::ConfigWriteError,
-            },
+            Self::ConfigRead(_) => ErrorCode::ConfigReadError,
+            Self::ImportApprovalRequired | Self::ImportApprovalCancelled => ErrorCode::ImportError,
+            Self::Integration(error) => error.code(),
         }
     }
 }

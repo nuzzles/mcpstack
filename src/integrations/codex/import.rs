@@ -188,7 +188,7 @@ pub fn prepare(
                     serde_json::to_value(definition).map_err(|_| ImportError::Definition)?
                 }
             };
-            if !crate::adapters::codex::supports(&definition) {
+            if !super::schema::supports(&definition) {
                 return Err(ImportError::Unsupported);
             }
             let core: Definition =
@@ -342,6 +342,7 @@ impl Definition {
 
 #[cfg(test)]
 mod tests {
+    use super::super::export::export;
     use super::*;
     #[test]
     fn portable_bearer_binding_does_not_read_the_secret() {
@@ -401,7 +402,7 @@ mod tests {
     #[test]
     fn export_import_round_trip_preserves_supported_meaning() {
         let original = "[mcp_servers.tool]\ncommand='tool'\nargs=['--token', 'fixture-secret']\n[mcp_servers.tool.env]\nAPI_KEY='fixture-secret'\n";
-        let stack = crate::exporters::codex::export(original, false).unwrap();
+        let stack = export(original, false).unwrap();
         let prepared = prepare(&stack, |_| Some("fixture-secret".into())).unwrap();
         assert_eq!(prepared["tool"]["command"].as_str(), Some("tool"));
         assert_eq!(
@@ -413,7 +414,7 @@ mod tests {
     #[test]
     fn preserves_current_native_fields_and_rejects_removed_credentials() {
         let original = "[mcp_servers.process]\ncommand='tool'\nenv_vars=[{name='REMOTE_TOKEN',source='remote'}]\n[mcp_servers.process.tools.read]\napproval_mode='prompt'\noutput_token_limit=2000\n[mcp_servers.remote]\nurl='https://example.com/mcp'\nauth='oauth'\nscopes=['read']\n[mcp_servers.remote.oauth]\nclient_id='public-client'\nclient_secret='fixture-secret'\ncallback_port=1234\n";
-        let stack = crate::exporters::codex::export(original, false).unwrap();
+        let stack = export(original, false).unwrap();
         let prepared = prepare(&stack, |_| Some("fixture-secret".into())).unwrap();
         let before: toml::Table = toml::from_str(original).unwrap();
         for (name, definition) in before["mcp_servers"].as_table().unwrap() {

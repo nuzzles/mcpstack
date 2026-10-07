@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 use serde_json::Value;
 
 static SCHEMA: LazyLock<jsonschema::Validator> = LazyLock::new(|| {
-    let schema: Value = serde_json::from_str(include_str!("../../schemas/codex-mcp.schema.json"))
+    let schema: Value = serde_json::from_str(include_str!("mcp.schema.json"))
         .expect("bundled Codex schema must be valid JSON");
     jsonschema::validator_for(&schema).expect("bundled Codex schema must compile")
 });
