@@ -209,6 +209,99 @@ pub(super) async fn run_import(
     Ok(())
 }
 
+/// Switch the entire server set as one approved, atomic configuration change.
+pub(super) async fn run_use(
+    file: PathBuf,
+    config: Option<PathBuf>,
+    output: &mut impl Write,
+    non_interactive: bool,
+    colored: bool,
+    dry_run: bool,
+    auto_approve: bool,
+) -> Result<(), AppError> {
+    if dry_run {
+        tracing::warn!("Dry run; no changes will be committed.");
+    }
+    let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
+    let snapshot = Snapshot::read(&path).await?;
+    let document = fs::read_to_string(file)
+        .await
+        .map_err(AppError::StackRead)?;
+    let stack = Stack::from_yaml(&document)?;
+    let interactive = !non_interactive && stdin().is_terminal() && stderr().is_terminal();
+    let mut resolver = SecretResolver {
+        dry_run,
+        interactive: (dry_run || !auto_approve) && interactive,
+        values: BTreeMap::new(),
+        cancelled: false,
+    };
+    let prepared = match &stack {
+        Stack::V1(stack) => prepare(stack, |name| resolver.resolve(name)),
+    };
+    if resolver.cancelled {
+        return Err(AppError::ImportApprovalCancelled);
+    }
+    let definitions = prepared?;
+    let (changed, _) = snapshot.replacement_proposal(&definitions)?;
+    if !changed {
+        if !dry_run {
+            snapshot.replace_servers(&definitions).await?;
+        }
+        writeln!(
+            output,
+            "No changes; the configured MCP servers already match this stack."
+        )?;
+        return Ok(());
+    }
+    warn_runtime_bindings(&definitions);
+    if dry_run {
+        let secrets: Vec<_> = resolver.values.into_values().flatten().collect();
+        super::diff::show_replacement_diff(
+            &snapshot,
+            &path,
+            &definitions,
+            &secrets,
+            output,
+            colored,
+        )?;
+        writeln!(
+            output,
+            "Would switch to {} MCP server(s); all servers absent from the stack would be removed.",
+            definitions.len()
+        )?;
+        return Ok(());
+    }
+    if !auto_approve {
+        if !interactive {
+            return Err(AppError::UseApprovalRequired);
+        }
+        if !Confirm::new()
+            .with_prompt("Replace ALL configured MCP servers with this stack?")
+            .default(false)
+            .report(false)
+            .interact()
+            .map_err(|_| AppError::ImportApprovalCancelled)?
+        {
+            writeln!(
+                output,
+                "Stack switch cancelled; client configuration was not changed."
+            )?;
+            return Ok(());
+        }
+    }
+    snapshot.ensure_write_supported()?;
+    // Switching always backs up the original after validation and whole-set approval.
+    let backup = snapshot.default_backup_path().await?;
+    snapshot.create_backup_at(&backup).await?;
+    snapshot.replace_servers(&definitions).await?;
+    writeln!(
+        output,
+        "Using stack with {} MCP server(s); all other MCP servers were removed.",
+        definitions.len()
+    )?;
+    Ok(())
+}
+
 /// Discover numbered backups only after the user requests one. Interactive
 /// callers can still choose a custom path when default discovery fails.
 async fn choose_backup_path(

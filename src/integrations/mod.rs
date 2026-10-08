@@ -3,7 +3,8 @@ mod codex;
 
 use std::io::Write;
 
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
+pub use codex::StackArgs;
 use thiserror::Error;
 
 use crate::error::{AppError, ErrorCode};
@@ -12,6 +13,8 @@ pub const EXAMPLES: &[&str] = &[
     "mcpstack --schema",
     "mcpstack --help",
     "mcpstack validate --help",
+    "mcpstack use --help",
+    "mcpstack use work.yml --dry-run",
     codex::EXAMPLES[0],
     codex::EXAMPLES[1],
     codex::EXAMPLES[2],
@@ -79,6 +82,32 @@ impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Codex(error) => error.code(),
+        }
+    }
+}
+
+/// Target selected by the command, never stored in stack files.
+#[derive(Clone, Copy, Default, ValueEnum)]
+pub enum UseClient {
+    #[default]
+    Codex,
+}
+
+impl UseClient {
+    pub async fn run(
+        self,
+        args: StackArgs,
+        output: &mut impl Write,
+        non_interactive: bool,
+        colored: bool,
+        dry_run: bool,
+        auto_approve: bool,
+    ) -> Result<(), AppError> {
+        match self {
+            Self::Codex => {
+                args.use_stack(output, non_interactive, colored, dry_run, auto_approve)
+                    .await
+            }
         }
     }
 }

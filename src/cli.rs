@@ -4,6 +4,7 @@ use crate::cmd::diff::Diff;
 use crate::cmd::export::Export;
 use crate::cmd::import::Import;
 use crate::cmd::schema::Schema;
+use crate::cmd::use_stack::Use;
 use crate::cmd::validate::Validate;
 use crate::error::AppError;
 use crate::logging::Logging;
@@ -12,7 +13,7 @@ use std::io::Write;
 
 pub use crate::integrations::EXAMPLES;
 
-/// Install MCP servers, version-control stacks, and share setups across teams.
+/// Switch MCP server stacks, version-control configurations, and share setups across clients.
 #[derive(Parser)]
 #[command(
     name = "mcpstack",
@@ -39,6 +40,7 @@ enum Commands {
     Export(Export),
     Import(Import),
     Diff(Diff),
+    Use(Use),
 }
 
 impl Cli {
@@ -54,6 +56,11 @@ impl Cli {
                 Commands::Validate(inner) => inner.run(output).await,
                 Commands::Export(inner) => inner.run(output, self.non_interactive).await,
                 Commands::Import(inner) => {
+                    inner
+                        .run(output, self.non_interactive, self.logging.output_ansi())
+                        .await
+                }
+                Commands::Use(inner) => {
                     inner
                         .run(output, self.non_interactive, self.logging.output_ansi())
                         .await

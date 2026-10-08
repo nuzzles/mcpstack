@@ -41,7 +41,7 @@ impl ExportArgs {
 
 #[derive(Args)]
 pub struct StackArgs {
-    /// Stack file to compare or import.
+    /// Stack file to compare, import, or use.
     #[arg(value_name = "FILE")]
     file: PathBuf,
     /// Use this Codex TOML file instead of the default configuration.
@@ -50,6 +50,26 @@ pub struct StackArgs {
 }
 
 impl StackArgs {
+    pub(super) async fn use_stack(
+        self,
+        output: &mut impl Write,
+        non_interactive: bool,
+        colored: bool,
+        dry_run: bool,
+        auto_approve: bool,
+    ) -> Result<(), AppError> {
+        workflow::run_use(
+            self.file,
+            self.config,
+            output,
+            non_interactive,
+            colored,
+            dry_run,
+            auto_approve,
+        )
+        .await
+    }
+
     pub(super) async fn import(
         self,
         output: &mut impl Write,
