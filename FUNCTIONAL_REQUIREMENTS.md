@@ -180,8 +180,8 @@ settings are preserved. Resolve the new stack's secrets locally.
 
 `use` defaults to Codex; `--client codex` selects it explicitly and `--config
 <path>` overrides its default config path. It validates the entire stack and
-resolves secrets before any backup or write. Interactive use shows a redacted
-diff and asks once to replace ALL servers (default No). `-y` approves the whole
+resolves secrets before any backup or write. Interactive use asks once to replace
+ALL servers (default No), then reports the result without printing a diff. `-y` approves the whole
 switch; unattended writes require it. `--dry-run` shows the whole proposed set,
 including removals, without approval prompts, backups, or writes. Missing masked
 values still fail in unattended mode. Changed switches always create a numbered

@@ -254,8 +254,8 @@ pub(super) async fn run_use(
         return Ok(());
     }
     warn_runtime_bindings(&definitions);
-    let secrets: Vec<_> = resolver.values.into_values().flatten().collect();
     if dry_run {
+        let secrets: Vec<_> = resolver.values.into_values().flatten().collect();
         super::diff::show_replacement_diff(
             &snapshot,
             &path,
@@ -275,14 +275,6 @@ pub(super) async fn run_use(
         if !interactive {
             return Err(AppError::UseApprovalRequired);
         }
-        super::diff::show_replacement_diff(
-            &snapshot,
-            &path,
-            &definitions,
-            &secrets,
-            output,
-            colored,
-        )?;
         if !Confirm::new()
             .with_prompt("Replace ALL configured MCP servers with this stack?")
             .default(false)
