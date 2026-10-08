@@ -44,7 +44,7 @@ to its entry in Current status at the bottom.\
 | Done | Export Codex server entries as a YAML stack to stdout with safe defaults. [*](#codex-export) |
 | Done | Replace recognized credentials with secret references by default; allow interactive selections or `--expose-secrets` to include values. |
 | Done | Import/merge a stack into Codex without losing supported fields. [*](#phase-1-boundaries) |
-| Done | Resolve masked literals from environment variables or hidden prompts; preserve native runtime bindings. [*](#secrets) |
+| Done | Resolve masked literals from environment variables or hidden prompts; preserve runtime bindings. [*](#secrets) |
 | Done | Offer a unique numbered backup before processing import; abort if a requested backup fails. [*](#codex-import) |
 | Done | Atomic config writes with Unix `0600` permissions or inherited Windows directory permissions; preserve originals on failure. [*](#codex-import) |
 | Done | Test round trips, repeat imports, config schema compatibility, missing secrets, and write failures. [*](#stack-workflow-tests) |
@@ -107,6 +107,32 @@ of the current official MCP config schema without detecting or running Codex.
 Reject unsupported stack schemas, obsolete or unknown MCP fields, invalid values,
 and unsupported portable transports before writing. Preserve unrelated settings.
 
+### Client-independent server definitions
+
+Stack items have no `client` field. A server contains either `config` with
+configuration data or `transport` and optional `settings`. The export/import
+command selects the client adapter; a stack does not record client ownership.
+For example:
+
+```yaml
+schema_version: 1
+servers:
+  local:
+    config:
+      command: example
+      args: [--token, {$env: SERVICE_TOKEN}]
+```
+
+Configuration data preserves fields and nested secret references without binding
+an item to its source client. Each target adapter must validate that it can
+represent the fields before writing; removing the label does not make every
+client-specific option universally supported. Codex is currently the implemented
+adapter. Transport definitions provide the explicit shared transport form.
+
+This changes the unpublished v1 format: remove `client: codex` (or another client
+label) from existing items and retain their `config` data. Legacy client labels
+are rejected rather than silently ignored.
+
 ### Phase 1 boundaries
 
 [*] Import merges server definitions into Codex config without installing or
@@ -166,7 +192,7 @@ Transactional mode must not silently commit a partially installed stack.
 
 ### Secrets
 
-[*] Masked literal fields use `{"$env":"VARIABLE"}` in native definitions or
+[*] Masked literal fields use `{"$env":"VARIABLE"}` in configuration definitions or
 `{env: VARIABLE}` in portable secret fields. Resolve them from the shell or hidden
 interactive input, caching repeated references. Missing values fail when prompting
 is unavailable, including actual imports with `-y`. Both preview modes can prompt
@@ -174,7 +200,7 @@ for missing values and always compare real values.
 
 Native `env_vars`, `bearer_token_env_var`, and `env_http_headers` retain their runtime
 bindings without embedding values. Missing local runtime variables warn; remote
-bindings are not checked against the local shell. Masking does not convert native
+bindings are not checked against the local shell. Masking does not convert literal
 fields into runtime bindings. Export recognition and exposure are described under
 [Codex export](#codex-export). Additional secret providers remain Phase 2 work.
 
@@ -182,9 +208,8 @@ fields into runtime bindings. Export recognition and exposure are described unde
 
 Additional command/flag syntax, client adapter support, additional
 secret providers, installation mechanisms, and backup retention/recovery.
-Stack format v1 defines YAML, STDIO/HTTP/SSE/WebSocket, native client definitions,
-environment reference syntax,
-and client-independent server definitions.
+Stack format v1 defines YAML, STDIO/HTTP/SSE/WebSocket, client-independent
+configuration and transport definitions, and environment reference syntax.
 
 Remote catalogs, team access controls, and automatic synchronization are later
 scope. Publishing and release/deployment automation require explicit authorization.
@@ -217,8 +242,8 @@ failures, export failures, and import failures.
 
 The CLI schema is generated deterministically from command definitions. Stack v1
 uses ordered maps and passes serialization round-trip tests. Codex export emits
-deterministic native YAML stacks. `diff` and import `--dry-run` emit deterministic
-redacted configuration previews for the same stack, target config, resolved
+deterministic client-independent YAML stacks. `diff` and import `--dry-run` emit
+deterministic redacted configuration previews for the same stack, target config, resolved
 secrets, approvals, and color settings. Server processing uses ordered maps;
 previews retain the target file's layout and line numbers. Installation plans
 remain Phase 2 work.
@@ -244,7 +269,7 @@ Workflow coverage and remaining limitations are tracked under
 ### Stack workflow tests
 
 Stack serialization round trips, client-independent documents, reference syntax,
-unsupported shared fields, native client fields and secret references, transport
+unsupported shared fields, configuration fields and secret references, transport
 URL schemes, validation file preservation, and CLI output failures are
 covered. Current Codex schema validation, diff redaction and file line numbers, and
 export without a Codex installation are also covered. Repeat imports, secret
@@ -256,7 +281,7 @@ Other platforms reject import safely.
 
 ### Codex export
 
-`export codex` reads the default Codex TOML config and prints native server
+`export codex` reads the default Codex TOML config and prints client-independent server
 entries as a YAML stack to stdout. In noninteractive use, credential values become
 `{"$env":"MCPSTACK_SERVER_FIELD"}`. Recognition uses credential field names
 (token, secret, password, API/access/private key), authorization/cookie headers,
@@ -286,8 +311,8 @@ config. Relative paths resolve from the current working directory.
 
 Import conversion and export validate MCP entries against
 `src/integrations/codex/mcp.schema.json`, extracted from the current official Codex config
-schema. Validation is offline and does not require Codex to be installed. Native
-entries preserve supported fields; obsolete inline `bearer_token` and unknown
+schema. Validation is offline and does not require Codex to be installed. Configuration
+definitions preserve supported fields; obsolete inline `bearer_token` and unknown
 fields are rejected without exposing values. Refresh the snapshot deliberately
 when adding support for schema changes. Portable conversion supports STDIO/HTTP;
 filesystem writes support Unix and Windows.

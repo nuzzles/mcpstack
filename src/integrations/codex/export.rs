@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use thiserror::Error;
 
-use crate::schema::{SCHEMA_VERSION, Server, StackV1, v1::ClientValue};
+use crate::schema::{SCHEMA_VERSION, Server, StackV1, v1::ConfigValue};
 
 /// Diagnostics deliberately omit parser contents, field values.
 #[derive(Debug, Error)]
@@ -55,14 +55,14 @@ pub fn export_with_decisions(
     }
     let definitions: BTreeMap<_, _> = servers
         .into_iter()
-        .map(|(name, config)| (name, serde_json::json!({"client":"codex", "config":config})))
+        .map(|(name, config)| (name, serde_json::json!({"config":config})))
         .collect();
     let document = serde_json::json!({"schema_version":SCHEMA_VERSION,"servers":definitions});
     let mut stack: StackV1 = serde_json::from_value(document).map_err(|_| ExportError::Stack)?;
     stack.validate().map_err(|_| ExportError::Stack)?;
     let mut names = BTreeSet::new();
     for server in stack.servers.values() {
-        if let Server::ClientSpecific { config, .. } = server {
+        if let Server::Configuration { config, .. } = server {
             for value in config.values() {
                 collect_references(value, &mut names);
             }
@@ -88,7 +88,7 @@ pub fn mask_for_preview(
     definition: &toml::Table,
 ) -> Result<serde_json::Value, ExportError> {
     let document = serde_json::json!({"schema_version": SCHEMA_VERSION, "servers": {
-        name: {"client": "codex", "config": definition}
+        name: {"config": definition}
     }});
     let mut stack: StackV1 = serde_json::from_value(document).map_err(|_| ExportError::Config)?;
     let mut names = BTreeSet::new();
@@ -103,7 +103,7 @@ fn visit_credentials(
     expose: &mut impl FnMut(&str) -> Result<bool, ExportError>,
 ) -> Result<(), ExportError> {
     for (server_name, server) in &mut stack.servers {
-        if let Server::ClientSpecific { config, .. } = server {
+        if let Server::Configuration { config, .. } = server {
             for (key, value) in config {
                 if key == "env_http_headers" {
                     continue;
@@ -123,10 +123,10 @@ fn visit_credentials(
     Ok(())
 }
 
-fn collect_references(value: &ClientValue, names: &mut BTreeSet<String>) {
+fn collect_references(value: &ConfigValue, names: &mut BTreeSet<String>) {
     match value {
-        ClientValue::Object(values) => {
-            if let Some(ClientValue::String(name)) = values.get("$env") {
+        ConfigValue::Object(values) => {
+            if let Some(ConfigValue::String(name)) = values.get("$env") {
                 names.insert(name.clone());
             } else {
                 for value in values.values() {
@@ -134,7 +134,7 @@ fn collect_references(value: &ClientValue, names: &mut BTreeSet<String>) {
                 }
             }
         }
-        ClientValue::Array(values) => {
+        ConfigValue::Array(values) => {
             for value in values {
                 collect_references(value, names);
             }
@@ -224,7 +224,7 @@ fn secret_key(key: &str) -> bool {
 }
 
 fn protect(
-    value: &mut ClientValue,
+    value: &mut ConfigValue,
     path: &str,
     display_path: &str,
     sensitive: bool,
@@ -233,7 +233,7 @@ fn protect(
     expose: &mut impl FnMut(&str) -> Result<bool, ExportError>,
 ) -> Result<(), ExportError> {
     match value {
-        ClientValue::Object(values) => {
+        ConfigValue::Object(values) => {
             if !values.contains_key("$env") {
                 for (key, value) in values {
                     protect(
@@ -248,19 +248,19 @@ fn protect(
                 }
             }
         }
-        ClientValue::Array(values) => {
+        ConfigValue::Array(values) => {
             let mut next_secret = false;
             let mut options = arguments;
             for (index, value) in values.iter_mut().enumerate() {
                 if options
                     && !next_secret
-                    && matches!(value, ClientValue::String(text) if text == "--")
+                    && matches!(value, ConfigValue::String(text) if text == "--")
                 {
                     options = false;
                 }
                 let (inline_secret, following_secret) = if options && !next_secret {
                     match value {
-                        ClientValue::String(text) if text.starts_with('-') => {
+                        ConfigValue::String(text) if text.starts_with('-') => {
                             let (flag, inline) = text
                                 .split_once('=')
                                 .map_or((text.as_str(), false), |(flag, _)| (flag, true));
@@ -284,7 +284,7 @@ fn protect(
                 next_secret = following_secret;
             }
         }
-        ClientValue::String(_) | ClientValue::Number(_) if sensitive => {
+        ConfigValue::String(_) | ConfigValue::Number(_) if sensitive => {
             if expose(display_path)? {
                 return Ok(());
             }
@@ -306,9 +306,9 @@ fn protect(
                 name = format!("{base}_{index}");
                 index += 1;
             }
-            *value = ClientValue::Object(BTreeMap::from([(
+            *value = ConfigValue::Object(BTreeMap::from([(
                 "$env".to_owned(),
-                ClientValue::String(name),
+                ConfigValue::String(name),
             )]));
         }
         _ => {}
@@ -384,9 +384,9 @@ client_secret = "another-fixture-secret"
     fn preserves_references_and_disambiguates_generated_names() {
         // Reference preservation is a stack/redaction invariant; reference
         // objects are not valid literal Codex config fields.
-        let mut stack = StackV1::from_yaml("schema_version: 1\nservers:\n  x:\n    client: codex\n    config:\n      api-key: first-secret\n      api_key: second-secret\n      pin: 1234\n      enabled: true\n      existing: {'$env': MCPSTACK_X_API_KEY}\n").unwrap();
+        let mut stack = StackV1::from_yaml("schema_version: 1\nservers:\n  x:\n    config:\n      api-key: first-secret\n      api_key: second-secret\n      pin: 1234\n      enabled: true\n      existing: {'$env': MCPSTACK_X_API_KEY}\n").unwrap();
         let mut names = BTreeSet::new();
-        if let Server::ClientSpecific { config, .. } = &stack.servers["x"] {
+        if let Server::Configuration { config, .. } = &stack.servers["x"] {
             for value in config.values() {
                 collect_references(value, &mut names);
             }

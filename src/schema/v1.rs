@@ -1,5 +1,3 @@
-pub use crate::integrations::Client;
-
 use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
@@ -24,21 +22,20 @@ pub enum Server {
         #[serde(default)]
         settings: Settings,
     },
-    ClientSpecific {
-        client: Client,
+    Configuration {
         #[serde(deserialize_with = "unique_map")]
-        config: BTreeMap<String, ClientValue>,
+        config: BTreeMap<String, ConfigValue>,
     },
 }
 
-/// Native configuration data, not permission to write it to a client.
+/// Client-independent configuration data. Target adapters validate supported fields.
 /// Recursive objects reject duplicate keys; {"$env":"NAME"} is reserved
 /// for secret references at any depth, including inside arrays.
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
-pub enum ClientValue {
-    Object(#[serde(deserialize_with = "unique_map")] BTreeMap<String, ClientValue>),
-    Array(Vec<ClientValue>),
+pub enum ConfigValue {
+    Object(#[serde(deserialize_with = "unique_map")] BTreeMap<String, ConfigValue>),
+    Array(Vec<ConfigValue>),
     String(String),
     Number(serde_json::Number),
     Bool(bool),
@@ -181,8 +178,8 @@ impl Server {
                 transport,
                 settings,
             } => (transport, settings),
-            Self::ClientSpecific { config, .. } => {
-                return config.values().try_for_each(ClientValue::validate);
+            Self::Configuration { config, .. } => {
+                return config.values().try_for_each(ConfigValue::validate);
             }
         };
         settings.validate()?;
@@ -261,7 +258,7 @@ impl Server {
     }
 }
 
-impl ClientValue {
+impl ConfigValue {
     fn validate(&self) -> Result<(), ValidationError> {
         match self {
             Self::Object(values) if values.contains_key("$env") => {
