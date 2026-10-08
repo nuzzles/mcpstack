@@ -128,3 +128,48 @@ fn import_merges_without_removing_servers_and_diff_redacts_credentials() {
         original
     );
 }
+
+#[test]
+fn credential_only_changes_remain_visible_in_both_previews() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let stack = dir.path().join("stack.yml");
+    let original = r#"{"mcpServers":{"api":{"type":"http","url":"https://example.com/mcp","headers":{"Authorization":"Bearer old-fixture"}}}}"#;
+    std::fs::write(&config, original).unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  api:\n    config:\n      type: http\n      url: https://example.com/mcp\n      headers: {Authorization: 'Bearer new-fixture'}\n").unwrap();
+    for (operation, flags) in [("diff", vec![]), ("import", vec!["--dry-run", "-y"])] {
+        let output = run(operation, Some(&stack), &config, &flags);
+        assert!(output.status.success(), "{output:?}");
+        let preview = String::from_utf8(output.stdout).unwrap();
+        assert!(preview.contains("<redacted: changed>"), "{preview}");
+        assert!(!preview.contains("old-fixture"));
+        assert!(!preview.contains("new-fixture"));
+    }
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    assert!(!dir.path().join("claude.json.~1~").exists());
+}
+
+#[test]
+fn non_string_server_type_is_rejected_before_a_backup_or_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let stack = dir.path().join("stack.yml");
+    let original = r#"{"theme":"dark","mcpServers":{}}"#;
+    std::fs::write(&config, original).unwrap();
+    std::fs::write(
+        &stack,
+        "schema_version: 1\nservers:\n  bad:\n    config: {type: 17, command: tool}\n",
+    )
+    .unwrap();
+    for operation in ["diff", "import", "use"] {
+        let flags = if operation == "diff" {
+            vec![]
+        } else {
+            vec!["-y"]
+        };
+        let output = run(operation, Some(&stack), &config, &flags);
+        assert!(!output.status.success(), "{operation}: {output:?}");
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+        assert!(!dir.path().join("claude.json.~1~").exists());
+    }
+}

@@ -85,15 +85,12 @@ fn validate(definition: &Value) -> Result<(), Error> {
     }) {
         return Err(Error::Unsupported);
     }
-    let kind =
-        object
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or(if object.contains_key("command") {
-                "stdio"
-            } else {
-                ""
-            });
+    let kind = match object.get("type") {
+        Some(Value::String(kind)) => kind.as_str(),
+        Some(_) => return Err(Error::Config),
+        None if object.contains_key("command") => "stdio",
+        None => "",
+    };
     match kind {
         "stdio" => {
             if object
@@ -298,13 +295,77 @@ fn mask(values: BTreeMap<String, Value>) -> Result<BTreeMap<String, Value>, AppE
         .map(|(name, server)| (name.clone(), server["config"].clone()))
         .collect())
 }
+fn is_masked(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|object| object.contains_key("$env"))
+}
+
+fn mark_changed_secrets(
+    before: &Value,
+    after: &Value,
+    before_mask: &mut Value,
+    after_mask: &mut Value,
+) {
+    if is_masked(after_mask) {
+        if !is_masked(before_mask) {
+            *before_mask = Value::String("<redacted>".into());
+        }
+        if before != after {
+            *after_mask = Value::String("<redacted: changed>".into());
+        }
+        return;
+    }
+    match (before, after, before_mask, after_mask) {
+        (
+            Value::Object(before),
+            Value::Object(after),
+            Value::Object(before_mask),
+            Value::Object(after_mask),
+        ) => {
+            for (key, after_value) in after {
+                if let (Some(before_value), Some(before_mask), Some(after_mask)) = (
+                    before.get(key),
+                    before_mask.get_mut(key),
+                    after_mask.get_mut(key),
+                ) {
+                    mark_changed_secrets(before_value, after_value, before_mask, after_mask);
+                }
+            }
+        }
+        (
+            Value::Array(before),
+            Value::Array(after),
+            Value::Array(before_mask),
+            Value::Array(after_mask),
+        ) => {
+            for (((before, after), before_mask), after_mask) in
+                before.iter().zip(after).zip(before_mask).zip(after_mask)
+            {
+                mark_changed_secrets(before, after, before_mask, after_mask);
+            }
+        }
+        _ => {}
+    }
+}
 fn preview(
     output: &mut impl Write,
     before: BTreeMap<String, Value>,
     after: BTreeMap<String, Value>,
 ) -> Result<(), AppError> {
-    let before = serde_json::to_string_pretty(&mask(before)?).map_err(|_| Error::Config)?;
-    let after = serde_json::to_string_pretty(&mask(after)?).map_err(|_| Error::Config)?;
+    let mut before_mask = mask(before.clone())?;
+    let mut after_mask = mask(after.clone())?;
+    for (name, after_value) in &after {
+        if let (Some(before_value), Some(before_mask), Some(after_mask)) = (
+            before.get(name),
+            before_mask.get_mut(name),
+            after_mask.get_mut(name),
+        ) {
+            mark_changed_secrets(before_value, after_value, before_mask, after_mask);
+        }
+    }
+    let before = serde_json::to_string_pretty(&before_mask).map_err(|_| Error::Config)?;
+    let after = serde_json::to_string_pretty(&after_mask).map_err(|_| Error::Config)?;
     let diff = similar::TextDiff::from_lines(&before, &after)
         .unified_diff()
         .header("current MCP servers", "proposed MCP servers")
