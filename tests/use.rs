@@ -3,7 +3,7 @@ use std::process::{Command, Output, Stdio};
 
 fn execute(stack: &Path, config: &Path, flags: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["--non-interactive", "--color", "never", "use"])
+        .args(["--non-interactive", "--color", "never", "codex", "use"])
         .arg(stack)
         .arg("--config")
         .arg(config)
@@ -183,13 +183,13 @@ fn rejects_invalid_stacks_missing_secrets_and_unapproved_switches_without_writes
 
 #[test]
 #[cfg(any(unix, windows))]
-fn default_codex_target_resolves_masked_secrets_and_explicit_target_is_supported() {
+fn explicit_codex_target_resolves_masked_secrets_at_default_config_path() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.toml");
     let stack = dir.path().join("stack.yml");
     std::fs::write(&stack, "schema_version: 1\nservers:\n  new:\n    config: {command: new, env: {TOKEN: {'$env': MCPSTACK_USE_TOKEN}}}\n").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .arg("use")
+        .args(["codex", "use"])
         .arg(&stack)
         .arg("-y")
         .env("CODEX_HOME", dir.path())
@@ -206,7 +206,7 @@ fn default_codex_target_resolves_masked_secrets_and_explicit_target_is_supported
     assert!(!String::from_utf8_lossy(&output.stdout).contains("fixture-use-secret"));
     assert!(!String::from_utf8_lossy(&output.stderr).contains("fixture-use-secret"));
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["use", "--client", "codex", "--dry-run"])
+        .args(["codex", "use", "--dry-run"])
         .arg(&stack)
         .arg("--config")
         .arg(&config)
@@ -242,5 +242,28 @@ fn failed_backups_and_invalid_target_configs_preserve_originals() {
         assert_eq!(output.status.code(), Some(13), "{output:?}");
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
         assert!(!dir.path().join("config.toml.~1~").exists());
+    }
+}
+
+#[test]
+fn client_namespace_is_required_before_reads_or_writes_including_dry_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    let original = "[mcp_servers.keep]\ncommand='keep'\n";
+    std::fs::write(&config, original).unwrap();
+    for flag in ["-y", "--dry-run"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["use", "missing.yml", flag])
+            .arg("--config")
+            .arg(&config)
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("INVALID_ARGUMENT"));
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

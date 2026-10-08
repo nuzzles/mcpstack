@@ -1,19 +1,16 @@
 pub(crate) mod schema;
 
-use crate::cmd::diff::Diff;
-use crate::cmd::export::Export;
-use crate::cmd::import::Import;
 use crate::cmd::schema::Schema;
-use crate::cmd::use_stack::Use;
 use crate::cmd::validate::Validate;
 use crate::error::AppError;
+use crate::integrations::Client;
 use crate::logging::Logging;
 use clap::{CommandFactory, Parser, Subcommand};
 use std::io::Write;
 
 pub use crate::integrations::EXAMPLES;
 
-/// Switch MCP server stacks, version-control configurations, and share setups across clients.
+/// A Rust CLI for humans and agents to install multiple MCP servers, version-control and switch stacks, and share setups across teams.
 #[derive(Parser)]
 #[command(
     name = "mcpstack",
@@ -37,10 +34,8 @@ pub struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Validate(Validate),
-    Export(Export),
-    Import(Import),
-    Diff(Diff),
-    Use(Use),
+    #[command(flatten)]
+    Client(Client),
 }
 
 impl Cli {
@@ -54,19 +49,8 @@ impl Cli {
         } else if let Some(command) = self.command {
             match command {
                 Commands::Validate(inner) => inner.run(output).await,
-                Commands::Export(inner) => inner.run(output, self.non_interactive).await,
-                Commands::Import(inner) => {
-                    inner
-                        .run(output, self.non_interactive, self.logging.output_ansi())
-                        .await
-                }
-                Commands::Use(inner) => {
-                    inner
-                        .run(output, self.non_interactive, self.logging.output_ansi())
-                        .await
-                }
-                Commands::Diff(inner) => {
-                    inner
+                Commands::Client(client) => {
+                    client
                         .run(output, self.non_interactive, self.logging.output_ansi())
                         .await
                 }

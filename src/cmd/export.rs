@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::integrations::ExportClient;
+use crate::integrations::{ExportArgs, Target};
 use clap::Args;
 use std::io::Write;
 
@@ -7,16 +7,21 @@ use std::io::Write;
 #[derive(Args)]
 pub struct Export {
     /// Preserve literal credentials in the exported stack.
-    #[arg(long, global = true)]
+    #[arg(long)]
     expose_secrets: bool,
-    #[command(subcommand)]
-    client: ExportClient,
+    #[command(flatten)]
+    args: ExportArgs,
 }
 
 impl Export {
-    pub async fn run(self, output: &mut impl Write, non_interactive: bool) -> Result<(), AppError> {
-        self.client
-            .run(output, non_interactive, self.expose_secrets)
+    pub async fn run(
+        self,
+        target: Target,
+        output: &mut impl Write,
+        non_interactive: bool,
+    ) -> Result<(), AppError> {
+        target
+            .export(self.args, output, non_interactive, self.expose_secrets)
             .await
     }
 }

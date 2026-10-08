@@ -1,104 +1,17 @@
 //! Codex configuration discovery, validation, conversion, and workflows.
 mod config;
-mod diff;
+pub(super) mod diff;
 mod export;
 mod import;
 mod schema;
-mod workflow;
+pub(super) mod workflow;
 
 use std::env;
-use std::io::Write;
 use std::path::PathBuf;
 
-use clap::Args;
 use thiserror::Error;
 
 use crate::error::{AppError, ErrorCode};
-
-pub(super) const EXAMPLES: &[&str] = &[
-    "mcpstack export codex --help",
-    "mcpstack import codex --help",
-    "mcpstack diff codex --help",
-];
-
-#[derive(Args)]
-pub struct ExportArgs {
-    /// Read this Codex TOML file instead of the default configuration.
-    #[arg(long, value_name = "PATH")]
-    config: Option<PathBuf>,
-}
-
-impl ExportArgs {
-    pub(super) async fn run(
-        self,
-        output: &mut impl Write,
-        non_interactive: bool,
-        expose_secrets: bool,
-    ) -> Result<(), AppError> {
-        workflow::run_export(self.config, output, non_interactive, expose_secrets).await
-    }
-}
-
-#[derive(Args)]
-pub struct StackArgs {
-    /// Stack file to compare, import, or use.
-    #[arg(value_name = "FILE")]
-    file: PathBuf,
-    /// Use this Codex TOML file instead of the default configuration.
-    #[arg(long, value_name = "PATH")]
-    config: Option<PathBuf>,
-}
-
-impl StackArgs {
-    pub(super) async fn use_stack(
-        self,
-        output: &mut impl Write,
-        non_interactive: bool,
-        colored: bool,
-        dry_run: bool,
-        auto_approve: bool,
-    ) -> Result<(), AppError> {
-        workflow::run_use(
-            self.file,
-            self.config,
-            output,
-            non_interactive,
-            colored,
-            dry_run,
-            auto_approve,
-        )
-        .await
-    }
-
-    pub(super) async fn import(
-        self,
-        output: &mut impl Write,
-        non_interactive: bool,
-        colored: bool,
-        dry_run: bool,
-        auto_approve: bool,
-    ) -> Result<(), AppError> {
-        workflow::run_import(
-            self.file,
-            self.config,
-            output,
-            non_interactive,
-            colored,
-            dry_run,
-            auto_approve,
-        )
-        .await
-    }
-
-    pub(super) async fn diff(
-        self,
-        output: &mut impl Write,
-        non_interactive: bool,
-        colored: bool,
-    ) -> Result<(), AppError> {
-        diff::run(self.file, self.config, output, non_interactive, colored).await
-    }
-}
 
 fn default_config() -> Option<PathBuf> {
     if let Some(home) = env::var_os("CODEX_HOME").filter(|value| !value.is_empty()) {
