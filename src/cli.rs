@@ -4,7 +4,7 @@ use crate::cmd::diff::Diff;
 use crate::cmd::export::Export;
 use crate::cmd::import::Import;
 use crate::cmd::schema::Schema;
-use crate::cmd::use_stack::Use;
+use crate::cmd::r#use::Use;
 use crate::cmd::validate::Validate;
 use crate::error::AppError;
 use crate::logging::Logging;
@@ -13,7 +13,7 @@ use std::io::Write;
 
 pub use crate::integrations::EXAMPLES;
 
-/// Switch MCP server stacks, version-control configurations, and share setups across clients.
+/// A Rust CLI for humans and agents to install multiple MCP servers, version-control and switch stacks, and share setups across teams.
 #[derive(Parser)]
 #[command(
     name = "mcpstack",

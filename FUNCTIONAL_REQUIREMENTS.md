@@ -173,13 +173,14 @@ supported client must preserve unrelated configuration.
 
 ### Switching stacks
 
-[*] `mcpstack use <file>` selects a stack file and replaces
+[*] `mcpstack use <file> --client codex` selects a stack file and replaces
 all MCP servers as the selected stack's complete desired set. Servers absent from
 the file are removed, including servers added outside mcpstack; unrelated client
 settings are preserved. Resolve the new stack's secrets locally.
 
-`use` defaults to Codex; `--client codex` selects it explicitly and `--config
-<path>` overrides its default config path. It validates the entire stack and
+`use` requires `--client` for both writes and dry runs. Codex is currently the
+only supported target; `--client codex` selects it and `--config <path>` overrides
+its default config path. It validates the entire stack and
 resolves secrets before any backup or write. Interactive use asks once to replace
 ALL servers (default No), then reports the result without printing a diff. `-y` approves the whole
 switch; unattended writes require it. `--dry-run` shows the whole proposed set,
@@ -234,7 +235,7 @@ scope. Publishing and release/deployment automation require explicit authorizati
 ### Commands and help
 
 Help, version, `--schema`, `validate <file>`, `export codex`,
-`diff codex <file>`, `import codex <file>`, `use <file>`, and runnable examples are implemented.
+`diff codex <file>`, `import codex <file>`, `use <file> --client codex`, and runnable examples are implemented.
 CLI integration tests verify help/version output, the generated argument schema,
 runnable examples, and rejection of invalid arguments.
 

@@ -14,7 +14,7 @@ pub const EXAMPLES: &[&str] = &[
     "mcpstack --help",
     "mcpstack validate --help",
     "mcpstack use --help",
-    "mcpstack use work.yml --dry-run",
+    "mcpstack use work.yml --client codex --dry-run",
     codex::EXAMPLES[0],
     codex::EXAMPLES[1],
     codex::EXAMPLES[2],
@@ -87,9 +87,8 @@ impl Error {
 }
 
 /// Target selected by the command, never stored in stack files.
-#[derive(Clone, Copy, Default, ValueEnum)]
+#[derive(Clone, Copy, ValueEnum)]
 pub enum UseClient {
-    #[default]
     Codex,
 }
 

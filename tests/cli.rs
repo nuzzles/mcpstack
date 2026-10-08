@@ -36,6 +36,18 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
         .unwrap();
     assert_eq!(validate["arguments"][0]["name"], "file");
     assert_eq!(validate["arguments"][0]["required"], true);
+    let use_command = commands
+        .iter()
+        .find(|command| command["name"] == "use")
+        .unwrap();
+    let client = use_command["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|option| option["name"] == "client")
+        .unwrap();
+    assert_eq!(client["required"], true);
+    assert_eq!(client["default"], serde_json::json!([]));
     assert_eq!(schema["command"]["args_conflicts_with_subcommands"], false);
 
     let help = run(&["--help"]);

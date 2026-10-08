@@ -1,25 +1,10 @@
 # mcpstack
 
-Switch MCP server stacks like nvm switches Node versions. Version-control stack
-files and share setups across clients, humans, and agents.
+A Rust CLI for humans and agents to install multiple MCP servers, version-control
+and switch stacks, and share setups across teams.
 
 > [!WARNING]
 > mcpstack is in early development. See [FUNCTIONAL_REQUIREMENTS.md](FUNCTIONAL_REQUIREMENTS.md) for the feature checklist.
-
-## Switch stacks
-
-```sh
-mcpstack use work.yml
-mcpstack use personal.yml --dry-run
-mcpstack use personal.yml -y
-```
-
-`use` replaces **all** MCP servers with the selected stack, removing servers absent
-from it while preserving other client settings. It validates first, confirms the
-whole switch, and creates a numbered backup before writing. `--dry-run` previews
-without writes; `-y` approves the switch without prompting. An empty stack clears
-all MCP servers. Currently targets Codex by default; use `--config <path>` for an
-explicit config. It changes configuration without installing or starting servers.
 
 ## Development
 
