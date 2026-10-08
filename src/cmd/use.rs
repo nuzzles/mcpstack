@@ -1,19 +1,16 @@
 use crate::error::AppError;
-use crate::integrations::{StackArgs, UseClient};
+use crate::integrations::{StackArgs, Target};
 use clap::Args;
 use std::io::Write;
 
 /// Switch stacks, replacing ALL MCP servers while preserving other client settings.
 #[derive(Args)]
 #[command(
-    after_help = "Examples:\n  mcpstack use work.yml --client codex\n  mcpstack use personal.yml --client codex --dry-run\n  mcpstack use work.yml --client codex --config config.toml -y"
+    after_help = "Examples:\n  mcpstack codex use work.yml\n  mcpstack codex use personal.yml --dry-run\n  mcpstack codex use work.yml --config config.toml -y"
 )]
 pub struct Use {
     #[command(flatten)]
     stack: StackArgs,
-    /// Target client configuration to switch.
-    #[arg(long, value_enum)]
-    client: UseClient,
     /// Preview all additions, replacements, and removals without writing files.
     #[arg(long)]
     dry_run: bool,
@@ -25,12 +22,13 @@ pub struct Use {
 impl Use {
     pub async fn run(
         self,
+        target: Target,
         output: &mut impl Write,
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {
-        self.client
-            .run(
+        target
+            .use_stack(
                 self.stack,
                 output,
                 non_interactive,

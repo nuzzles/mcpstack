@@ -29,25 +29,34 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
     assert_eq!(schema["cli_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(schema["command"]["name"], "mcpstack");
     let commands = schema["command"]["commands"].as_array().unwrap();
-    assert_eq!(commands.len(), 6); // validate, export, import, diff, use, and generated help
+    assert_eq!(commands.len(), 3); // validate, codex, and generated help
     let validate = commands
         .iter()
         .find(|command| command["name"] == "validate")
         .unwrap();
     assert_eq!(validate["arguments"][0]["name"], "file");
     assert_eq!(validate["arguments"][0]["required"], true);
-    let use_command = commands
+    let codex = commands
+        .iter()
+        .find(|command| command["name"] == "codex")
+        .unwrap();
+    let operations = codex["commands"].as_array().unwrap();
+    for name in ["use", "import", "export", "diff"] {
+        assert!(operations.iter().any(|operation| operation["name"] == name));
+        assert!(!commands.iter().any(|command| command["name"] == name));
+    }
+    let use_command = operations
         .iter()
         .find(|command| command["name"] == "use")
         .unwrap();
-    let client = use_command["options"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|option| option["name"] == "client")
-        .unwrap();
-    assert_eq!(client["required"], true);
-    assert_eq!(client["default"], serde_json::json!([]));
+    assert_eq!(use_command["arguments"][0]["required"], true);
+    assert!(
+        !use_command["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|option| option["name"] == "client")
+    );
     assert_eq!(schema["command"]["args_conflicts_with_subcommands"], false);
 
     let help = run(&["--help"]);
@@ -104,6 +113,33 @@ fn schema_examples_are_runnable() {
             .output()
             .unwrap();
         assert!(output.status.success(), "{example} failed: {output:?}");
+    }
+}
+
+#[test]
+fn client_commands_require_an_operation_and_reject_legacy_syntax() {
+    for args in [
+        vec!["codex"],
+        vec!["codex", "use"],
+        vec!["codex", "import"],
+        vec!["codex", "diff"],
+        vec!["export", "codex"],
+        vec!["import", "codex", "stack.yml"],
+        vec!["diff", "codex", "stack.yml"],
+        vec!["use", "stack.yml", "--client", "codex"],
+        vec!["codex", "use", "stack.yml", "--client", "codex"],
+        vec!["--schema", "codex", "export"],
+    ] {
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+    }
+    for operation in ["use", "import", "export", "diff"] {
+        let output = run(&["codex", operation, "--help"]);
+        assert!(output.status.success());
+        let help = String::from_utf8(output.stdout).unwrap();
+        assert!(help.contains(&format!("Usage: mcpstack codex {operation}")));
+        assert!(!help.contains("--client"));
     }
 }
 
@@ -278,8 +314,8 @@ fn client_independent_configs_are_validated_by_the_target_adapter() {
     let original = "model='preserved'\n";
     std::fs::write(&config, original).unwrap();
     for args in [
-        vec!["diff", "codex"],
-        vec!["import", "codex", "--dry-run", "-y"],
+        vec!["codex", "diff"],
+        vec!["codex", "import", "--dry-run", "-y"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
             .arg("--non-interactive")
@@ -330,12 +366,12 @@ fn export_exposes_secrets_only_when_explicitly_requested() {
     let config = fixture.directory.path().join("config.toml");
     std::fs::write(&config, document).unwrap();
     for args in [
-        vec!["export", "codex"],
-        vec!["--non-interactive", "export", "codex"],
-        vec!["export", "codex", "--non-interactive"],
-        vec!["export", "codex", "--expose-secrets"],
-        vec!["export", "--expose-secrets", "codex"],
-        vec!["--non-interactive", "export", "codex", "--expose-secrets"],
+        vec!["codex", "export"],
+        vec!["--non-interactive", "codex", "export"],
+        vec!["codex", "--non-interactive", "export"],
+        vec!["codex", "export", "--non-interactive"],
+        vec!["codex", "export", "--expose-secrets"],
+        vec!["--non-interactive", "codex", "export", "--expose-secrets"],
     ] {
         let exposed = args.contains(&"--expose-secrets");
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
@@ -375,7 +411,7 @@ fn codex_export_prints_a_stack_without_changing_values_or_files() {
     std::fs::write(&config, document).unwrap();
     let execute = || {
         Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["export", "codex"])
+            .args(["codex", "export"])
             .env("CODEX_HOME", fixture.directory.path())
             .env("PATH", "")
             .stdin(Stdio::null())
@@ -415,7 +451,7 @@ fn codex_export_prints_a_stack_without_changing_values_or_files() {
         std::fs::create_dir_all(home.join(".codex")).unwrap();
         std::fs::write(home.join(".codex/config.toml"), document).unwrap();
         let fallback = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["export", "codex"])
+            .args(["codex", "export"])
             .env_remove("CODEX_HOME")
             .env("HOME", home)
             .env("PATH", "")
@@ -456,7 +492,7 @@ fn export_reads_config_without_finding_or_running_codex() {
     .unwrap();
     for path in [root.to_path_buf(), root.join("missing-bin")] {
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["--non-interactive", "export", "codex"])
+            .args(["--non-interactive", "codex", "export"])
             .env("CODEX_HOME", root)
             .env("PATH", path)
             .env("MCPSTACK_TEST_MARKER", &marker)
@@ -478,7 +514,7 @@ fn export_rejects_obsolete_and_unknown_fields_without_echoing_secrets() {
         let config = format!("[mcp_servers.remote]\nurl='https://example.com/mcp'\n{field}\n");
         std::fs::write(fixture.directory.path().join("config.toml"), &config).unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["export", "codex"])
+            .args(["codex", "export"])
             .env("CODEX_HOME", fixture.directory.path())
             .env("PATH", "")
             .env_remove("RUST_LOG")
@@ -504,9 +540,9 @@ fn logging_conflicts_are_rejected_across_subcommand_levels() {
         vec!["-v", "validate", "/missing", "--log", "off"],
         vec!["--log", "off", "validate", "/missing", "-q"],
         vec!["-q", "validate", "/missing", "--log", "off"],
-        vec!["-v", "export", "codex", "-q"],
-        vec!["export", "--log", "off", "codex", "-v"],
-        vec!["-q", "export", "codex", "--log", "off"],
+        vec!["-v", "codex", "export", "-q"],
+        vec!["codex", "--log", "off", "export", "-v"],
+        vec!["-q", "codex", "export", "--log", "off"],
     ] {
         let output = run(&args);
         assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
@@ -590,28 +626,28 @@ fn export_logs_respect_verbosity_filters_and_color() {
     .unwrap();
     for (args, filter, debug, warning, ansi) in [
         (
-            vec!["-v", "--color", "always", "export", "codex"],
+            vec!["-v", "--color", "always", "codex", "export"],
             None,
             true,
             false,
             true,
         ),
         (
-            vec!["export", "codex", "--quiet"],
+            vec!["codex", "export", "--quiet"],
             None,
             false,
             false,
             false,
         ),
         (
-            vec!["--log", "error", "export", "codex"],
+            vec!["--log", "error", "codex", "export"],
             None,
             false,
             false,
             false,
         ),
         (
-            vec!["export", "codex"],
+            vec!["codex", "export"],
             Some("mcpstack=debug"),
             true,
             false,
@@ -668,7 +704,7 @@ fn export_reads_explicit_config_and_preserves_inputs() {
             std::path::PathBuf::from("alternate config.toml"),
         ] {
             let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-                .args(["--non-interactive", "export", "codex", "--config"])
+                .args(["--non-interactive", "codex", "export", "--config"])
                 .arg(path)
                 .current_dir(root)
                 .env("CODEX_HOME", root)
@@ -713,7 +749,7 @@ fn import_merges_resolved_stacks_with_backup_and_noop_repeat() {
     std::fs::write(&config, original).unwrap();
     let execute = || {
         Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["--non-interactive", "import", "codex", "-y"])
+            .args(["--non-interactive", "codex", "import", "-y"])
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
@@ -780,7 +816,7 @@ fn import_backs_up_before_validation_and_preserves_original_on_failure() {
         let config = fixture.directory.path().join("config.toml");
         std::fs::write(&config, original).unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["import", "codex", "--auto-approve"])
+            .args(["codex", "import", "--auto-approve"])
             .arg(&fixture.file)
             .env("PATH", "")
             .env("CODEX_HOME", fixture.directory.path())
@@ -807,7 +843,7 @@ fn import_backs_up_before_validation_and_preserves_original_on_failure() {
     // An existing backup is retained; the next backup precedes reading the stack.
     std::fs::remove_file(&fixture.file).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["import", "codex", "--auto-approve"])
+        .args(["codex", "import", "--auto-approve"])
         .arg(&fixture.file)
         .arg("--config")
         .arg(&config)
@@ -832,7 +868,7 @@ fn import_refuses_platforms_without_write_support() {
     let config = fixture.directory.path().join("config.toml");
     std::fs::write(&config, "# original").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["import", "codex", "--auto-approve"])
+        .args(["codex", "import", "--auto-approve"])
         .arg(&fixture.file)
         .arg("--config")
         .arg(&config)
@@ -854,7 +890,7 @@ fn codex_export_import_round_trip_preserves_supported_fields() {
     let original = "# source settings are not shared\nmodel='private'\n[mcp_servers.process]\ncommand='tool'\nargs=['--token=fixture-roundtrip-secret']\ncwd='/tmp'\nenv_vars=['FORWARDED']\nenabled=false\nrequired=true\nstartup_timeout_sec=10\ntool_timeout_sec=20\nenabled_tools=['read']\ndisabled_tools=['write']\n[mcp_servers.process.env]\nAPI_KEY='fixture-roundtrip-secret'\n[mcp_servers.remote]\nurl='https://example.com/mcp'\nbearer_token_env_var='CODEX_TOKEN'\n[mcp_servers.remote.http_headers]\nAuthorization='fixture-roundtrip-secret'\n[mcp_servers.remote.env_http_headers]\nX-Auth='OTHER_TOKEN'\n";
     std::fs::write(&source, original).unwrap();
     let exported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["--non-interactive", "export", "codex", "--config"])
+        .args(["--non-interactive", "codex", "export", "--config"])
         .arg(&source)
         .env("PATH", "")
         .env_remove("RUST_LOG")
@@ -873,7 +909,7 @@ fn codex_export_import_round_trip_preserves_supported_fields() {
             .as_str()
             .unwrap();
     let imported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["import", "codex", "--auto-approve"])
+        .args(["codex", "import", "--auto-approve"])
         .arg(&fixture.file)
         .arg("--config")
         .arg(&target)
@@ -916,7 +952,7 @@ fn diff_is_read_only_redacted_and_available_without_a_terminal() {
             std::fs::remove_file(&config).unwrap();
         }
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["--non-interactive", "diff", "codex"])
+            .args(["--non-interactive", "codex", "diff"])
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
@@ -957,7 +993,7 @@ fn diff_is_read_only_redacted_and_available_without_a_terminal() {
     }
     std::fs::remove_file(&backup).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["diff", "codex"])
+        .args(["codex", "diff"])
         .arg(&fixture.file)
         .arg("--config")
         .arg(&config)
@@ -980,7 +1016,7 @@ fn import_requires_explicit_approval_without_a_terminal() {
         if non_interactive {
             command.arg("--non-interactive");
         }
-        command.args(["import", "codex"]);
+        command.args(["codex", "import"]);
         if dry_run {
             command.arg("--dry-run");
         }
@@ -1007,7 +1043,7 @@ fn masked_import_rejects_missing_values_without_interactive_input() {
     let config = fixture.directory.path().join("config.toml");
     for flag in ["--dry-run", "-y", "--auto-approve"] {
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["import", "codex"])
+            .args(["codex", "import"])
             .args(if flag == "--dry-run" {
                 vec![flag, "-y"]
             } else {
@@ -1065,7 +1101,7 @@ fn native_runtime_bindings_are_preserved_without_resolving_values() {
     let config = fixture.directory.path().join("config.toml");
     let execute = |flag| {
         Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["import", "codex"])
+            .args(["codex", "import"])
             .args(if flag == "--dry-run" {
                 vec![flag, "-y"]
             } else {
@@ -1133,7 +1169,7 @@ fn diff_shows_redacted_replacements_without_overwriting_existing_config() {
     std::fs::write(&config, original).unwrap();
     let execute = || {
         Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["diff", "codex"])
+            .args(["codex", "diff"])
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
@@ -1157,7 +1193,7 @@ fn diff_shows_redacted_replacements_without_overwriting_existing_config() {
     }
     // Auto-approval authorizes replacement after the read-only preview.
     let actual = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["import", "codex", "-y"])
+        .args(["codex", "import", "-y"])
         .arg(&fixture.file)
         .arg("--config")
         .arg(&config)
@@ -1197,7 +1233,7 @@ fn diff_color_honors_modes_environment_and_no_color() {
     let execute = |flags: &[&str], mode: Option<&str>, no_color: Option<&str>| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
         command
-            .args(["diff", "codex"])
+            .args(["codex", "diff"])
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
@@ -1255,7 +1291,7 @@ fn diff_compares_real_secrets_and_marks_only_changed_lines() {
         ("new-fixture-secret", true),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["diff", "codex"])
+            .args(["codex", "diff"])
             .arg(&fixture.file)
             .arg("--config")
             .arg(&config)
@@ -1299,8 +1335,8 @@ fn previews_redact_old_values_at_incoming_secret_reference_locations() {
     let original = "[mcp_servers.process]\ncommand='tool'\nargs=['old-argument-credential', 'visible-arg']\n[mcp_servers.process.env]\nCUSTOM='old-environment-credential'\nORDINARY='visible-env'\n[mcp_servers.remote]\nurl='https://example.com/mcp'\n[mcp_servers.remote.http_headers]\nX-Custom='old-header-credential'\nX-Ordinary='visible-header'\n";
     std::fs::write(&config, original).unwrap();
     for args in [
-        vec!["diff", "codex"],
-        vec!["import", "codex", "--dry-run", "-y"],
+        vec!["codex", "diff"],
+        vec!["codex", "import", "--dry-run", "-y"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
             .args(args)
@@ -1343,7 +1379,7 @@ fn auto_approve_replaces_existing_servers_and_preserves_unrelated_settings() {
     let original = "# keep\nmodel='private'\n[mcp_servers.shared]\ncommand='old'\nargs=['obsolete']\n[mcp_servers.other]\ncommand='untouched'\n";
     std::fs::write(&config, original).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["import", "codex", "-y", "--config"])
+        .args(["codex", "import", "-y", "--config"])
         .arg(&config)
         .arg(&fixture.file)
         .stdin(Stdio::null())
@@ -1390,17 +1426,17 @@ fn diff_hunk_positions_match_original_and_imported_files() {
             .output()
             .unwrap()
     };
-    let preview = invoke(&["diff", "codex"]);
+    let preview = invoke(&["codex", "diff"]);
     assert!(preview.status.success(), "{preview:?}");
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     assert!(!config.with_extension("toml.~1~").exists());
-    let dry = invoke(&["import", "codex", "--dry-run", "-y"]);
+    let dry = invoke(&["codex", "import", "--dry-run", "-y"]);
     assert!(dry.status.success(), "{dry:?}");
     assert!(dry.stdout.starts_with(&preview.stdout));
     assert!(String::from_utf8_lossy(&dry.stdout).contains("Would import 2 server(s)."));
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     assert!(!config.with_extension("toml.~1~").exists());
-    let applied = invoke(&["import", "codex", "-y"]);
+    let applied = invoke(&["codex", "import", "-y"]);
     assert!(applied.status.success(), "{applied:?}");
     assert!(!String::from_utf8_lossy(&applied.stdout).contains("@@"));
     let proposed = std::fs::read_to_string(&config).unwrap();

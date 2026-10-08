@@ -15,7 +15,7 @@ use crate::schema::Stack;
 
 use super::{Error, default_config};
 
-pub(super) async fn run(
+pub(crate) async fn run(
     file: PathBuf,
     config: Option<PathBuf>,
     output: &mut impl Write,

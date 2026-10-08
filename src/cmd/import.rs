@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::integrations::StackClient;
+use crate::integrations::{StackArgs, Target};
 use clap::Args;
 use std::io::Write;
 
@@ -7,24 +7,26 @@ use std::io::Write;
 #[derive(Args)]
 pub struct Import {
     /// Run import prompts, then show the diff for approved changes without writing files.
-    #[arg(long, global = true)]
+    #[arg(long)]
     dry_run: bool,
     /// Approve all server additions and replacements without prompting.
-    #[arg(short = 'y', long, global = true)]
+    #[arg(short = 'y', long)]
     auto_approve: bool,
-    #[command(subcommand)]
-    client: StackClient,
+    #[command(flatten)]
+    stack: StackArgs,
 }
 
 impl Import {
     pub async fn run(
         self,
+        target: Target,
         output: &mut impl Write,
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {
-        self.client
+        target
             .import(
+                self.stack,
                 output,
                 non_interactive,
                 colored,

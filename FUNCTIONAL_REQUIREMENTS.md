@@ -173,14 +173,14 @@ supported client must preserve unrelated configuration.
 
 ### Switching stacks
 
-[*] `mcpstack use <file> --client codex` selects a stack file and replaces
+[*] `mcpstack codex use <file>` selects a stack file and replaces
 all MCP servers as the selected stack's complete desired set. Servers absent from
 the file are removed, including servers added outside mcpstack; unrelated client
 settings are preserved. Resolve the new stack's secrets locally.
 
-`use` requires `--client` for both writes and dry runs. Codex is currently the
-only supported target; `--client codex` selects it and `--config <path>` overrides
-its default config path. It validates the entire stack and
+`codex use` selects the client explicitly for both writes and dry runs. Codex is
+currently the only supported target; `--config <path>` overrides its default
+config path. It validates the entire stack and
 resolves secrets before any backup or write. Interactive use asks once to replace
 ALL servers (default No), then reports the result without printing a diff. `-y` approves the whole
 switch; unattended writes require it. `--dry-run` shows the whole proposed set,
@@ -234,8 +234,13 @@ scope. Publishing and release/deployment automation require explicit authorizati
 
 ### Commands and help
 
-Help, version, `--schema`, `validate <file>`, `export codex`,
-`diff codex <file>`, `import codex <file>`, `use <file> --client codex`, and runnable examples are implemented.
+Client operations are grouped under `mcpstack <client> <operation>`. Codex exposes
+`use`, `import`, `export`, and `diff`; `validate` and `--schema` stay at the top
+level. The parent command selects the target, so there is no `--client` option.
+The previous operation-first syntax is no longer accepted.
+
+Help, version, `--schema`, `validate <file>`, `codex export`,
+`codex diff <file>`, `codex import <file>`, `codex use <file>`, and runnable examples are implemented.
 CLI integration tests verify help/version output, the generated argument schema,
 runnable examples, and rejection of invalid arguments.
 
@@ -267,7 +272,7 @@ remain Phase 2 work.
 ### Output formats
 
 Help, version, and validation results use text output;
-`--schema` emits JSON; `export codex` emits YAML; `diff` and import dry-run
+`--schema` emits JSON; `codex export` emits YAML; `diff` and import dry-run
 emit redacted unified diffs.
 Diagnostics go to stderr without echoing argument values. Automation uses the
 noninteractive commands and stable exit statuses; structured JSON operation
@@ -297,7 +302,7 @@ Other platforms reject import safely.
 
 ### Codex export
 
-`export codex` reads the default Codex TOML config and prints client-independent server
+`codex export` reads the default Codex TOML config and prints client-independent server
 entries as a YAML stack to stdout. In noninteractive use, credential values become
 `{"$env":"MCPSTACK_SERVER_FIELD"}`. Recognition uses credential field names
 (token, secret, password, API/access/private key), authorization/cookie headers,
@@ -313,14 +318,14 @@ numeric suffixes. Existing references are preserved and their names reserved.
 Export never reads or sets environment variables. For an inline credential argument,
 the referenced environment value must contain the complete `--token=VALUE` argument.
 
-In an interactive terminal, `export codex` asks whether to mask or include each
+In an interactive terminal, `codex export` asks whether to mask or include each
 detected credential, showing progress such as `Secret 1/12`. Masking is selected
 by default; Yes/No to all applies the chosen action to the current and remaining
 credentials. `--non-interactive` masks all detected credentials without prompting,
-including when standard input is redirected. `export codex --expose-secrets`
+including when standard input is redirected. `codex export --expose-secrets`
 preserves literal values, including credentials, without prompting.
 No export mode changes the source file or logs its values. Server names and field
-keys remain visible. `export codex --config <path>` reads an explicit TOML file instead of the default
+keys remain visible. `codex export --config <path>` reads an explicit TOML file instead of the default
 config. Relative paths resolve from the current working directory.
 
 ### Codex config schema
@@ -342,10 +347,10 @@ without running Codex or servers.
 
 | Command | Behavior |
 | --- | --- |
-| `diff codex stack.yml` | Show all proposed changes; prompt only for missing masked values. |
-| `import codex stack.yml` | Offer backup, approve additions/replacements, and apply without printing a diff. |
-| `import codex stack.yml -y` | Create a default backup and approve all changes automatically. |
-| `import codex stack.yml --dry-run` | Follow secret and server prompts, then show only approved changes without writes. |
+| `codex diff stack.yml` | Show all proposed changes; prompt only for missing masked values. |
+| `codex import stack.yml` | Offer backup, approve additions/replacements, and apply without printing a diff. |
+| `codex import stack.yml -y` | Create a default backup and approve all changes automatically. |
+| `codex import stack.yml --dry-run` | Follow secret and server prompts, then show only approved changes without writes. |
 
 Backups default to numbered sibling files (`config.toml.~1~`, `config.toml.~2~`,
 etc.) beyond the highest existing generation. The prompt allows another path or

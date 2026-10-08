@@ -14,7 +14,7 @@ use crate::error::AppError;
 use crate::exporters::to_yaml;
 use crate::schema::Stack;
 
-pub(super) async fn run_export(
+pub(crate) async fn run_export(
     config: Option<PathBuf>,
     output: &mut impl Write,
     non_interactive: bool,
@@ -62,7 +62,7 @@ pub(super) async fn run_export(
     Ok(())
 }
 
-pub(super) async fn run_import(
+pub(crate) async fn run_import(
     file: PathBuf,
     config: Option<PathBuf>,
     output: &mut impl Write,
@@ -210,7 +210,7 @@ pub(super) async fn run_import(
 }
 
 /// Switch the entire server set as one approved, atomic configuration change.
-pub(super) async fn run_use(
+pub(crate) async fn run_use(
     file: PathBuf,
     config: Option<PathBuf>,
     output: &mut impl Write,
