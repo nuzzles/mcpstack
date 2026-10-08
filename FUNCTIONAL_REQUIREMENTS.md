@@ -33,11 +33,11 @@ to its entry in Current status at the bottom.\
 
 | Implementation | Brief description |
 | --- | --- |
-| Partial [*](#commands-and-help) | Predictable commands, help, and examples. |
+| Done | Predictable commands, help, and examples. [*](#commands-and-help) |
 | Done | Export the entire CLI argument schema for AI consumption. [*](#cli-schema) |
-| Partial [*](#exit-statuses-and-error-codes) | Stable exit statuses and actionable error codes. |
-| Partial [*](#interaction) | Default interactive prompts and explicit noninteractive operation. |
-| Partial [*](#deterministic-output) | Deterministic stack files and plans. |
+| Done | Stable exit statuses and actionable error codes. [*](#exit-statuses-and-error-codes) |
+| Done | Default interactive prompts and explicit noninteractive operation. [*](#interaction) |
+| Done | Deterministic stack files and configuration previews. [*](#deterministic-output) |
 | Done | Human-readable operation results; diagnostics on stderr. [*](#output-formats) |
 | Done | Define a versioned, client-independent stack format. |
 | Done | Validate schema versions, server definitions, names, and secret references. |
@@ -114,6 +114,9 @@ starting server software. Validate and resolve the stack before changing config.
 Preserve unrelated settings, skip identical servers, and apply only approved
 additions or replacements. Backups and file writes are described under
 [Codex import](#codex-import).
+Phase 1 previews are redacted configuration diffs from `diff` and import
+`--dry-run`. Installation plans covering removals, downloads, commands, and
+prerequisite verification remain Phase 2 work.
 
 ---
 
@@ -192,6 +195,8 @@ scope. Publishing and release/deployment automation require explicit authorizati
 
 Help, version, `--schema`, `validate <file>`, `export codex`,
 `diff codex <file>`, `import codex <file>`, and runnable help examples are implemented.
+CLI integration tests verify help/version output, the generated argument schema,
+runnable examples, and rejection of invalid arguments.
 
 ### Exit statuses and error codes
 
@@ -203,12 +208,20 @@ Config read failures use 5 (`CONFIG_READ_ERROR`); export failures use 6
 (`LOGGING_ERROR`). Removed statuses 7, 8, and 12 are not reused.
 Import failures use 10 (`IMPORT_ERROR`), backup failures use 11 (`BACKUP_ERROR`),
 and config merge/write failures use 13 (`CONFIG_WRITE_ERROR`).
+The CLI schema advertises these statuses and actionable descriptions from the
+typed error definitions. Tests check code/status uniqueness and process failures
+for invalid arguments, output failures, invalid or unreadable stacks, config read
+failures, export failures, and import failures.
 
 ### Deterministic output
 
 The CLI schema is generated deterministically from command definitions. Stack v1
 uses ordered maps and passes serialization round-trip tests. Codex export emits
-deterministic native YAML stacks. Plans are pending.
+deterministic native YAML stacks. `diff` and import `--dry-run` emit deterministic
+redacted configuration previews for the same stack, target config, resolved
+secrets, approvals, and color settings. Server processing uses ordered maps;
+previews retain the target file's layout and line numbers. Installation plans
+remain Phase 2 work.
 
 ### Output formats
 
