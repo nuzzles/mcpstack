@@ -63,7 +63,7 @@ to its entry in Current status at the bottom.\
 
 | Implementation | Brief description |
 | --- | --- |
-| Unsupported | Claude support across the full workflow. [*](#claude-support) |
+| Partial [*](#claude-support) | Claude Code user-scope JSON import, export, diff, and stack switching. |
 
 ### CLI
 
@@ -126,8 +126,8 @@ servers:
 Configuration data preserves fields and nested secret references without binding
 an item to its source client. Each target adapter must validate that it can
 represent the fields before writing; removing the label does not make every
-client-specific option universally supported. Codex is currently the implemented
-adapter. Transport definitions provide the explicit shared transport form.
+client-specific option universally supported. Codex and Claude Code have
+adapters. Transport definitions provide the explicit shared transport form.
 
 This changes the unpublished v1 format: remove `client: codex` (or another client
 label) from existing items and retain their `config` data. Legacy client labels
@@ -168,8 +168,13 @@ modes can ask for missing masked values and never write files.
 
 ### Claude support
 
-[*] Choose Claude Code, Claude Desktop, or both before implementation. Each
-supported client must preserve unrelated configuration.
+[*] Claude Code is the selected first target. `mcpstack claude` reads and writes
+user-scope `~/.claude.json` (or `--config <path>`) and preserves unrelated JSON
+settings. It supports native stdio, HTTP, and SSE server definitions plus portable
+stdio/HTTP/SSE definitions representable in Claude Code. Unsupported fields and
+transports fail before writes. Diff and export mask recognized credentials; import
+and use create numbered backups before atomic replacement. Claude Desktop, project/local scopes, and additional Claude Code MCP fields remain
+follow-up work.
 
 ### Switching stacks
 
@@ -179,8 +184,7 @@ the file are removed, including servers added outside mcpstack; unrelated client
 settings are preserved. Resolve the new stack's secrets locally.
 
 `codex use` selects the client explicitly for both writes and dry runs. Codex is
-currently the only supported target; `--config <path>` overrides its default
-config path. It validates the entire stack and
+uses `--config <path>` to override its default config path. It validates the entire stack and
 resolves secrets before any backup or write. Interactive use asks once to replace
 ALL servers (default No), then reports the result without printing a diff. `-y` approves the whole
 switch; unattended writes require it. `--dry-run` shows the whole proposed set,
@@ -236,7 +240,8 @@ scope. Publishing and release/deployment automation require explicit authorizati
 
 Client operations are grouped under `mcpstack <client> <operation>`. Codex exposes
 `use`, `import`, `export`, and `diff`; `validate` and `--schema` stay at the top
-level. The parent command selects the target, so there is no `--client` option.
+level. Claude Code exposes the same four operations under `claude`. The parent
+command selects the target, so there is no `--client` option.
 The previous operation-first syntax is no longer accepted.
 
 Help, version, `--schema`, `validate <file>`, `codex export`,

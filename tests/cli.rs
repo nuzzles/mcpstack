@@ -29,7 +29,7 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
     assert_eq!(schema["cli_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(schema["command"]["name"], "mcpstack");
     let commands = schema["command"]["commands"].as_array().unwrap();
-    assert_eq!(commands.len(), 3); // validate, codex, and generated help
+    assert_eq!(commands.len(), 4); // validate, codex, claude, and generated help
     let validate = commands
         .iter()
         .find(|command| command["name"] == "validate")

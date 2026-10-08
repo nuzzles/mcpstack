@@ -1,7 +1,7 @@
 //! Codex configuration discovery, validation, conversion, and workflows.
 mod config;
 pub(super) mod diff;
-mod export;
+pub(crate) mod export;
 mod import;
 mod schema;
 pub(super) mod workflow;

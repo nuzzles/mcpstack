@@ -97,7 +97,7 @@ pub fn mask_for_preview(
     Ok(value["servers"][name]["config"].clone())
 }
 
-fn visit_credentials(
+pub(crate) fn visit_credentials(
     stack: &mut StackV1,
     names: &mut BTreeSet<String>,
     expose: &mut impl FnMut(&str) -> Result<bool, ExportError>,
@@ -123,7 +123,7 @@ fn visit_credentials(
     Ok(())
 }
 
-fn collect_references(value: &ConfigValue, names: &mut BTreeSet<String>) {
+pub(crate) fn collect_references(value: &ConfigValue, names: &mut BTreeSet<String>) {
     match value {
         ConfigValue::Object(values) => {
             if let Some(ConfigValue::String(name)) = values.get("$env") {

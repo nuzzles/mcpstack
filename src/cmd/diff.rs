@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::integrations::{StackArgs, Target};
+use crate::integrations::{ClientAdapter, StackArgs};
 use clap::Args;
 use std::io::Write;
 
@@ -13,7 +13,7 @@ pub struct Diff {
 impl Diff {
     pub async fn run(
         self,
-        target: Target,
+        target: &impl ClientAdapter,
         output: &mut impl Write,
         non_interactive: bool,
         colored: bool,

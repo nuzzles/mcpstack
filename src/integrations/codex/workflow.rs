@@ -4,7 +4,7 @@ use std::io::{IsTerminal, Write, stderr, stdin};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
-use dialoguer::{Confirm, Input, Password, Select};
+use dialoguer::{Confirm, Input, Select};
 
 use super::config::Snapshot;
 use super::export::{ExportError, export, export_with_decisions};
@@ -12,6 +12,7 @@ use super::import::prepare;
 use super::{Error, default_config};
 use crate::error::AppError;
 use crate::exporters::to_yaml;
+use crate::integrations::secrets::SecretResolver;
 use crate::schema::Stack;
 
 pub(crate) async fn run_export(
@@ -318,58 +319,6 @@ async fn choose_backup_path(
     }
     let default = snapshot.default_backup_path().await.ok();
     choose(default.as_deref()).map(Some)
-}
-
-/// Cache each reference so repeated uses ask only once. All comparisons use
-/// real values; dry-run never proceeds to backup or file writes.
-pub(super) struct SecretResolver {
-    pub(super) dry_run: bool,
-    pub(super) interactive: bool,
-    pub(super) values: BTreeMap<String, Option<String>>,
-    pub(super) cancelled: bool,
-}
-
-impl SecretResolver {
-    pub(super) fn resolve(&mut self, name: &str) -> Option<String> {
-        if self.cancelled {
-            return None;
-        }
-        if let Some(value) = self.values.get(name) {
-            return value.clone();
-        }
-        let mut value = env::var(name)
-            .ok()
-            .filter(|value| !value.is_empty() && !value.contains('\0'));
-        if value.is_none() {
-            if self.interactive {
-                match Password::new()
-                    .with_prompt(if self.dry_run {
-                        format!("Enter secret for {name}")
-                    } else {
-                        format!("Enter secret for {name} (written as a literal in config)")
-                    })
-                    .report(false)
-                    .validate_with(|value: &String| {
-                        if value.contains('\0') {
-                            Err("Value must not contain NUL")
-                        } else {
-                            Ok(())
-                        }
-                    })
-                    .interact()
-                {
-                    Ok(secret) => value = Some(secret),
-                    Err(_) => self.cancelled = true,
-                }
-            } else {
-                tracing::warn!(
-                    "Environment variable {name} is unset or unusable; this masked field needs a value before import."
-                );
-            }
-        }
-        self.values.insert(name.into(), value.clone());
-        value
-    }
 }
 
 pub(super) fn warn_runtime_bindings(additions: &BTreeMap<String, toml::Table>) {
