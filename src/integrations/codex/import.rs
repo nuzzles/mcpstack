@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::schema::v1::{Client, ClientValue, Settings, Transport, ValueSource};
+use crate::schema::v1::{ConfigValue, Settings, Transport, ValueSource};
 use crate::schema::{Server, StackV1};
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -80,32 +80,32 @@ fn source(
     }
 }
 fn native(
-    value: &ClientValue,
+    value: &ConfigValue,
     lookup: &mut impl FnMut(&str) -> Option<String>,
 ) -> Result<serde_json::Value, ImportError> {
     Ok(match value {
-        ClientValue::Object(values) if values.contains_key("$env") => {
-            let ClientValue::String(name) = &values["$env"] else {
+        ConfigValue::Object(values) if values.contains_key("$env") => {
+            let ConfigValue::String(name) = &values["$env"] else {
                 return Err(ImportError::Definition);
             };
             serde_json::Value::String(secret(name, lookup)?)
         }
-        ClientValue::Object(values) => serde_json::Value::Object(
+        ConfigValue::Object(values) => serde_json::Value::Object(
             values
                 .iter()
                 .map(|(key, value)| Ok((key.clone(), native(value, lookup)?)))
                 .collect::<Result<_, ImportError>>()?,
         ),
-        ClientValue::Array(values) => serde_json::Value::Array(
+        ConfigValue::Array(values) => serde_json::Value::Array(
             values
                 .iter()
                 .map(|value| native(value, lookup))
                 .collect::<Result<_, _>>()?,
         ),
-        ClientValue::String(value) => value.clone().into(),
-        ClientValue::Number(value) => value.clone().into(),
-        ClientValue::Bool(value) => (*value).into(),
-        ClientValue::Null(_) => return Err(ImportError::Unsupported),
+        ConfigValue::String(value) => value.clone().into(),
+        ConfigValue::Number(value) => value.clone().into(),
+        ConfigValue::Bool(value) => (*value).into(),
+        ConfigValue::Null(_) => return Err(ImportError::Unsupported),
     })
 }
 
@@ -121,17 +121,13 @@ pub fn prepare(
         .iter()
         .map(|(name, server)| {
             let definition = match server {
-                Server::ClientSpecific {
-                    client: Client::Codex,
-                    config,
-                } => {
+                Server::Configuration { config } => {
                     let values = config
                         .iter()
                         .map(|(key, value)| Ok((key.clone(), native(value, &mut lookup)?)))
                         .collect::<Result<serde_json::Map<_, _>, ImportError>>()?;
                     serde_json::Value::Object(values)
                 }
-                Server::ClientSpecific { .. } => return Err(ImportError::Unsupported),
                 Server::Portable {
                     transport,
                     settings,
@@ -359,7 +355,7 @@ mod tests {
 
     #[test]
     fn resolves_nested_native_and_portable_references() {
-        let stack = StackV1::from_yaml("schema_version: 1\nservers:\n  native:\n    client: codex\n    config:\n      command: tool\n      args: [{'$env': TOKEN}]\n      env: {KEY: {'$env': TOKEN}}\n  portable:\n    transport:\n      type: http\n      url: https://example.com/mcp\n      headers: {Authorization: {env: TOKEN}}\n").unwrap();
+        let stack = StackV1::from_yaml("schema_version: 1\nservers:\n  native:\n    config:\n      command: tool\n      args: [{'$env': TOKEN}]\n      env: {KEY: {'$env': TOKEN}}\n  portable:\n    transport:\n      type: http\n      url: https://example.com/mcp\n      headers: {Authorization: {env: TOKEN}}\n").unwrap();
         let result = prepare(&stack, |_| Some("fixture-secret".into())).unwrap();
         assert_eq!(
             result["native"]["args"].as_array().unwrap()[0].as_str(),
@@ -376,14 +372,17 @@ mod tests {
         }
     }
     #[test]
-    fn fails_closed_on_fields_clients_transports_and_resolved_headers() {
+    fn fails_closed_on_fields_transports_and_resolved_headers() {
         for config in [
             "command: tool\n      future: true",
             "command: tool\n      url: https://example.com",
             "command: 123",
             "url: https://example.com\n      http_headers: {Authorization: {'$env': TOKEN}}",
         ] {
-            let stack = StackV1::from_yaml(&format!("schema_version: 1\nservers:\n  test:\n    client: codex\n    config:\n      {config}\n")).unwrap();
+            let stack = StackV1::from_yaml(&format!(
+                "schema_version: 1\nservers:\n  test:\n    config:\n      {config}\n"
+            ))
+            .unwrap();
             assert!(prepare(&stack, |_| Some("bad\nheader".into())).is_err());
         }
         for transport in ["sse", "websocket"] {
@@ -420,7 +419,7 @@ mod tests {
         for (name, definition) in before["mcp_servers"].as_table().unwrap() {
             assert_eq!(&toml::Value::Table(prepared[name].clone()), definition);
         }
-        let stack = StackV1::from_yaml("schema_version: 1\nservers:\n  remote:\n    client: codex\n    config: {url: 'https://example.com/mcp', bearer_token: fixture-secret}\n").unwrap();
+        let stack = StackV1::from_yaml("schema_version: 1\nservers:\n  remote:\n    config: {url: 'https://example.com/mcp', bearer_token: fixture-secret}\n").unwrap();
         let error = prepare(&stack, |_| None).unwrap_err();
         assert_eq!(error, ImportError::Unsupported);
         assert!(!error.to_string().contains("fixture-secret"));

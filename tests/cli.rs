@@ -242,11 +242,41 @@ fn validation_reports_safe_typed_errors_and_missing_arguments() {
 }
 
 #[test]
+fn client_independent_configs_are_validated_by_the_target_adapter() {
+    let fixture = StackFixture::new(
+        "schema_version: 1\nservers:\n  shared:\n    config:\n      command: tool\n      alwaysLoad: true\n",
+    );
+    // The stack can carry configuration data without knowing its source client.
+    assert!(fixture.validate().status.success());
+    let config = fixture.directory.path().join("config.toml");
+    let original = "model='preserved'\n";
+    std::fs::write(&config, original).unwrap();
+    for args in [
+        vec!["diff", "codex"],
+        vec!["import", "codex", "--dry-run", "-y"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .arg("--non-interactive")
+            .args(args)
+            .arg(&fixture.file)
+            .arg("--config")
+            .arg(&config)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        // Codex must reject unsupported options rather than discard them.
+        assert_eq!(output.status.code(), Some(10), "{output:?}");
+        assert!(output.stdout.is_empty());
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+        assert!(!fixture.directory.path().join("config.toml.~1~").exists());
+    }
+}
+
+#[test]
 fn native_validation_preserves_inputs_without_executing_helpers() {
     let document = r#"{
         "schema_version":1,
         "servers":{"native":{
-            "client":"claude_code",
             "config":{
                 "type":"http", "url":"https://${HOST}/mcp",
                 "headersHelper":"mcpstack-nonexistent-test-executable",
@@ -335,6 +365,13 @@ fn codex_export_prints_a_stack_without_changing_values_or_files() {
     assert!(fixture.validate().status.success());
     let value: Value = yaml_serde::from_slice(&first.stdout).unwrap();
     assert_eq!(value["schema_version"], 1);
+    assert!(
+        value["servers"]
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|server| server.get("client").is_none())
+    );
     assert_eq!(
         value["servers"]["local"]["config"]["env"]["TOKEN"],
         serde_json::json!({"$env":"MCPSTACK_LOCAL_ENV_TOKEN"})
@@ -643,7 +680,7 @@ fn import_merges_resolved_stacks_with_backup_and_noop_repeat() {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     let fixture = StackFixture::new(
-        "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config:\n      command: tool\n      env: {API_KEY: {'$env': MCPSTACK_IMPORT_TEST_SECRET}}\n",
+        "schema_version: 1\nservers:\n  shared:\n    config:\n      command: tool\n      env: {API_KEY: {'$env': MCPSTACK_IMPORT_TEST_SECRET}}\n",
     );
     let config = fixture.directory.path().join("config.toml");
     let original = "# keep comment\nmodel='test'\n[mcp_servers.local]\ncommand='local'\n";
@@ -705,11 +742,11 @@ fn import_backs_up_before_validation_and_preserves_original_on_failure() {
     for (document, status) in [
         ("broken: [fixture-secret", 4),
         (
-            "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: tool, args: [{'$env': MCPSTACK_MISSING_IMPORT_TOKEN}]}\n",
+            "schema_version: 1\nservers:\n  shared:\n    config: {command: tool, args: [{'$env': MCPSTACK_MISSING_IMPORT_TOKEN}]}\n",
             10,
         ),
         (
-            "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: other, future: fixture-secret}\n",
+            "schema_version: 1\nservers:\n  shared:\n    config: {command: other, future: fixture-secret}\n",
             10,
         ),
     ] {
@@ -735,9 +772,8 @@ fn import_backs_up_before_validation_and_preserves_original_on_failure() {
             original
         );
     }
-    let fixture = StackFixture::new(
-        "schema_version: 1\nservers:\n  added:\n    client: codex\n    config: {command: tool}\n",
-    );
+    let fixture =
+        StackFixture::new("schema_version: 1\nservers:\n  added:\n    config: {command: tool}\n");
     let config = fixture.directory.path().join("config.toml");
     let backup = fixture.directory.path().join("config.toml.~1~");
     std::fs::write(&config, original).unwrap();
@@ -765,9 +801,8 @@ fn import_backs_up_before_validation_and_preserves_original_on_failure() {
 #[cfg(not(any(unix, windows)))]
 #[test]
 fn import_refuses_platforms_without_write_support() {
-    let fixture = StackFixture::new(
-        "schema_version: 1\nservers:\n  new:\n    client: codex\n    config: {command: tool}\n",
-    );
+    let fixture =
+        StackFixture::new("schema_version: 1\nservers:\n  new:\n    config: {command: tool}\n");
     let config = fixture.directory.path().join("config.toml");
     std::fs::write(&config, "# original").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
@@ -841,7 +876,7 @@ fn codex_export_import_round_trip_preserves_supported_fields() {
 #[test]
 fn diff_is_read_only_redacted_and_available_without_a_terminal() {
     let fixture = StackFixture::new(
-        "schema_version: 1\nservers:\n  added:\n    client: codex\n    config:\n      command: tool\n      args: [{'$env': MCPSTACK_PREVIEW_ARGUMENT}]\n      env: {API_KEY: literal-preview-secret}\n",
+        "schema_version: 1\nservers:\n  added:\n    config:\n      command: tool\n      args: [{'$env': MCPSTACK_PREVIEW_ARGUMENT}]\n      env: {API_KEY: literal-preview-secret}\n",
     );
     let config = fixture.directory.path().join("config.toml");
     let backup = fixture.directory.path().join("config.toml.~1~");
@@ -911,9 +946,8 @@ fn diff_is_read_only_redacted_and_available_without_a_terminal() {
 
 #[test]
 fn import_requires_explicit_approval_without_a_terminal() {
-    let fixture = StackFixture::new(
-        "schema_version: 1\nservers:\n  new:\n    client: codex\n    config: {command: tool}\n",
-    );
+    let fixture =
+        StackFixture::new("schema_version: 1\nservers:\n  new:\n    config: {command: tool}\n");
     let config = fixture.directory.path().join("config.toml");
     for (non_interactive, dry_run) in [(false, false), (true, false), (false, true), (true, true)] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
@@ -942,7 +976,7 @@ fn import_requires_explicit_approval_without_a_terminal() {
 #[test]
 fn masked_import_rejects_missing_values_without_interactive_input() {
     let fixture = StackFixture::new(
-        "schema_version: 1\nservers:\n  process:\n    client: codex\n    config:\n      command: tool\n      args: [{'$env': MCPSTACK_MASKED_SECRET}]\n      env: {API_KEY: {'$env': MCPSTACK_MASKED_SECRET}}\n  remote:\n    client: codex\n    config:\n      url: {'$env': MCPSTACK_MASKED_ENDPOINT}\n      oauth: {client_id: test-client, client_secret: {'$env': MCPSTACK_MASKED_SECRET}}\n",
+        "schema_version: 1\nservers:\n  process:\n    config:\n      command: tool\n      args: [{'$env': MCPSTACK_MASKED_SECRET}]\n      env: {API_KEY: {'$env': MCPSTACK_MASKED_SECRET}}\n  remote:\n    config:\n      url: {'$env': MCPSTACK_MASKED_ENDPOINT}\n      oauth: {client_id: test-client, client_secret: {'$env': MCPSTACK_MASKED_SECRET}}\n",
     );
     let config = fixture.directory.path().join("config.toml");
     for flag in ["--dry-run", "-y", "--auto-approve"] {
@@ -1000,7 +1034,7 @@ fn masked_import_rejects_missing_values_without_interactive_input() {
 #[test]
 fn native_runtime_bindings_are_preserved_without_resolving_values() {
     let fixture = StackFixture::new(
-        "schema_version: 1\nservers:\n  process:\n    client: codex\n    config: {command: tool, env_vars: [MCPSTACK_RUNTIME_ENV, {name: MCPSTACK_REMOTE_ENV, source: remote}]}\n  remote:\n    client: codex\n    config:\n      url: https://example.com/mcp\n      bearer_token_env_var: MCPSTACK_RUNTIME_TOKEN\n      env_http_headers: {X-Key: MCPSTACK_RUNTIME_HEADER}\n",
+        "schema_version: 1\nservers:\n  process:\n    config: {command: tool, env_vars: [MCPSTACK_RUNTIME_ENV, {name: MCPSTACK_REMOTE_ENV, source: remote}]}\n  remote:\n    config:\n      url: https://example.com/mcp\n      bearer_token_env_var: MCPSTACK_RUNTIME_TOKEN\n      env_http_headers: {X-Key: MCPSTACK_RUNTIME_HEADER}\n",
     );
     let config = fixture.directory.path().join("config.toml");
     let execute = |flag| {
@@ -1066,7 +1100,7 @@ fn native_runtime_bindings_are_preserved_without_resolving_values() {
 #[test]
 fn diff_shows_redacted_replacements_without_overwriting_existing_config() {
     let fixture = StackFixture::new(
-        "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: new-tool, env: {API_KEY: {'$env': MCPSTACK_CONFLICT_SECRET}}}\n",
+        "schema_version: 1\nservers:\n  shared:\n    config: {command: new-tool, env: {API_KEY: {'$env': MCPSTACK_CONFLICT_SECRET}}}\n",
     );
     let config = fixture.directory.path().join("config.toml");
     let original = "# private\nmodel='private-model'\n[mcp_servers.shared]\ncommand='old-tool'\ncustom_secret='old-private-secret'\n[mcp_servers.shared.env]\nAPI_KEY='old-api-secret'\n";
@@ -1130,7 +1164,7 @@ fn diff_shows_redacted_replacements_without_overwriting_existing_config() {
 #[test]
 fn diff_color_honors_modes_environment_and_no_color() {
     let fixture = StackFixture::new(
-        "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: new-tool}\n",
+        "schema_version: 1\nservers:\n  shared:\n    config: {command: new-tool}\n",
     );
     let config = fixture.directory.path().join("config.toml");
     std::fs::write(&config, "[mcp_servers.shared]\ncommand='old-tool'\n").unwrap();
@@ -1185,7 +1219,7 @@ fn diff_color_honors_modes_environment_and_no_color() {
 #[test]
 fn diff_compares_real_secrets_and_marks_only_changed_lines() {
     let fixture = StackFixture::new(
-        "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config:\n      url: https://example.com/mcp\n      http_headers: {Authorization: {'$env': MCPSTACK_COMPARE_SECRET}}\n",
+        "schema_version: 1\nservers:\n  shared:\n    config:\n      url: https://example.com/mcp\n      http_headers: {Authorization: {'$env': MCPSTACK_COMPARE_SECRET}}\n",
     );
     let config = fixture.directory.path().join("config.toml");
     let original = "[mcp_servers.shared]\nurl = \"https://example.com/mcp\"\n\n[mcp_servers.shared.http_headers]\nAuthorization = \"existing-fixture-secret\"\n";
@@ -1233,7 +1267,7 @@ fn diff_compares_real_secrets_and_marks_only_changed_lines() {
 #[test]
 fn previews_redact_old_values_at_incoming_secret_reference_locations() {
     let fixture = StackFixture::new(
-        "schema_version: 1\nservers:\n  process:\n    client: codex\n    config:\n      command: tool\n      args: [{'$env': MCPSTACK_ROTATED_VALUE}, visible-arg]\n      env: {CUSTOM: {'$env': MCPSTACK_ROTATED_VALUE}, ORDINARY: visible-env}\n  remote:\n    transport:\n      type: http\n      url: https://example.com/mcp\n      headers: {X-Custom: {env: MCPSTACK_ROTATED_VALUE}, X-Ordinary: visible-header}\n",
+        "schema_version: 1\nservers:\n  process:\n    config:\n      command: tool\n      args: [{'$env': MCPSTACK_ROTATED_VALUE}, visible-arg]\n      env: {CUSTOM: {'$env': MCPSTACK_ROTATED_VALUE}, ORDINARY: visible-env}\n  remote:\n    transport:\n      type: http\n      url: https://example.com/mcp\n      headers: {X-Custom: {env: MCPSTACK_ROTATED_VALUE}, X-Ordinary: visible-header}\n",
     );
     let config = fixture.directory.path().join("config.toml");
     let original = "[mcp_servers.process]\ncommand='tool'\nargs=['old-argument-credential', 'visible-arg']\n[mcp_servers.process.env]\nCUSTOM='old-environment-credential'\nORDINARY='visible-env'\n[mcp_servers.remote]\nurl='https://example.com/mcp'\n[mcp_servers.remote.http_headers]\nX-Custom='old-header-credential'\nX-Ordinary='visible-header'\n";
@@ -1277,7 +1311,7 @@ fn previews_redact_old_values_at_incoming_secret_reference_locations() {
 #[test]
 fn auto_approve_replaces_existing_servers_and_preserves_unrelated_settings() {
     let fixture = StackFixture::new(
-        "schema_version: 1\nservers:\n  shared:\n    client: codex\n    config: {command: replacement}\n",
+        "schema_version: 1\nservers:\n  shared:\n    config: {command: replacement}\n",
     );
     let config = fixture.directory.path().join("config.toml");
     let original = "# keep\nmodel='private'\n[mcp_servers.shared]\ncommand='old'\nargs=['obsolete']\n[mcp_servers.other]\ncommand='untouched'\n";
@@ -1313,7 +1347,7 @@ fn auto_approve_replaces_existing_servers_and_preserves_unrelated_settings() {
 #[test]
 fn diff_hunk_positions_match_original_and_imported_files() {
     let fixture = StackFixture::new(
-        "schema_version: 1\nservers:\n  first:\n    client: codex\n    config: {command: new, args: [extra]}\n  last:\n    client: codex\n    config: {command: last-new}\n",
+        "schema_version: 1\nservers:\n  first:\n    config: {command: new, args: [extra]}\n  last:\n    config: {command: last-new}\n",
     );
     let config = fixture.directory.path().join("config.toml");
     let original = "a=1\nb=2\nc=3\nd=4\ne=5\nf=6\ng=7\nh=8\ni=9\nj=10\n[mcp_servers.first]\ncommand = \"old\"\n[mcp_servers.unrelated]\ncommand=\"private\"\na=1\nb=2\nc=3\nd=4\ne=5\nf=6\ng=7\nh=8\ni=9\nj=10\n[mcp_servers.last]\ncommand = \"last-old\"\n";

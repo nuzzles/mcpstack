@@ -4,19 +4,9 @@ mod codex;
 use std::io::Write;
 
 use clap::Subcommand;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::error::{AppError, ErrorCode};
-
-/// Client names in stack documents; registration does not imply implementation.
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Client {
-    Codex,
-    ClaudeCode,
-    ClaudeDesktop,
-}
 
 pub const EXAMPLES: &[&str] = &[
     "mcpstack --schema",

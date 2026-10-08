@@ -331,7 +331,7 @@ fn remote_transports_preserve_protocol_and_enforce_url_schemes() {
 }
 
 #[test]
-fn native_client_fields_and_secret_references_round_trip_losslessly() {
+fn configuration_fields_and_secret_references_round_trip_without_client_ownership() {
     let configs = [
         (
             "codex",
@@ -358,9 +358,9 @@ fn native_client_fields_and_secret_references_round_trip_losslessly() {
             "env":{"TOKEN":{"$env":"TOKEN"}}}),
         ),
     ];
-    for (client, config) in configs {
+    for (_, config) in configs {
         let value = json!({"schema_version":1,"servers":{"Friendly server é":{
-            "client":client,"config":config
+            "config":config
         }}});
         let encoded = serde_json::to_value(parse(&value).unwrap()).unwrap();
         assert_eq!(encoded, value);
@@ -368,12 +368,14 @@ fn native_client_fields_and_secret_references_round_trip_losslessly() {
 }
 
 #[test]
-fn native_definitions_cannot_mix_with_portable_fields_or_unknown_clients() {
+fn configuration_definitions_reject_client_labels_and_mixed_forms() {
     for server in [
-        json!({"client":"unknown", "config":{}}),
-        json!({"client":"codex", "config":{}, "settings":{}}),
-        json!({"client":"codex", "config":{}, "transport":{"type":"stdio","command":"example"}}),
-        json!({"client":"codex", "config":[], "extra":true}),
+        json!({"client":"codex", "config":{"command":"tool"}}),
+        json!({"client":"claude_code", "config":{"command":"tool"}}),
+        json!({"client":"claude_desktop", "config":{"command":"tool"}}),
+        json!({"config":{}, "settings":{}}),
+        json!({"config":{}, "transport":{"type":"stdio","command":"example"}}),
+        json!({"config":[], "extra":true}),
     ] {
         assert_eq!(
             parse(&json!({"schema_version":1,"servers":{"local":server}}))
@@ -391,9 +393,8 @@ fn native_nested_duplicates_and_malformed_secret_markers_are_rejected() {
         r#"{"args":[{"nested":{"same":1,"same":2}}]}"#,
         r#"{"env":{"TOKEN":"first"},"env":{"TOKEN":"second"}}"#,
     ] {
-        let input = format!(
-            r#"{{"schema_version":1,"servers":{{"native":{{"client":"codex","config":{config}}}}}}}"#
-        );
+        let input =
+            format!(r#"{{"schema_version":1,"servers":{{"native":{{"config":{config}}}}}}}"#);
         assert_eq!(
             StackV1::from_yaml(&input).err().unwrap(),
             ValidationError::InvalidDocument
@@ -405,7 +406,7 @@ fn native_nested_duplicates_and_malformed_secret_markers_are_rejected() {
         json!({"$env":"TOKEN","fallback":"fixture-secret"}),
     ] {
         let value = json!({"schema_version":1,"servers":{"native":{
-            "client":"codex", "config":{"oauth":{"client_secret":marker}}
+            "config":{"oauth":{"client_secret":marker}}
         }}});
         let error = parse(&value).err().unwrap();
         assert_eq!(error, ValidationError::InvalidSecretReference);
@@ -431,7 +432,7 @@ fn yaml_round_trip_preserves_string_types_and_nested_values() {
 fn yaml_rejects_duplicates_and_unsupported_versions() {
     for input in [
         "schema_version: 1\nservers: {}\nservers: {}",
-        "schema_version: 1\nservers:\n  local:\n    client: codex\n    config:\n      env: {TOKEN: one, TOKEN: two}",
+        "schema_version: 1\nservers:\n  local:\n    config:\n      env: {TOKEN: one, TOKEN: two}",
     ] {
         assert_eq!(
             StackV1::from_yaml(input).err().unwrap(),
