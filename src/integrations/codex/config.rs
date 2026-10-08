@@ -10,12 +10,14 @@ use crate::io;
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum FileError {
     #[error(
-        "Cannot create backup at the chosen path. Choose an unused file path and check permissions. Import was not processed."
+        "Cannot create backup at the chosen path. Choose an unused file path and check permissions. Client configuration was not changed."
     )]
     Backup,
     #[error("Invalid target TOML or mcp_servers table. Client configuration was not changed.")]
     Config,
-    #[error("The target changed during import. No config changes were written; retry the import.")]
+    #[error(
+        "The target changed during the operation. No config changes were written; retry the operation."
+    )]
     Changed,
     #[error("Unable to write config atomically. The original config was not replaced.")]
     Write,
@@ -107,6 +109,61 @@ impl Snapshot {
 
     pub fn original_text(&self) -> Result<&str, FileError> {
         std::str::from_utf8(self.file.contents()).map_err(|_| FileError::Config)
+    }
+
+    pub fn servers(&self) -> Result<BTreeMap<String, toml::Table>, FileError> {
+        let document = self.document()?;
+        let Some(servers) = document.get("mcp_servers").and_then(Item::as_table_like) else {
+            return Ok(BTreeMap::new());
+        };
+        servers
+            .iter()
+            .map(|(name, item)| Ok((name.to_owned(), existing_table(item)?)))
+            .collect()
+    }
+
+    /// Replace the complete server set, retaining unchanged entries and other settings.
+    pub fn replacement_proposal(
+        &self,
+        definitions: &BTreeMap<String, toml::Table>,
+    ) -> Result<(bool, String), FileError> {
+        let existing = self.servers()?;
+        let removed: Vec<_> = existing
+            .keys()
+            .filter(|name| !definitions.contains_key(*name))
+            .collect();
+        let (added, proposed) = self.proposal(definitions)?;
+        if removed.is_empty() {
+            return Ok((added != 0, proposed));
+        }
+        let mut document = proposed
+            .parse::<DocumentMut>()
+            .map_err(|_| FileError::Config)?;
+        if definitions.is_empty() {
+            document.remove("mcp_servers");
+        } else {
+            let servers = document["mcp_servers"]
+                .as_table_like_mut()
+                .ok_or(FileError::Config)?;
+            for name in removed {
+                servers.remove(name);
+            }
+        }
+        Ok((true, document.to_string()))
+    }
+
+    pub async fn replace_servers(
+        self,
+        definitions: &BTreeMap<String, toml::Table>,
+    ) -> Result<(), FileError> {
+        self.ensure_write_supported()?;
+        let (changed, document) = self.replacement_proposal(definitions)?;
+        if changed {
+            self.file.replace(document.as_bytes()).await?;
+        } else {
+            self.file.check_unchanged().await?;
+        }
+        Ok(())
     }
 
     /// Build exactly the document that apply writes, without touching the filesystem.
@@ -207,6 +264,54 @@ mod tests {
             ))
             .unwrap(),
         )])
+    }
+
+    #[tokio::test]
+    async fn whole_set_replacement_preserves_identical_entries_and_rejects_stale_removals() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = "# settings\nmodel='keep'\n[mcp_servers.added]\ncommand='tool' # retain server comment\n[mcp_servers.removed]\ncommand='other'\n";
+        fs::write(&path, original).unwrap();
+        let snapshot = Snapshot::read(&path).await.unwrap();
+        let (changed, proposal) = snapshot.replacement_proposal(&definitions("tool")).unwrap();
+        assert!(changed);
+        assert!(proposal.contains("command='tool' # retain server comment"));
+        assert!(!proposal.contains("removed"));
+        fs::write(&path, "# external edit").unwrap();
+        assert_eq!(
+            snapshot.replace_servers(&definitions("tool")).await,
+            Err(FileError::Changed)
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# external edit");
+    }
+
+    #[tokio::test]
+    async fn whole_set_replacement_handles_inline_tables_and_removal_only_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            "model='keep'\nmcp_servers={added={command='tool'}, removed={command='old'}}\n",
+        )
+        .unwrap();
+        Snapshot::read(&path)
+            .await
+            .unwrap()
+            .replace_servers(&definitions("tool"))
+            .await
+            .unwrap();
+        let snapshot = Snapshot::read(&path).await.unwrap();
+        assert_eq!(snapshot.servers().unwrap().len(), 1);
+        assert!(
+            !snapshot
+                .replacement_proposal(&definitions("tool"))
+                .unwrap()
+                .0
+        );
+        snapshot.replace_servers(&BTreeMap::new()).await.unwrap();
+        let written: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(!written.contains_key("mcp_servers"));
+        assert_eq!(written["model"].as_str(), Some("keep"));
     }
 
     #[tokio::test]

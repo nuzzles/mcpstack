@@ -71,7 +71,11 @@ pub enum AppError {
     )]
     ImportApprovalRequired,
     #[error(
-        "Import approval was cancelled or could not be completed. Client configuration was not changed."
+        "Switching stacks replaces ALL MCP servers. Use a terminal to confirm or --auto-approve (-y); --dry-run previews without approval."
+    )]
+    UseApprovalRequired,
+    #[error(
+        "Operation approval was cancelled or could not be completed. Client configuration was not changed."
     )]
     ImportApprovalCancelled,
 }
@@ -85,7 +89,9 @@ impl AppError {
             Self::StackRead(_) => ErrorCode::StackReadError,
             Self::Stack(_) => ErrorCode::InvalidStack,
             Self::ConfigRead(_) => ErrorCode::ConfigReadError,
-            Self::ImportApprovalRequired | Self::ImportApprovalCancelled => ErrorCode::ImportError,
+            Self::ImportApprovalRequired
+            | Self::UseApprovalRequired
+            | Self::ImportApprovalCancelled => ErrorCode::ImportError,
             Self::Integration(error) => error.code(),
         }
     }

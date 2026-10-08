@@ -29,7 +29,7 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
     assert_eq!(schema["cli_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(schema["command"]["name"], "mcpstack");
     let commands = schema["command"]["commands"].as_array().unwrap();
-    assert_eq!(commands.len(), 5); // validate, export, import, diff, and generated help
+    assert_eq!(commands.len(), 6); // validate, export, import, diff, use, and generated help
     let validate = commands
         .iter()
         .find(|command| command["name"] == "validate")
@@ -77,7 +77,21 @@ fn schema_examples_are_runnable() {
             .split_whitespace()
             .skip(1)
             .collect();
-        assert!(run(&args).status.success(), "{example} failed");
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("work.yml"),
+            "schema_version: 1\nservers:\n  work:\n    config: {command: example}\n",
+        )
+        .unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(&args)
+            .current_dir(directory.path())
+            .env("CODEX_HOME", directory.path())
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{example} failed: {output:?}");
     }
 }
 

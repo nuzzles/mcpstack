@@ -72,7 +72,7 @@ to its entry in Current status at the bottom.\
 | Unsupported | List server names, transports, commands/endpoints, and enabled state. |
 | Unsupported | Select servers by name; reject unknown selections. |
 | Unsupported | Diagnose missing, empty, malformed, and unsupported configs. |
-| Unsupported | Save named stacks and switch between them easily. [*](#switching-stacks) |
+| Done | Switch between stack files, replacing the complete MCP server set. [*](#switching-stacks) |
 | Unsupported | Detect machine-specific paths and missing local prerequisites. |
 | Unsupported | Produce Git-friendly exports; require explicit overwrite of existing files. |
 | Unsupported | Preserve version pins and identify unpinned servers. |
@@ -141,8 +141,9 @@ Preserve unrelated settings, skip identical servers, and apply only approved
 additions or replacements. Backups and file writes are described under
 [Codex import](#codex-import).
 Phase 1 previews are redacted configuration diffs from `diff` and import
-`--dry-run`. Installation plans covering removals, downloads, commands, and
-prerequisite verification remain Phase 2 work.
+`--dry-run`. Installation plans covering downloads, commands, and
+prerequisite verification remain Phase 2 work. Configuration-only stack switching
+is implemented by `use`.
 
 ---
 
@@ -172,9 +173,23 @@ supported client must preserve unrelated configuration.
 
 ### Switching stacks
 
-[*] Select a named stack, preview changes, and apply it in one workflow. Track
-servers managed by mcpstack so switching can remove obsolete managed entries
-without removing unrelated servers. Resolve the new stack's secrets locally.
+[*] `mcpstack use <file>` selects a stack file and replaces
+all MCP servers as the selected stack's complete desired set. Servers absent from
+the file are removed, including servers added outside mcpstack; unrelated client
+settings are preserved. Resolve the new stack's secrets locally.
+
+`use` defaults to Codex; `--client codex` selects it explicitly and `--config
+<path>` overrides its default config path. It validates the entire stack and
+resolves secrets before any backup or write. Interactive use shows a redacted
+diff and asks once to replace ALL servers (default No). `-y` approves the whole
+switch; unattended writes require it. `--dry-run` shows the whole proposed set,
+including removals, without approval prompts, backups, or writes. Missing masked
+values still fail in unattended mode. Changed switches always create a numbered
+backup, then atomically replace the config with stale-snapshot checks. Backup or
+write failures abort; identical sets do not rewrite files or create backups. An
+empty stack clears every server. Switching changes configuration only; it does
+not install or start server software. Stack names/aliases and client adapters
+beyond Codex remain future work.
 
 ### Transactions
 
@@ -219,7 +234,7 @@ scope. Publishing and release/deployment automation require explicit authorizati
 ### Commands and help
 
 Help, version, `--schema`, `validate <file>`, `export codex`,
-`diff codex <file>`, `import codex <file>`, and runnable help examples are implemented.
+`diff codex <file>`, `import codex <file>`, `use <file>`, and runnable examples are implemented.
 CLI integration tests verify help/version output, the generated argument schema,
 runnable examples, and rejection of invalid arguments.
 
@@ -358,5 +373,5 @@ Diffs use the original and proposed file line numbers. Recognized credentials an
 resolved secrets are redacted; hidden changes display `<redacted: changed>`.
 Comments and unrelated values are omitted from preview context. These previews
 are for review, not patch application. Dry-run logs one initial warning and
-creates no files or backups. Server removal, installation/download plans, and
-prerequisite verification remain unsupported.
+creates no files or backups. Import does not remove servers; `use` replaces the whole server set.
+Installation/download plans and prerequisite verification remain unsupported.
