@@ -7,7 +7,7 @@ use tokio::fs;
 use dialoguer::{Confirm, Input, Select};
 
 use super::config::Snapshot;
-use super::export::{ExportError, export, export_with_decisions};
+use super::export::ExportError;
 use super::import::prepare;
 use super::{Error, default_config};
 use crate::error::AppError;
@@ -17,6 +17,7 @@ use crate::schema::Stack;
 
 pub(crate) async fn run_export(
     config: Option<PathBuf>,
+    filter: crate::integrations::reserved::ExportFilter,
     output: &mut impl Write,
     non_interactive: bool,
     expose_secrets: bool,
@@ -27,12 +28,12 @@ pub(crate) async fn run_export(
         .await
         .map_err(AppError::ConfigRead)?;
     let stack = if expose_secrets {
-        export(&document, true)?
+        super::export::export_filtered(&document, true, filter)?
     } else if non_interactive || !stdin().is_terminal() || !stderr().is_terminal() {
-        export(&document, false)?
+        super::export::export_filtered(&document, false, filter)?
     } else {
         let mut remaining_choice = None;
-        export_with_decisions(&document, |path, current, total| {
+        super::export::export_with_filter(&document, filter, |path, current, total| {
             if let Some(choice) = remaining_choice {
                 return Ok(choice);
             }

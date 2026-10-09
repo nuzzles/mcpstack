@@ -572,9 +572,10 @@ impl ClientAdapter for Claude {
         non_interactive: bool,
         expose_secrets: bool,
     ) -> Result<(), AppError> {
+        let filter = args.filter();
         let (_, _, config) = snapshot(args.config, true).await?;
         let mut values = servers(&config);
-        values.retain(|name, _| !crate::integrations::reserved::is_reserved(name));
+        values.retain(|name, _| !filter.skip(name));
         let mut stack = as_stack(values)?;
         if !expose_secrets {
             let mut names = reference_names(&stack);

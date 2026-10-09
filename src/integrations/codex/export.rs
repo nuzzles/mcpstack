@@ -21,14 +21,32 @@ pub enum ExportError {
 
 /// Export one native entry per server. This reads data only: it does not resolve
 /// credentials, run helpers, or infer installed-client compatibility.
+#[cfg(test)]
 pub fn export(document: &str, expose_secrets: bool) -> Result<StackV1, ExportError> {
-    export_with_decisions(document, |_, _, _| Ok(expose_secrets))
+    export_filtered(document, expose_secrets, Default::default())
+}
+
+pub fn export_filtered(
+    document: &str,
+    expose_secrets: bool,
+    filter: crate::integrations::reserved::ExportFilter,
+) -> Result<StackV1, ExportError> {
+    export_with_filter(document, filter, |_, _, _| Ok(expose_secrets))
 }
 
 /// Decide whether to expose each detected credential. The callback receives
 /// only a field path and its one-based position and total, never the value.
+#[cfg(test)]
 pub fn export_with_decisions(
     document: &str,
+    expose: impl FnMut(&str, usize, usize) -> Result<bool, ExportError>,
+) -> Result<StackV1, ExportError> {
+    export_with_filter(document, Default::default(), expose)
+}
+
+pub fn export_with_filter(
+    document: &str,
+    filter: crate::integrations::reserved::ExportFilter,
     mut expose: impl FnMut(&str, usize, usize) -> Result<bool, ExportError>,
 ) -> Result<StackV1, ExportError> {
     let config: toml::Value = toml::from_str(document).map_err(|_| ExportError::Config)?;
@@ -38,7 +56,7 @@ pub fn export_with_decisions(
             let mut table = table.clone();
             let reserved: Vec<_> = table
                 .keys()
-                .filter(|name| crate::integrations::reserved::is_reserved(name))
+                .filter(|name| filter.skip(name))
                 .cloned()
                 .collect();
             for name in reserved {
@@ -429,6 +447,37 @@ command = "example"
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
             vec!["computer-use-extra"]
+        );
+    }
+
+    #[test]
+    fn node_repl_is_skipped_unless_allowed() {
+        let config = "[mcp_servers.node_repl]\ncommand = 'node'\nunknown_field = true\n";
+        assert!(export(config, false).unwrap().servers.is_empty());
+        assert!(matches!(
+            export_filtered(
+                config,
+                false,
+                crate::integrations::reserved::ExportFilter {
+                    node_repl: true,
+                    ..Default::default()
+                }
+            ),
+            Err(ExportError::Schema)
+        ));
+        let config = "[mcp_servers.node_repl]\ncommand = 'node'\n";
+        assert!(
+            export_filtered(
+                config,
+                false,
+                crate::integrations::reserved::ExportFilter {
+                    node_repl: true,
+                    ..Default::default()
+                }
+            )
+            .unwrap()
+            .servers
+            .contains_key("node_repl")
         );
     }
 

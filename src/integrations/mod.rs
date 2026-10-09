@@ -32,6 +32,37 @@ pub struct ExportArgs {
     /// Read this client config file instead of the default configuration.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
+    /// Include the otherwise skipped workspace server.
+    #[arg(long)]
+    allow_workspace: bool,
+    /// Include the otherwise skipped claude-in-chrome server.
+    #[arg(long)]
+    allow_claude_in_chrome: bool,
+    /// Include the otherwise skipped computer-use server.
+    #[arg(long)]
+    allow_computer_use: bool,
+    /// Include the otherwise skipped Claude Preview server.
+    #[arg(long)]
+    allow_claude_preview: bool,
+    /// Include the otherwise skipped Claude Browser server.
+    #[arg(long)]
+    allow_claude_browser: bool,
+    /// Include the otherwise skipped node_repl server.
+    #[arg(long)]
+    allow_node_repl: bool,
+}
+
+impl ExportArgs {
+    fn filter(&self) -> reserved::ExportFilter {
+        reserved::ExportFilter {
+            workspace: self.allow_workspace,
+            claude_in_chrome: self.allow_claude_in_chrome,
+            computer_use: self.allow_computer_use,
+            claude_preview: self.allow_claude_preview,
+            claude_browser: self.allow_claude_browser,
+            node_repl: self.allow_node_repl,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -145,7 +176,9 @@ impl ClientAdapter for Codex {
         non_interactive: bool,
         expose_secrets: bool,
     ) -> Result<(), AppError> {
-        codex::workflow::run_export(args.config, output, non_interactive, expose_secrets).await
+        let filter = args.filter();
+        codex::workflow::run_export(args.config, filter, output, non_interactive, expose_secrets)
+            .await
     }
 
     async fn import(

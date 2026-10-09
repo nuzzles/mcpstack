@@ -235,6 +235,41 @@ fn export_skips_reserved_server_names_before_validation() {
 }
 
 #[test]
+fn export_allow_flags_include_only_named_servers() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let names = [
+        ("workspace", "--allow-workspace"),
+        ("claude-in-chrome", "--allow-claude-in-chrome"),
+        ("computer-use", "--allow-computer-use"),
+        ("Claude Preview", "--allow-claude-preview"),
+        ("Claude Browser", "--allow-claude-browser"),
+        ("node_repl", "--allow-node-repl"),
+    ];
+    let servers: serde_json::Map<String, serde_json::Value> = names
+        .iter()
+        .map(|(name, _)| ((*name).into(), serde_json::json!({"command":"tool"})))
+        .collect();
+    std::fs::write(
+        &config,
+        serde_json::json!({"mcpServers":servers}).to_string(),
+    )
+    .unwrap();
+    let default = run("export", None, &config, &[]);
+    assert!(default.status.success(), "{default:?}");
+    let stack: serde_json::Value = yaml_serde::from_slice(&default.stdout).unwrap();
+    assert!(stack["servers"].as_object().unwrap().is_empty());
+    for (name, flag) in names {
+        let result = run("export", None, &config, &[flag]);
+        assert!(result.status.success(), "{result:?}");
+        let stack: serde_json::Value = yaml_serde::from_slice(&result.stdout).unwrap();
+        let exported = stack["servers"].as_object().unwrap();
+        assert_eq!(exported.len(), 1);
+        assert!(exported.contains_key(name));
+    }
+}
+
+#[test]
 #[cfg(any(unix, windows))]
 fn codex_http_headers_and_runtime_bindings_map_to_claude_headers() {
     let dir = tempfile::tempdir().unwrap();
