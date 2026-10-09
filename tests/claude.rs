@@ -173,3 +173,28 @@ fn non_string_server_type_is_rejected_before_a_backup_or_write() {
         assert!(!dir.path().join("claude.json.~1~").exists());
     }
 }
+
+#[test]
+fn unsupported_stack_reports_all_server_fields_without_values_or_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let stack = dir.path().join("stack.yml");
+    let original = r#"{"mcpServers":{}}"#;
+    std::fs::write(&config, original).unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  computer-use:\n    config: {command: tool, cwd: '/private/fixture-secret', enabled: true}\n  github:\n    config: {url: 'https://example.com/mcp', bearer_token_env_var: PRIVATE_TOKEN}\n  remote:\n    transport: {type: http, url: 'https://example.com/mcp', bearer_token: {env: PRIVATE_TOKEN}}\n").unwrap();
+    let output = run("use", Some(&stack), &config, &["--dry-run"]);
+    assert!(!output.status.success());
+    let error = String::from_utf8(output.stderr).unwrap();
+    for field in [
+        "cwd",
+        "enabled",
+        "bearer_token_env_var",
+        "transport.bearer_token",
+    ] {
+        assert!(error.contains(field), "missing {field}: {error}");
+    }
+    assert!(!error.contains("fixture-secret"));
+    assert!(!error.contains("PRIVATE_TOKEN"));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    assert!(!dir.path().join("claude.json.~1~").exists());
+}

@@ -175,6 +175,8 @@ stdio/HTTP/SSE definitions representable in Claude Code. Unsupported fields and
 transports fail before writes. Diff and export mask recognized credentials; import
 and use create numbered backups before atomic replacement. Claude Desktop, project/local scopes, and additional Claude Code MCP fields remain
 follow-up work.
+For unsupported stack fields, Claude Code operations report every affected
+server and field name without printing field values.
 
 ### Switching stacks
 

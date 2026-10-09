@@ -24,6 +24,10 @@ pub enum Error {
     Config,
     #[error("This stack contains fields or transports Claude Code cannot represent.")]
     Unsupported,
+    #[error(
+        "Claude Code cannot represent these stack fields: {0}. Edit the stack or use a supported target."
+    )]
+    UnsupportedFields(String),
     #[error("A masked field needs a nonempty secret value from its environment variable.")]
     Secret,
     #[error("Unable to read Claude Code configuration.")]
@@ -39,7 +43,7 @@ impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Path | Self::Config | Self::Read => ErrorCode::ConfigReadError,
-            Self::Unsupported | Self::Secret => ErrorCode::ImportError,
+            Self::Unsupported | Self::UnsupportedFields(_) | Self::Secret => ErrorCode::ImportError,
             Self::Write => ErrorCode::ConfigWriteError,
             Self::Backup => ErrorCode::BackupError,
             Self::Prompt => ErrorCode::ExportError,
@@ -180,10 +184,72 @@ fn source(value: &ValueSource, resolver: &mut SecretResolver) -> Result<String, 
         ValueSource::Environment(r) => resolver.resolve(&r.env).ok_or(Error::Secret),
     }
 }
+fn unsupported_fields(stack: &StackV1) -> Vec<String> {
+    let mut fields = Vec::new();
+    for (name, server) in &stack.servers {
+        let mut add = |field: &str| fields.push(format!("{name:?}.{field:?}"));
+        match server {
+            Server::Configuration { config } => {
+                for key in config.keys() {
+                    if !matches!(
+                        key.as_str(),
+                        "type" | "command" | "args" | "env" | "url" | "headers"
+                    ) {
+                        add(key);
+                    }
+                }
+            }
+            Server::Portable {
+                transport,
+                settings,
+            } => {
+                if !settings.enabled {
+                    add("settings.enabled");
+                }
+                if settings.required {
+                    add("settings.required");
+                }
+                if settings.startup_timeout_sec.is_some() {
+                    add("settings.startup_timeout_sec");
+                }
+                if settings.tool_timeout_sec.is_some() {
+                    add("settings.tool_timeout_sec");
+                }
+                if settings.enabled_tools.is_some() {
+                    add("settings.enabled_tools");
+                }
+                if !settings.disabled_tools.is_empty() {
+                    add("settings.disabled_tools");
+                }
+                match transport {
+                    Transport::Stdio { env_vars, cwd, .. } => {
+                        if !env_vars.is_empty() {
+                            add("transport.env_vars");
+                        }
+                        if cwd.is_some() {
+                            add("transport.cwd");
+                        }
+                    }
+                    Transport::Http { bearer_token, .. } | Transport::Sse { bearer_token, .. } => {
+                        if bearer_token.is_some() {
+                            add("transport.bearer_token");
+                        }
+                    }
+                    Transport::Websocket { .. } => add("transport.websocket"),
+                }
+            }
+        }
+    }
+    fields
+}
 fn prepare(
     stack: &StackV1,
     resolver: &mut SecretResolver,
 ) -> Result<BTreeMap<String, Value>, Error> {
+    let unsupported = unsupported_fields(stack);
+    if !unsupported.is_empty() {
+        return Err(Error::UnsupportedFields(unsupported.join(", ")));
+    }
     let mut values = BTreeMap::new();
     for (name, server) in &stack.servers {
         let definition = match server {
