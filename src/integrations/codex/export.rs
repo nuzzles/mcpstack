@@ -35,6 +35,13 @@ pub fn export_with_decisions(
     let servers = match config.get("mcp_servers") {
         None => serde_json::Map::new(),
         Some(toml::Value::Table(table)) => {
+            let mut table = table.clone();
+            for (_, server) in table.iter_mut() {
+                if let toml::Value::Table(fields) = server {
+                    fields.remove("sandbox_mode");
+                    fields.remove("approval_policy");
+                }
+            }
             // Datetimes and nonfinite floats have no lossless JSON equivalent.
             if table.values().any(contains_unsupported_value) {
                 return Err(ExportError::Config);
@@ -354,6 +361,40 @@ client_secret = "another-fixture-secret"
             "another-fixture-secret"
         );
         assert!(!value.to_string().contains("unrelated"));
+    }
+
+    #[test]
+    fn ignores_server_policy_fields_but_still_rejects_other_unknown_fields() {
+        let config = r#"
+[mcp_servers.notion]
+url = "https://example.com/mcp"
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+[mcp_servers.local]
+command = "example"
+"#;
+        let stack = export(config, false).unwrap();
+        let value = serde_json::to_value(stack).unwrap();
+        assert_eq!(
+            value["servers"]["notion"]["config"]["url"],
+            "https://example.com/mcp"
+        );
+        assert!(
+            value["servers"]["notion"]["config"]
+                .get("sandbox_mode")
+                .is_none()
+        );
+        assert!(
+            value["servers"]["notion"]["config"]
+                .get("approval_policy")
+                .is_none()
+        );
+        assert_eq!(value["servers"]["local"]["config"]["command"], "example");
+        assert!(matches!(
+            export(&format!("{config}\nfuture_field = true\n"), false),
+            Err(ExportError::Schema)
+        ));
+        assert!(export(&config.replace("\"workspace-write\"", "2020-01-01"), false).is_ok());
     }
 
     #[test]

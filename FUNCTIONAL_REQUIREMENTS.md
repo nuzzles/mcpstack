@@ -343,6 +343,10 @@ fields are rejected without exposing values. Refresh the snapshot deliberately
 when adding support for schema changes. Portable conversion supports STDIO/HTTP;
 filesystem writes support Unix and Windows.
 
+Export omits `sandbox_mode` and `approval_policy` when they appear directly in an
+MCP server definition. These policy fields are not part of the exported server
+stack; other unsupported server fields still fail validation.
+
 ### Codex import
 
 All Codex commands accept `--config <path>`; otherwise they use
