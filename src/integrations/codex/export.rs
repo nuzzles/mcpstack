@@ -36,6 +36,14 @@ pub fn export_with_decisions(
         None => serde_json::Map::new(),
         Some(toml::Value::Table(table)) => {
             let mut table = table.clone();
+            let reserved: Vec<_> = table
+                .keys()
+                .filter(|name| crate::integrations::reserved::is_reserved(name))
+                .cloned()
+                .collect();
+            for name in reserved {
+                table.remove(&name);
+            }
             for (_, server) in table.iter_mut() {
                 if let toml::Value::Table(fields) = server {
                     fields.remove("sandbox_mode");
@@ -395,6 +403,33 @@ command = "example"
             Err(ExportError::Schema)
         ));
         assert!(export(&config.replace("\"workspace-write\"", "2020-01-01"), false).is_ok());
+    }
+
+    #[test]
+    fn skips_reserved_names_before_validating_or_exporting_servers() {
+        let mut config = String::new();
+        for name in [
+            "workspace",
+            "claude-in-chrome",
+            "computer-use",
+            "Claude Preview",
+            "Claude Browser",
+        ] {
+            config.push_str(&format!(
+                "[mcp_servers.{name:?}]\ncommand = 'built-in'\nunknown_field = true\n"
+            ));
+        }
+        config.push_str("[mcp_servers.computer-use-extra]\ncommand = 'tool'\n");
+        let exported = serde_json::to_value(export(&config, false).unwrap()).unwrap();
+        assert_eq!(
+            exported["servers"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["computer-use-extra"]
+        );
     }
 
     #[test]

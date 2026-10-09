@@ -177,6 +177,9 @@ and use create numbered backups before atomic replacement. Claude Desktop, proje
 follow-up work.
 For unsupported stack fields, Claude Code operations report every affected
 server and field name without printing field values.
+Both client exporters omit MCP servers whose names Claude Code reserves for its
+built-in servers. The filter runs before server validation and leaves source
+configuration unchanged.
 Codex `http_headers` map to Claude `headers`. `bearer_token_env_var` and
 `env_http_headers` become `${VAR}` header references, preserving runtime lookup;
 the portable HTTP/SSE bearer binding maps the same way. Claude Code may suppress

@@ -1,6 +1,7 @@
 //! Client selection and adapter dispatch.
 mod claude;
 mod codex;
+mod reserved;
 mod secrets;
 
 use std::io::Write;

@@ -69,7 +69,7 @@ fn path(config: Option<PathBuf>) -> Result<PathBuf, Error> {
         .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".claude.json")))
         .ok_or(Error::Path)
 }
-fn parse(bytes: &[u8]) -> Result<Value, Error> {
+fn parse(bytes: &[u8], exporting: bool) -> Result<Value, Error> {
     let value = if bytes.is_empty() {
         Value::Object(Map::new())
     } else {
@@ -81,8 +81,10 @@ fn parse(bytes: &[u8]) -> Result<Value, Error> {
     let object = value.as_object().ok_or(Error::Config)?;
     if let Some(servers) = object.get("mcpServers") {
         let servers = servers.as_object().ok_or(Error::Config)?;
-        for definition in servers.values() {
-            validate(definition)?;
+        for (name, definition) in servers {
+            if !exporting || !crate::integrations::reserved::is_reserved(name) {
+                validate(definition)?;
+            }
         }
     }
     Ok(value)
@@ -264,10 +266,7 @@ fn unsupported_fields(stack: &StackV1) -> Vec<String> {
     let mut fields = Vec::new();
     for (name, server) in &stack.servers {
         let mut add = |field: &str| fields.push(format!("{name:?}.{field:?}"));
-        if matches!(
-            name.as_str(),
-            "workspace" | "claude-in-chrome" | "computer-use" | "Claude Preview" | "Claude Browser"
-        ) {
+        if crate::integrations::reserved::is_reserved(name) {
             add("server name (reserved by Claude Code)");
         }
         match server {
@@ -550,10 +549,13 @@ async fn read_stack(file: &Path) -> Result<StackV1, AppError> {
     let Stack::V1(stack) = Stack::from_yaml(&text)?;
     Ok(stack)
 }
-async fn snapshot(config: Option<PathBuf>) -> Result<(PathBuf, io::Snapshot, Value), AppError> {
+async fn snapshot(
+    config: Option<PathBuf>,
+    exporting: bool,
+) -> Result<(PathBuf, io::Snapshot, Value), AppError> {
     let path = path(config)?;
     let file = io::Snapshot::read(&path).await.map_err(|_| Error::Read)?;
-    let parsed = parse(file.contents())?;
+    let parsed = parse(file.contents(), exporting)?;
     Ok((path, file, parsed))
 }
 async fn write_config(file: io::Snapshot, config: Value) -> Result<(), AppError> {
@@ -570,8 +572,10 @@ impl ClientAdapter for Claude {
         non_interactive: bool,
         expose_secrets: bool,
     ) -> Result<(), AppError> {
-        let (_, _, config) = snapshot(args.config).await?;
-        let mut stack = as_stack(servers(&config))?;
+        let (_, _, config) = snapshot(args.config, true).await?;
+        let mut values = servers(&config);
+        values.retain(|name, _| !crate::integrations::reserved::is_reserved(name));
+        let mut stack = as_stack(values)?;
         if !expose_secrets {
             let mut names = reference_names(&stack);
             let interactive = !non_interactive && stdin().is_terminal() && stderr().is_terminal();
@@ -625,7 +629,7 @@ impl ClientAdapter for Claude {
         non_interactive: bool,
         _colored: bool,
     ) -> Result<(), AppError> {
-        let (_, _, config) = snapshot(args.config).await?;
+        let (_, _, config) = snapshot(args.config, false).await?;
         let stack = read_stack(&args.file).await?;
         let incoming = prepared(
             &stack,
@@ -646,7 +650,7 @@ impl ClientAdapter for Claude {
         dry_run: bool,
         auto_approve: bool,
     ) -> Result<(), AppError> {
-        let (_, file, config) = snapshot(args.config).await?;
+        let (_, file, config) = snapshot(args.config, false).await?;
         if !dry_run
             && !auto_approve
             && (non_interactive || !stdin().is_terminal() || !stderr().is_terminal())
@@ -715,7 +719,7 @@ impl ClientAdapter for Claude {
         dry_run: bool,
         auto_approve: bool,
     ) -> Result<(), AppError> {
-        let (_, file, config) = snapshot(args.config).await?;
+        let (_, file, config) = snapshot(args.config, false).await?;
         let stack = read_stack(&args.file).await?;
         let proposed = prepared(
             &stack,

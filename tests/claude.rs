@@ -220,6 +220,21 @@ fn reserved_claude_server_names_are_rejected_without_writing() {
 }
 
 #[test]
+fn export_skips_reserved_server_names_before_validation() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let original = r#"{"mcpServers":{"computer-use":{"unexpected":"fixture"},"Claude Preview":{"future":true},"ordinary":{"command":"tool"}}}"#;
+    std::fs::write(&config, original).unwrap();
+    let result = run("export", None, &config, &[]);
+    assert!(result.status.success(), "{result:?}");
+    let output = String::from_utf8(result.stdout).unwrap();
+    assert!(output.contains("ordinary"));
+    assert!(!output.contains("computer-use"));
+    assert!(!output.contains("Claude Preview"));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+}
+
+#[test]
 #[cfg(any(unix, windows))]
 fn codex_http_headers_and_runtime_bindings_map_to_claude_headers() {
     let dir = tempfile::tempdir().unwrap();
