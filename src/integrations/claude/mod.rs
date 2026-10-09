@@ -28,6 +28,10 @@ pub enum Error {
         "Claude Code cannot represent these stack fields: {0}. Edit the stack or use a supported target."
     )]
     UnsupportedFields(String),
+    #[error("Server {0:?} defines the same HTTP header in multiple fields.")]
+    HeaderConflict(String),
+    #[error("Server {0:?} has an invalid environment variable name for an HTTP header.")]
+    HeaderEnvironment(String),
     #[error("A masked field needs a nonempty secret value from its environment variable.")]
     Secret,
     #[error("Unable to read Claude Code configuration.")]
@@ -43,7 +47,11 @@ impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Path | Self::Config | Self::Read => ErrorCode::ConfigReadError,
-            Self::Unsupported | Self::UnsupportedFields(_) | Self::Secret => ErrorCode::ImportError,
+            Self::Unsupported
+            | Self::UnsupportedFields(_)
+            | Self::HeaderConflict(_)
+            | Self::HeaderEnvironment(_)
+            | Self::Secret => ErrorCode::ImportError,
             Self::Write => ErrorCode::ConfigWriteError,
             Self::Backup => ErrorCode::BackupError,
             Self::Prompt => ErrorCode::ExportError,
@@ -184,16 +192,98 @@ fn source(value: &ValueSource, resolver: &mut SecretResolver) -> Result<String, 
         ValueSource::Environment(r) => resolver.resolve(&r.env).ok_or(Error::Secret),
     }
 }
+fn environment_reference(name: &str, server: &str) -> Result<String, Error> {
+    let mut bytes = name.bytes();
+    if !bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+        || !bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return Err(Error::HeaderEnvironment(server.into()));
+    }
+    Ok(format!("${{{name}}}"))
+}
+fn add_header(
+    headers: &mut Map<String, Value>,
+    name: &str,
+    value: Value,
+    server: &str,
+) -> Result<(), Error> {
+    if headers
+        .keys()
+        .any(|existing| existing.eq_ignore_ascii_case(name))
+    {
+        return Err(Error::HeaderConflict(server.into()));
+    }
+    headers.insert(name.into(), value);
+    Ok(())
+}
+fn map_native_server(server: &str, mut definition: Value) -> Result<Value, Error> {
+    let fields = definition.as_object_mut().ok_or(Error::Config)?;
+    let direct = fields.remove("http_headers");
+    let environment = fields.remove("env_http_headers");
+    let bearer = fields.remove("bearer_token_env_var");
+    if fields.contains_key("url") && !fields.contains_key("type") {
+        fields.insert("type".into(), Value::String("http".into()));
+    }
+    if direct.is_some() || environment.is_some() || bearer.is_some() {
+        let mut headers = match fields.remove("headers") {
+            Some(Value::Object(headers)) => headers,
+            None => Map::new(),
+            Some(_) => return Err(Error::Config),
+        };
+        if let Some(direct) = direct {
+            let direct = direct.as_object().ok_or(Error::Config)?;
+            for (name, value) in direct {
+                add_header(&mut headers, name, value.clone(), server)?;
+            }
+        }
+        if let Some(environment) = environment {
+            let environment = environment.as_object().ok_or(Error::Config)?;
+            for (name, variable) in environment {
+                let variable = variable.as_str().ok_or(Error::Config)?;
+                let reference = environment_reference(variable, server)?;
+                add_header(&mut headers, name, Value::String(reference), server)?;
+            }
+        }
+        if let Some(bearer) = bearer {
+            let variable = bearer.as_str().ok_or(Error::Config)?;
+            let reference = environment_reference(variable, server)?;
+            add_header(
+                &mut headers,
+                "Authorization",
+                Value::String(format!("Bearer {reference}")),
+                server,
+            )?;
+        }
+        fields.insert("headers".into(), Value::Object(headers));
+    }
+    Ok(definition)
+}
 fn unsupported_fields(stack: &StackV1) -> Vec<String> {
     let mut fields = Vec::new();
     for (name, server) in &stack.servers {
         let mut add = |field: &str| fields.push(format!("{name:?}.{field:?}"));
+        if matches!(
+            name.as_str(),
+            "workspace" | "claude-in-chrome" | "computer-use" | "Claude Preview" | "Claude Browser"
+        ) {
+            add("server name (reserved by Claude Code)");
+        }
         match server {
             Server::Configuration { config } => {
                 for key in config.keys() {
                     if !matches!(
                         key.as_str(),
-                        "type" | "command" | "args" | "env" | "url" | "headers"
+                        "type"
+                            | "command"
+                            | "args"
+                            | "env"
+                            | "url"
+                            | "headers"
+                            | "http_headers"
+                            | "env_http_headers"
+                            | "bearer_token_env_var"
                     ) {
                         add(key);
                     }
@@ -230,11 +320,7 @@ fn unsupported_fields(stack: &StackV1) -> Vec<String> {
                             add("transport.cwd");
                         }
                     }
-                    Transport::Http { bearer_token, .. } | Transport::Sse { bearer_token, .. } => {
-                        if bearer_token.is_some() {
-                            add("transport.bearer_token");
-                        }
-                    }
+                    Transport::Http { .. } | Transport::Sse { .. } => {}
                     Transport::Websocket { .. } => add("transport.websocket"),
                 }
             }
@@ -253,12 +339,15 @@ fn prepare(
     let mut values = BTreeMap::new();
     for (name, server) in &stack.servers {
         let definition = match server {
-            Server::Configuration { config } => Value::Object(
-                config
-                    .iter()
-                    .map(|(k, v)| Ok((k.clone(), resolve(v, resolver)?)))
-                    .collect::<Result<_, Error>>()?,
-            ),
+            Server::Configuration { config } => map_native_server(
+                name,
+                Value::Object(
+                    config
+                        .iter()
+                        .map(|(k, v)| Ok((k.clone(), resolve(v, resolver)?)))
+                        .collect::<Result<_, Error>>()?,
+                ),
+            )?,
             Server::Portable {
                 transport,
                 settings,
@@ -295,15 +384,30 @@ fn prepare(
                         bearer_token,
                         headers,
                     } => {
-                        if bearer_token.is_some() {
-                            return Err(Error::Unsupported);
-                        }
                         let kind = if matches!(transport, Transport::Http { .. }) {
                             "http"
                         } else {
                             "sse"
                         };
-                        serde_json::json!({"type":kind,"url":url,"headers":headers.iter().map(|(k,v)| Ok((k.clone(),source(v, resolver)?))).collect::<Result<BTreeMap<_,_>,Error>>()?})
+                        let mut mapped_headers = Map::new();
+                        for (header, value) in headers {
+                            add_header(
+                                &mut mapped_headers,
+                                header,
+                                Value::String(source(value, resolver)?),
+                                name,
+                            )?;
+                        }
+                        if let Some(reference) = bearer_token {
+                            let variable = environment_reference(&reference.env, name)?;
+                            add_header(
+                                &mut mapped_headers,
+                                "Authorization",
+                                Value::String(format!("Bearer {variable}")),
+                                name,
+                            )?;
+                        }
+                        serde_json::json!({"type":kind,"url":url,"headers":mapped_headers})
                     }
                     _ => return Err(Error::Unsupported),
                 }

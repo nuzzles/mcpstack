@@ -185,16 +185,82 @@ fn unsupported_stack_reports_all_server_fields_without_values_or_writes() {
     let output = run("use", Some(&stack), &config, &["--dry-run"]);
     assert!(!output.status.success());
     let error = String::from_utf8(output.stderr).unwrap();
-    for field in [
-        "cwd",
-        "enabled",
-        "bearer_token_env_var",
-        "transport.bearer_token",
-    ] {
+    for field in ["cwd", "enabled", "reserved by Claude Code"] {
         assert!(error.contains(field), "missing {field}: {error}");
     }
+    assert!(!error.contains("bearer_token_env_var"));
+    assert!(!error.contains("transport.bearer_token"));
     assert!(!error.contains("fixture-secret"));
     assert!(!error.contains("PRIVATE_TOKEN"));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    assert!(!dir.path().join("claude.json.~1~").exists());
+}
+
+#[test]
+fn reserved_claude_server_names_are_rejected_without_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let stack = dir.path().join("stack.yml");
+    let original = r#"{"mcpServers":{}}"#;
+    std::fs::write(&config, original).unwrap();
+    std::fs::write(
+        &stack,
+        "schema_version: 1\nservers:\n  computer-use:\n    config: {command: tool}\n",
+    )
+    .unwrap();
+    let output = run("use", Some(&stack), &config, &["-y"]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("reserved by Claude Code")
+    );
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    assert!(!dir.path().join("claude.json.~1~").exists());
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn codex_http_headers_and_runtime_bindings_map_to_claude_headers() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let stack = dir.path().join("stack.yml");
+    std::fs::write(&config, r#"{"mcpServers":{},"theme":"dark"}"#).unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  direct:\n    config: {url: 'https://example.com/mcp', http_headers: {X-Test: fixture-value}}\n  bearer:\n    config: {url: 'https://example.com/mcp', bearer_token_env_var: SERVICE_TOKEN}\n  environment:\n    config: {url: 'https://example.com/mcp', env_http_headers: {X-API-Key: SERVICE_KEY}}\n  portable:\n    transport: {type: http, url: 'https://example.com/mcp', bearer_token: {env: PORTABLE_TOKEN}}\n").unwrap();
+    let output = run("use", Some(&stack), &config, &["-y"]);
+    assert!(output.status.success(), "{output:?}");
+    let value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+    let servers = &value["mcpServers"];
+    for name in ["direct", "bearer", "environment", "portable"] {
+        assert_eq!(servers[name]["type"], "http");
+    }
+    assert_eq!(servers["direct"]["headers"]["X-Test"], "fixture-value");
+    assert_eq!(
+        servers["bearer"]["headers"]["Authorization"],
+        "Bearer ${SERVICE_TOKEN}"
+    );
+    assert_eq!(
+        servers["environment"]["headers"]["X-API-Key"],
+        "${SERVICE_KEY}"
+    );
+    assert_eq!(
+        servers["portable"]["headers"]["Authorization"],
+        "Bearer ${PORTABLE_TOKEN}"
+    );
+    assert_eq!(value["theme"], "dark");
+}
+
+#[test]
+fn conflicting_authorization_headers_fail_without_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let stack = dir.path().join("stack.yml");
+    let original = r#"{"mcpServers":{}}"#;
+    std::fs::write(&config, original).unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  remote:\n    config: {url: 'https://example.com/mcp', http_headers: {authorization: fixture-value}, bearer_token_env_var: SERVICE_TOKEN}\n").unwrap();
+    let result = run("use", Some(&stack), &config, &["-y"]);
+    assert!(!result.status.success());
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     assert!(!dir.path().join("claude.json.~1~").exists());
 }

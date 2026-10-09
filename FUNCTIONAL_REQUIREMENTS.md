@@ -177,6 +177,13 @@ and use create numbered backups before atomic replacement. Claude Desktop, proje
 follow-up work.
 For unsupported stack fields, Claude Code operations report every affected
 server and field name without printing field values.
+Codex `http_headers` map to Claude `headers`. `bearer_token_env_var` and
+`env_http_headers` become `${VAR}` header references, preserving runtime lookup;
+the portable HTTP/SSE bearer binding maps the same way. Claude Code may suppress
+expansion of its protected credential variables, so those names require a separate
+user-managed environment variable. Duplicate header names fail instead of
+overwriting either value. Claude Code's reserved server names also fail before
+writes. Per-server Codex startup timeouts and tool approval modes remain unsupported.
 
 ### Switching stacks
 
