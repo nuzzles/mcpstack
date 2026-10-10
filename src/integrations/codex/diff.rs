@@ -9,8 +9,9 @@ use toml_edit::{Item, Value};
 
 use super::config::{FileError, Snapshot};
 use super::import::prepare;
-use super::workflow::{SecretResolver, warn_runtime_bindings};
+use super::workflow::warn_runtime_bindings;
 use crate::error::AppError;
+use crate::integrations::secrets::SecretResolver;
 use crate::schema::Stack;
 
 use super::{Error, default_config};
@@ -150,6 +151,19 @@ fn redact_matching_fields(before: &mut Json, after: &Json) {
     }
     match (before, after) {
         (Json::Object(before), Json::Object(after)) => {
+            if let (Some(Json::Object(old_headers)), Some(Json::Object(new_bindings))) = (
+                before.get_mut("http_headers"),
+                after.get("env_http_headers"),
+            ) {
+                for (name, value) in old_headers {
+                    if new_bindings
+                        .keys()
+                        .any(|key| key.eq_ignore_ascii_case(name))
+                    {
+                        *value = "<redacted>".into();
+                    }
+                }
+            }
             for (key, value) in before {
                 if let Some(after) = after.get(key) {
                     redact_matching_fields(value, after);

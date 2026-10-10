@@ -29,7 +29,7 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
     assert_eq!(schema["cli_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(schema["command"]["name"], "mcpstack");
     let commands = schema["command"]["commands"].as_array().unwrap();
-    assert_eq!(commands.len(), 3); // validate, codex, and generated help
+    assert_eq!(commands.len(), 4); // validate, codex, claude, and generated help
     let validate = commands
         .iter()
         .find(|command| command["name"] == "validate")
@@ -369,7 +369,7 @@ fn native_validation_preserves_inputs_without_executing_helpers() {
 
 #[test]
 fn export_exposes_secrets_only_when_explicitly_requested() {
-    let document = "[mcp_servers.example]\ncommand='example'\nargs=['--token','argument-secret']\nurl='https://example.com/mcp'\nhttp_headers={Authorization='header-secret'}\nenv={TOKEN='environment-secret'}\n";
+    let document = "[mcp_servers.example]\ncommand='example'\nargs=['--token','argument-secret']\nenv={TOKEN='environment-secret'}\n[mcp_servers.remote]\nurl='https://example.com/mcp'\nhttp_headers={Authorization='header-secret'}\n";
     let fixture = StackFixture::new(document);
     let config = fixture.directory.path().join("config.toml");
     std::fs::write(&config, document).unwrap();
@@ -400,15 +400,52 @@ fn export_exposes_secrets_only_when_explicitly_requested() {
             assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
         }
         let value: Value = yaml_serde::from_str(&yaml).unwrap();
-        assert_eq!(value["servers"]["example"]["config"]["command"], "example");
         assert_eq!(
-            value["servers"]["example"]["config"]["url"],
+            value["servers"]["example"]["transport"]["command"],
+            "example"
+        );
+        assert_eq!(
+            value["servers"]["remote"]["transport"]["url"],
             "https://example.com/mcp"
         );
         std::fs::write(&fixture.file, yaml).unwrap();
         assert!(fixture.validate().status.success());
         assert_eq!(std::fs::read_to_string(&config).unwrap(), document);
     }
+}
+
+#[test]
+fn codex_export_all_includes_default_skipped_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    std::fs::write(
+        &config,
+        "[mcp_servers.node_repl]\ncommand='node'\n[mcp_servers.computer-use]\ncommand='tool'\n",
+    )
+    .unwrap();
+    let run_export = |flags: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["--non-interactive", "codex", "export", "--config"])
+            .arg(&config)
+            .args(flags)
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let default = run_export(&[]);
+    assert!(default.status.success(), "{default:?}");
+    let stack: Value = yaml_serde::from_slice(&default.stdout).unwrap();
+    assert!(stack["servers"].as_object().unwrap().is_empty());
+    let one = run_export(&["--allow-node-repl"]);
+    assert!(one.status.success(), "{one:?}");
+    let stack: Value = yaml_serde::from_slice(&one.stdout).unwrap();
+    assert_eq!(stack["servers"].as_object().unwrap().len(), 1);
+    assert!(stack["servers"].get("node_repl").is_some());
+    let all = run_export(&["--all"]);
+    assert!(all.status.success(), "{all:?}");
+    let stack: Value = yaml_serde::from_slice(&all.stdout).unwrap();
+    assert_eq!(stack["servers"].as_object().unwrap().len(), 2);
 }
 
 #[test]
@@ -443,8 +480,8 @@ fn codex_export_prints_a_stack_without_changing_values_or_files() {
             .all(|server| server.get("client").is_none())
     );
     assert_eq!(
-        value["servers"]["local"]["config"]["env"]["TOKEN"],
-        serde_json::json!({"$env":"MCPSTACK_LOCAL_ENV_TOKEN"})
+        value["servers"]["local"]["transport"]["env"]["TOKEN"],
+        serde_json::json!({"env":"MCPSTACK_LOCAL_ENV_TOKEN"})
     );
     assert_eq!(std::fs::read_to_string(&config).unwrap(), document);
     std::fs::write(&config, "invalid TOML fixture-secret").unwrap();
@@ -510,7 +547,10 @@ fn export_reads_config_without_finding_or_running_codex() {
             .unwrap();
         assert!(output.status.success(), "{output:?}");
         let stack: Value = yaml_serde::from_slice(&output.stdout).unwrap();
-        assert_eq!(stack["servers"]["example"]["config"]["command"], "example");
+        assert_eq!(
+            stack["servers"]["example"]["transport"]["command"],
+            "example"
+        );
         assert!(!marker.exists());
     }
 }
@@ -677,8 +717,8 @@ fn export_logs_respect_verbosity_filters_and_color() {
         assert!(output.status.success(), "{output:?}");
         let value: Value = yaml_serde::from_slice(&output.stdout).unwrap();
         assert_eq!(
-            value["servers"]["example"]["config"]["env"]["TOKEN"],
-            serde_json::json!({"$env":"MCPSTACK_EXAMPLE_ENV_TOKEN"})
+            value["servers"]["example"]["transport"]["env"]["TOKEN"],
+            serde_json::json!({"env":"MCPSTACK_EXAMPLE_ENV_TOKEN"})
         );
         assert!(!output.stdout.contains(&0x1b));
         let log = String::from_utf8_lossy(&output.stderr);
@@ -895,7 +935,7 @@ fn codex_export_import_round_trip_preserves_supported_fields() {
     let root = fixture.directory.path();
     let source = root.join("source.toml");
     let target = root.join("target.toml");
-    let original = "# source settings are not shared\nmodel='private'\n[mcp_servers.process]\ncommand='tool'\nargs=['--token=fixture-roundtrip-secret']\ncwd='/tmp'\nenv_vars=['FORWARDED']\nenabled=false\nrequired=true\nstartup_timeout_sec=10\ntool_timeout_sec=20\nenabled_tools=['read']\ndisabled_tools=['write']\n[mcp_servers.process.env]\nAPI_KEY='fixture-roundtrip-secret'\n[mcp_servers.remote]\nurl='https://example.com/mcp'\nbearer_token_env_var='CODEX_TOKEN'\n[mcp_servers.remote.http_headers]\nAuthorization='fixture-roundtrip-secret'\n[mcp_servers.remote.env_http_headers]\nX-Auth='OTHER_TOKEN'\n";
+    let original = "# source settings are not shared\nmodel='private'\n[mcp_servers.process]\ncommand='tool'\nargs=['--token=fixture-roundtrip-secret']\ncwd='/tmp'\nenv_vars=['FORWARDED']\nenabled=false\nrequired=true\nstartup_timeout_sec=10\ntool_timeout_sec=20\nenabled_tools=['read']\ndisabled_tools=['write']\n[mcp_servers.process.env]\nAPI_KEY='fixture-roundtrip-secret'\n[mcp_servers.remote]\nurl='https://example.com/mcp'\nbearer_token_env_var='CODEX_TOKEN'\n[mcp_servers.remote.http_headers]\nX-Secret='fixture-roundtrip-secret'\n[mcp_servers.remote.env_http_headers]\nX-Auth='OTHER_TOKEN'\n";
     std::fs::write(&source, original).unwrap();
     let exported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
         .args(["--non-interactive", "codex", "export", "--config"])
@@ -909,13 +949,12 @@ fn codex_export_import_round_trip_preserves_supported_fields() {
     assert!(!String::from_utf8_lossy(&exported.stdout).contains("fixture-roundtrip-secret"));
     std::fs::write(&fixture.file, &exported.stdout).unwrap();
     let stack: serde_json::Value = yaml_serde::from_slice(&exported.stdout).unwrap();
-    let config = &stack["servers"]["process"]["config"];
-    let argument = config["args"][0]["$env"].as_str().unwrap();
-    let api_key = config["env"]["API_KEY"]["$env"].as_str().unwrap();
-    let authorization =
-        stack["servers"]["remote"]["config"]["http_headers"]["Authorization"]["$env"]
-            .as_str()
-            .unwrap();
+    let config = &stack["servers"]["process"]["transport"];
+    let argument = config["args"][0]["env"].as_str().unwrap();
+    let api_key = config["env"]["API_KEY"]["env"].as_str().unwrap();
+    let authorization = stack["servers"]["remote"]["transport"]["headers"]["X-Secret"]["env"]
+        .as_str()
+        .unwrap();
     let imported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
         .args(["codex", "import", "--auto-approve"])
         .arg(&fixture.file)
@@ -934,8 +973,25 @@ fn codex_export_import_round_trip_preserves_supported_fields() {
     let after: toml::Table = toml::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
     for (name, definition) in before["mcp_servers"].as_table().unwrap() {
         for (field, expected) in definition.as_table().unwrap() {
+            if field == "http_headers" {
+                assert!(after["mcp_servers"][name].get("http_headers").is_none());
+                assert_eq!(
+                    after["mcp_servers"][name]["env_http_headers"]["X-Secret"].as_str(),
+                    Some(authorization)
+                );
+                continue;
+            }
             let actual = &after["mcp_servers"][name][field];
-            assert_eq!(actual, expected, "{name}.{field}");
+            if field == "env_http_headers" {
+                assert_eq!(actual["X-Auth"], expected["X-Auth"]);
+            } else if matches!(field.as_str(), "startup_timeout_sec" | "tool_timeout_sec") {
+                assert_eq!(
+                    actual.as_float(),
+                    Some(expected.as_integer().unwrap() as f64)
+                );
+            } else {
+                assert_eq!(actual, expected, "{name}.{field}");
+            }
         }
     }
     assert!(!after.contains_key("model"));

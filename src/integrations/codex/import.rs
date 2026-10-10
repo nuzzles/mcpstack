@@ -174,10 +174,18 @@ pub fn prepare(
                             if let Some(reference) = bearer_token {
                                 definition.bearer_token_env_var = Some(reference.env.clone());
                             }
-                            definition.http_headers = headers
-                                .iter()
-                                .map(|(key, value)| Ok((key.clone(), source(value, &mut lookup)?)))
-                                .collect::<Result<_, ImportError>>()?;
+                            for (key, value) in headers {
+                                match value {
+                                    ValueSource::Literal(value) => {
+                                        definition.http_headers.insert(key.clone(), value.clone());
+                                    }
+                                    ValueSource::Environment(reference) => {
+                                        definition
+                                            .env_http_headers
+                                            .insert(key.clone(), reference.env.clone());
+                                    }
+                                }
+                            }
                         }
                         _ => return Err(ImportError::Unsupported),
                     }
@@ -362,8 +370,8 @@ mod tests {
             Some("fixture-secret")
         );
         assert_eq!(
-            result["portable"]["http_headers"]["Authorization"].as_str(),
-            Some("fixture-secret")
+            result["portable"]["env_http_headers"]["Authorization"].as_str(),
+            Some("TOKEN")
         );
         for value in [None, Some(String::new()), Some("bad\0value".into())] {
             let error = prepare(&stack, |_| value.clone()).unwrap_err();

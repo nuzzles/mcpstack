@@ -4,18 +4,20 @@ use std::io::{IsTerminal, Write, stderr, stdin};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
-use dialoguer::{Confirm, Input, Password, Select};
+use dialoguer::{Confirm, Input, Select};
 
 use super::config::Snapshot;
-use super::export::{ExportError, export, export_with_decisions};
+use super::export::ExportError;
 use super::import::prepare;
 use super::{Error, default_config};
 use crate::error::AppError;
 use crate::exporters::to_yaml;
+use crate::integrations::secrets::SecretResolver;
 use crate::schema::Stack;
 
 pub(crate) async fn run_export(
     config: Option<PathBuf>,
+    filter: crate::integrations::reserved::ExportFilter,
     output: &mut impl Write,
     non_interactive: bool,
     expose_secrets: bool,
@@ -26,12 +28,12 @@ pub(crate) async fn run_export(
         .await
         .map_err(AppError::ConfigRead)?;
     let stack = if expose_secrets {
-        export(&document, true)?
+        super::export::export_filtered(&document, true, filter)?
     } else if non_interactive || !stdin().is_terminal() || !stderr().is_terminal() {
-        export(&document, false)?
+        super::export::export_filtered(&document, false, filter)?
     } else {
         let mut remaining_choice = None;
-        export_with_decisions(&document, |path, current, total| {
+        super::export::export_with_filter(&document, filter, |path, current, total| {
             if let Some(choice) = remaining_choice {
                 return Ok(choice);
             }
@@ -57,6 +59,11 @@ pub(crate) async fn run_export(
         })?
     };
     // Prepare the complete result before exposing any content on stdout.
+    let stack = crate::integrations::portable::normalize(
+        stack,
+        crate::integrations::portable::Source::Codex,
+    )
+    .map_err(ExportError::Portable)?;
     let yaml = to_yaml(&stack.into()).map_err(|_| ExportError::Stack)?;
     write!(output, "{yaml}")?;
     Ok(())
@@ -318,58 +325,6 @@ async fn choose_backup_path(
     }
     let default = snapshot.default_backup_path().await.ok();
     choose(default.as_deref()).map(Some)
-}
-
-/// Cache each reference so repeated uses ask only once. All comparisons use
-/// real values; dry-run never proceeds to backup or file writes.
-pub(super) struct SecretResolver {
-    pub(super) dry_run: bool,
-    pub(super) interactive: bool,
-    pub(super) values: BTreeMap<String, Option<String>>,
-    pub(super) cancelled: bool,
-}
-
-impl SecretResolver {
-    pub(super) fn resolve(&mut self, name: &str) -> Option<String> {
-        if self.cancelled {
-            return None;
-        }
-        if let Some(value) = self.values.get(name) {
-            return value.clone();
-        }
-        let mut value = env::var(name)
-            .ok()
-            .filter(|value| !value.is_empty() && !value.contains('\0'));
-        if value.is_none() {
-            if self.interactive {
-                match Password::new()
-                    .with_prompt(if self.dry_run {
-                        format!("Enter secret for {name}")
-                    } else {
-                        format!("Enter secret for {name} (written as a literal in config)")
-                    })
-                    .report(false)
-                    .validate_with(|value: &String| {
-                        if value.contains('\0') {
-                            Err("Value must not contain NUL")
-                        } else {
-                            Ok(())
-                        }
-                    })
-                    .interact()
-                {
-                    Ok(secret) => value = Some(secret),
-                    Err(_) => self.cancelled = true,
-                }
-            } else {
-                tracing::warn!(
-                    "Environment variable {name} is unset or unusable; this masked field needs a value before import."
-                );
-            }
-        }
-        self.values.insert(name.into(), value.clone());
-        value
-    }
 }
 
 pub(super) fn warn_runtime_bindings(additions: &BTreeMap<String, toml::Table>) {

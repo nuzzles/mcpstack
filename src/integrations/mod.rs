@@ -1,5 +1,9 @@
 //! Client selection and adapter dispatch.
+mod claude;
 mod codex;
+mod portable;
+mod reserved;
+mod secrets;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -20,6 +24,8 @@ pub const EXAMPLES: &[&str] = &[
     "mcpstack codex export --help",
     "mcpstack codex import --help",
     "mcpstack codex diff --help",
+    "mcpstack claude --help",
+    "mcpstack claude export --help",
 ];
 
 #[derive(Args)]
@@ -27,6 +33,40 @@ pub struct ExportArgs {
     /// Read this client config file instead of the default configuration.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
+    /// Include every server normally skipped by the export filter.
+    #[arg(long)]
+    all: bool,
+    /// Include the otherwise skipped workspace server.
+    #[arg(long)]
+    allow_workspace: bool,
+    /// Include the otherwise skipped claude-in-chrome server.
+    #[arg(long)]
+    allow_claude_in_chrome: bool,
+    /// Include the otherwise skipped computer-use server.
+    #[arg(long)]
+    allow_computer_use: bool,
+    /// Include the otherwise skipped Claude Preview server.
+    #[arg(long)]
+    allow_claude_preview: bool,
+    /// Include the otherwise skipped Claude Browser server.
+    #[arg(long)]
+    allow_claude_browser: bool,
+    /// Include the otherwise skipped node_repl server.
+    #[arg(long)]
+    allow_node_repl: bool,
+}
+
+impl ExportArgs {
+    fn filter(&self) -> reserved::ExportFilter {
+        reserved::ExportFilter {
+            workspace: self.all || self.allow_workspace,
+            claude_in_chrome: self.all || self.allow_claude_in_chrome,
+            computer_use: self.all || self.allow_computer_use,
+            claude_preview: self.all || self.allow_claude_preview,
+            claude_browser: self.all || self.allow_claude_browser,
+            node_repl: self.all || self.allow_node_repl,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -43,6 +83,8 @@ pub struct StackArgs {
 pub enum Client {
     /// Manage MCP servers in Codex configuration.
     Codex(ClientCommands),
+    /// Manage MCP servers in Claude Code user configuration.
+    Claude(ClientCommands),
 }
 
 #[derive(Args)]
@@ -66,41 +108,85 @@ impl Client {
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {
-        let (target, commands) = match self {
-            Self::Codex(commands) => (Target::Codex, commands),
-        };
-        match commands.operation {
-            Operation::Use(args) => args.run(target, output, non_interactive, colored).await,
-            Operation::Import(args) => args.run(target, output, non_interactive, colored).await,
-            Operation::Export(args) => args.run(target, output, non_interactive).await,
-            Operation::Diff(args) => args.run(target, output, non_interactive, colored).await,
+        match self {
+            Self::Codex(commands) => {
+                run_commands(&Codex, commands, output, non_interactive, colored).await
+            }
+            Self::Claude(commands) => {
+                run_commands(&Claude, commands, output, non_interactive, colored).await
+            }
         }
     }
 }
 
-/// Selected by the parent command, never stored in a stack file.
-pub enum Target {
-    Codex,
+async fn run_commands(
+    adapter: &impl ClientAdapter,
+    commands: ClientCommands,
+    output: &mut impl Write,
+    non_interactive: bool,
+    colored: bool,
+) -> Result<(), AppError> {
+    match commands.operation {
+        Operation::Use(args) => args.run(adapter, output, non_interactive, colored).await,
+        Operation::Import(args) => args.run(adapter, output, non_interactive, colored).await,
+        Operation::Export(args) => args.run(adapter, output, non_interactive).await,
+        Operation::Diff(args) => args.run(adapter, output, non_interactive, colored).await,
+    }
 }
 
-impl Target {
-    pub async fn export(
-        self,
+pub trait ClientAdapter {
+    async fn export(
+        &self,
+        args: ExportArgs,
+        output: &mut impl Write,
+        non_interactive: bool,
+        expose_secrets: bool,
+    ) -> Result<(), AppError>;
+    async fn import(
+        &self,
+        args: StackArgs,
+        output: &mut impl Write,
+        non_interactive: bool,
+        colored: bool,
+        dry_run: bool,
+        auto_approve: bool,
+    ) -> Result<(), AppError>;
+    async fn use_stack(
+        &self,
+        args: StackArgs,
+        output: &mut impl Write,
+        non_interactive: bool,
+        colored: bool,
+        dry_run: bool,
+        auto_approve: bool,
+    ) -> Result<(), AppError>;
+    async fn diff(
+        &self,
+        args: StackArgs,
+        output: &mut impl Write,
+        non_interactive: bool,
+        colored: bool,
+    ) -> Result<(), AppError>;
+}
+
+pub struct Codex;
+pub struct Claude;
+
+impl ClientAdapter for Codex {
+    async fn export(
+        &self,
         args: ExportArgs,
         output: &mut impl Write,
         non_interactive: bool,
         expose_secrets: bool,
     ) -> Result<(), AppError> {
-        match self {
-            Self::Codex => {
-                codex::workflow::run_export(args.config, output, non_interactive, expose_secrets)
-                    .await
-            }
-        }
+        let filter = args.filter();
+        codex::workflow::run_export(args.config, filter, output, non_interactive, expose_secrets)
+            .await
     }
 
-    pub async fn import(
-        self,
+    async fn import(
+        &self,
         args: StackArgs,
         output: &mut impl Write,
         non_interactive: bool,
@@ -108,24 +194,20 @@ impl Target {
         dry_run: bool,
         auto_approve: bool,
     ) -> Result<(), AppError> {
-        match self {
-            Self::Codex => {
-                codex::workflow::run_import(
-                    args.file,
-                    args.config,
-                    output,
-                    non_interactive,
-                    colored,
-                    dry_run,
-                    auto_approve,
-                )
-                .await
-            }
-        }
+        codex::workflow::run_import(
+            args.file,
+            args.config,
+            output,
+            non_interactive,
+            colored,
+            dry_run,
+            auto_approve,
+        )
+        .await
     }
 
-    pub async fn use_stack(
-        self,
+    async fn use_stack(
+        &self,
         args: StackArgs,
         output: &mut impl Write,
         non_interactive: bool,
@@ -133,34 +215,26 @@ impl Target {
         dry_run: bool,
         auto_approve: bool,
     ) -> Result<(), AppError> {
-        match self {
-            Self::Codex => {
-                codex::workflow::run_use(
-                    args.file,
-                    args.config,
-                    output,
-                    non_interactive,
-                    colored,
-                    dry_run,
-                    auto_approve,
-                )
-                .await
-            }
-        }
+        codex::workflow::run_use(
+            args.file,
+            args.config,
+            output,
+            non_interactive,
+            colored,
+            dry_run,
+            auto_approve,
+        )
+        .await
     }
 
-    pub async fn diff(
-        self,
+    async fn diff(
+        &self,
         args: StackArgs,
         output: &mut impl Write,
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {
-        match self {
-            Self::Codex => {
-                codex::diff::run(args.file, args.config, output, non_interactive, colored).await
-            }
-        }
+        codex::diff::run(args.file, args.config, output, non_interactive, colored).await
     }
 }
 
@@ -168,12 +242,15 @@ impl Target {
 pub enum Error {
     #[error(transparent)]
     Codex(#[from] codex::Error),
+    #[error(transparent)]
+    Claude(#[from] claude::Error),
 }
 
 impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Codex(error) => error.code(),
+            Self::Claude(error) => error.code(),
         }
     }
 }

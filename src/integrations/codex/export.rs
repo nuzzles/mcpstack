@@ -17,24 +17,59 @@ pub enum ExportError {
     Stack,
     #[error("Secret selection was cancelled or could not be completed. No stack was exported.")]
     Prompt,
+    #[error("Cannot export a portable stack with unsupported field {0}. No stack was exported.")]
+    Portable(String),
 }
 
 /// Export one native entry per server. This reads data only: it does not resolve
 /// credentials, run helpers, or infer installed-client compatibility.
+#[cfg(test)]
 pub fn export(document: &str, expose_secrets: bool) -> Result<StackV1, ExportError> {
-    export_with_decisions(document, |_, _, _| Ok(expose_secrets))
+    export_filtered(document, expose_secrets, Default::default())
+}
+
+pub fn export_filtered(
+    document: &str,
+    expose_secrets: bool,
+    filter: crate::integrations::reserved::ExportFilter,
+) -> Result<StackV1, ExportError> {
+    export_with_filter(document, filter, |_, _, _| Ok(expose_secrets))
 }
 
 /// Decide whether to expose each detected credential. The callback receives
 /// only a field path and its one-based position and total, never the value.
+#[cfg(test)]
 pub fn export_with_decisions(
     document: &str,
+    expose: impl FnMut(&str, usize, usize) -> Result<bool, ExportError>,
+) -> Result<StackV1, ExportError> {
+    export_with_filter(document, Default::default(), expose)
+}
+
+pub fn export_with_filter(
+    document: &str,
+    filter: crate::integrations::reserved::ExportFilter,
     mut expose: impl FnMut(&str, usize, usize) -> Result<bool, ExportError>,
 ) -> Result<StackV1, ExportError> {
     let config: toml::Value = toml::from_str(document).map_err(|_| ExportError::Config)?;
     let servers = match config.get("mcp_servers") {
         None => serde_json::Map::new(),
         Some(toml::Value::Table(table)) => {
+            let mut table = table.clone();
+            let reserved: Vec<_> = table
+                .keys()
+                .filter(|name| filter.skip(name))
+                .cloned()
+                .collect();
+            for name in reserved {
+                table.remove(&name);
+            }
+            for (_, server) in table.iter_mut() {
+                if let toml::Value::Table(fields) = server {
+                    fields.remove("sandbox_mode");
+                    fields.remove("approval_policy");
+                }
+            }
             // Datetimes and nonfinite floats have no lossless JSON equivalent.
             if table.values().any(contains_unsupported_value) {
                 return Err(ExportError::Config);
@@ -97,7 +132,7 @@ pub fn mask_for_preview(
     Ok(value["servers"][name]["config"].clone())
 }
 
-fn visit_credentials(
+pub(crate) fn visit_credentials(
     stack: &mut StackV1,
     names: &mut BTreeSet<String>,
     expose: &mut impl FnMut(&str) -> Result<bool, ExportError>,
@@ -123,7 +158,7 @@ fn visit_credentials(
     Ok(())
 }
 
-fn collect_references(value: &ConfigValue, names: &mut BTreeSet<String>) {
+pub(crate) fn collect_references(value: &ConfigValue, names: &mut BTreeSet<String>) {
     match value {
         ConfigValue::Object(values) => {
             if let Some(ConfigValue::String(name)) = values.get("$env") {
@@ -284,6 +319,8 @@ fn protect(
                 next_secret = following_secret;
             }
         }
+        ConfigValue::String(text)
+            if sensitive && crate::integrations::portable::is_claude_reference(text) => {}
         ConfigValue::String(_) | ConfigValue::Number(_) if sensitive => {
             if expose(display_path)? {
                 return Ok(());
@@ -354,6 +391,98 @@ client_secret = "another-fixture-secret"
             "another-fixture-secret"
         );
         assert!(!value.to_string().contains("unrelated"));
+    }
+
+    #[test]
+    fn ignores_server_policy_fields_but_still_rejects_other_unknown_fields() {
+        let config = r#"
+[mcp_servers.notion]
+url = "https://example.com/mcp"
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+[mcp_servers.local]
+command = "example"
+"#;
+        let stack = export(config, false).unwrap();
+        let value = serde_json::to_value(stack).unwrap();
+        assert_eq!(
+            value["servers"]["notion"]["config"]["url"],
+            "https://example.com/mcp"
+        );
+        assert!(
+            value["servers"]["notion"]["config"]
+                .get("sandbox_mode")
+                .is_none()
+        );
+        assert!(
+            value["servers"]["notion"]["config"]
+                .get("approval_policy")
+                .is_none()
+        );
+        assert_eq!(value["servers"]["local"]["config"]["command"], "example");
+        assert!(matches!(
+            export(&format!("{config}\nfuture_field = true\n"), false),
+            Err(ExportError::Schema)
+        ));
+        assert!(export(&config.replace("\"workspace-write\"", "2020-01-01"), false).is_ok());
+    }
+
+    #[test]
+    fn skips_reserved_names_before_validating_or_exporting_servers() {
+        let mut config = String::new();
+        for name in [
+            "workspace",
+            "claude-in-chrome",
+            "computer-use",
+            "Claude Preview",
+            "Claude Browser",
+        ] {
+            config.push_str(&format!(
+                "[mcp_servers.{name:?}]\ncommand = 'built-in'\nunknown_field = true\n"
+            ));
+        }
+        config.push_str("[mcp_servers.computer-use-extra]\ncommand = 'tool'\n");
+        let exported = serde_json::to_value(export(&config, false).unwrap()).unwrap();
+        assert_eq!(
+            exported["servers"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["computer-use-extra"]
+        );
+    }
+
+    #[test]
+    fn node_repl_is_skipped_unless_allowed() {
+        let config = "[mcp_servers.node_repl]\ncommand = 'node'\nunknown_field = true\n";
+        assert!(export(config, false).unwrap().servers.is_empty());
+        assert!(matches!(
+            export_filtered(
+                config,
+                false,
+                crate::integrations::reserved::ExportFilter {
+                    node_repl: true,
+                    ..Default::default()
+                }
+            ),
+            Err(ExportError::Schema)
+        ));
+        let config = "[mcp_servers.node_repl]\ncommand = 'node'\n";
+        assert!(
+            export_filtered(
+                config,
+                false,
+                crate::integrations::reserved::ExportFilter {
+                    node_repl: true,
+                    ..Default::default()
+                }
+            )
+            .unwrap()
+            .servers
+            .contains_key("node_repl")
+        );
     }
 
     #[test]

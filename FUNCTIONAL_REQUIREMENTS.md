@@ -63,7 +63,7 @@ to its entry in Current status at the bottom.\
 
 | Implementation | Brief description |
 | --- | --- |
-| Unsupported | Claude support across the full workflow. [*](#claude-support) |
+| Partial [*](#claude-support) | Claude Code user-scope JSON import, export, diff, and stack switching. |
 
 ### CLI
 
@@ -126,8 +126,8 @@ servers:
 Configuration data preserves fields and nested secret references without binding
 an item to its source client. Each target adapter must validate that it can
 represent the fields before writing; removing the label does not make every
-client-specific option universally supported. Codex is currently the implemented
-adapter. Transport definitions provide the explicit shared transport form.
+client-specific option universally supported. Codex and Claude Code have
+adapters. Transport definitions provide the explicit shared transport form.
 
 This changes the unpublished v1 format: remove `client: codex` (or another client
 label) from existing items and retain their `config` data. Legacy client labels
@@ -168,8 +168,29 @@ modes can ask for missing masked values and never write files.
 
 ### Claude support
 
-[*] Choose Claude Code, Claude Desktop, or both before implementation. Each
-supported client must preserve unrelated configuration.
+[*] Claude Code is the selected first target. `mcpstack claude` reads and writes
+user-scope `~/.claude.json` (or `--config <path>`) and preserves unrelated JSON
+settings. It supports native stdio, HTTP, and SSE server definitions plus portable
+stdio/HTTP/SSE definitions representable in Claude Code. Unsupported fields and
+transports fail before writes. Diff and export mask recognized credentials; import
+and use create numbered backups before atomic replacement. Claude Desktop, project/local scopes, and additional Claude Code MCP fields remain
+follow-up work.
+For unsupported stack fields, Claude Code operations report every affected
+server and field name without printing field values.
+Both client exporters omit MCP servers whose names Claude Code reserves for its
+built-in servers, plus the app-managed `node_repl` server. Individual `--allow-*`
+flags include one name; `--all` includes every normally skipped name. The filter
+runs before server validation and leaves source configuration unchanged.
+Codex `http_headers` map to Claude `headers`. `bearer_token_env_var` and
+`env_http_headers` become `${VAR}` header references, preserving runtime lookup;
+the portable HTTP/SSE bearer binding maps the same way. Claude Code may suppress
+expansion of its protected credential variables, so those names require a separate
+user-managed environment variable. Duplicate header names fail instead of
+overwriting either value. Claude Code's reserved server names also fail before
+writes. Claude Code cannot apply per-server Codex startup timeouts or tool approval modes.
+Both exporters emit portable `transport` entries. Codex approval mode is omitted
+with a warning because Claude permissions are configured separately; other
+unmappable source fields fail export without emitting a partial stack.
 
 ### Switching stacks
 
@@ -179,8 +200,7 @@ the file are removed, including servers added outside mcpstack; unrelated client
 settings are preserved. Resolve the new stack's secrets locally.
 
 `codex use` selects the client explicitly for both writes and dry runs. Codex is
-currently the only supported target; `--config <path>` overrides its default
-config path. It validates the entire stack and
+uses `--config <path>` to override its default config path. It validates the entire stack and
 resolves secrets before any backup or write. Interactive use asks once to replace
 ALL servers (default No), then reports the result without printing a diff. `-y` approves the whole
 switch; unattended writes require it. `--dry-run` shows the whole proposed set,
@@ -236,7 +256,8 @@ scope. Publishing and release/deployment automation require explicit authorizati
 
 Client operations are grouped under `mcpstack <client> <operation>`. Codex exposes
 `use`, `import`, `export`, and `diff`; `validate` and `--schema` stay at the top
-level. The parent command selects the target, so there is no `--client` option.
+level. Claude Code exposes the same four operations under `claude`. The parent
+command selects the target, so there is no `--client` option.
 The previous operation-first syntax is no longer accepted.
 
 Help, version, `--schema`, `validate <file>`, `codex export`,
@@ -303,13 +324,13 @@ Other platforms reject import safely.
 ### Codex export
 
 `codex export` reads the default Codex TOML config and prints client-independent server
-entries as a YAML stack to stdout. In noninteractive use, credential values become
-`{"$env":"MCPSTACK_SERVER_FIELD"}`. Recognition uses credential field names
+entries as portable YAML `transport` definitions on stdout. In noninteractive use,
+credential values become `{env: MCPSTACK_SERVER_FIELD}` references. Recognition uses credential field names
 (token, secret, password, API/access/private key), authorization/cookie headers,
 and named token arguments (`--token VALUE` or `--token=VALUE`). Nested credential
 fields and matching environment variable names are covered. Commands, URLs,
-ordinary arguments, timeouts, booleans, and existing environment-name settings
-remain unchanged. This is name-based detection, not a guarantee that arbitrary
+ordinary arguments and existing environment-name settings retain their meaning.
+This is name-based detection, not a guarantee that arbitrary
 unnamed values or credentials embedded in URLs will be recognized.
 
 Nested fields and array indices contribute to reference names. Names are uppercase
@@ -332,11 +353,16 @@ config. Relative paths resolve from the current working directory.
 
 Import conversion and export validate MCP entries against
 `src/integrations/codex/mcp.schema.json`, extracted from the current official Codex config
-schema. Validation is offline and does not require Codex to be installed. Configuration
-definitions preserve supported fields; obsolete inline `bearer_token` and unknown
+schema. Validation is offline and does not require Codex to be installed. Native
+config definitions preserve supported fields on import; exported portable
+definitions preserve supported transport and settings. Obsolete inline `bearer_token` and unknown
 fields are rejected without exposing values. Refresh the snapshot deliberately
 when adding support for schema changes. Portable conversion supports STDIO/HTTP;
 filesystem writes support Unix and Windows.
+
+Export omits `sandbox_mode` and `approval_policy` when they appear directly in an
+MCP server definition. These policy fields are not part of the exported server
+stack; other unsupported server fields still fail validation.
 
 ### Codex import
 
