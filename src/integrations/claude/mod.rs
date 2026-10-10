@@ -42,6 +42,8 @@ pub enum Error {
     Backup,
     #[error("Secret selection was cancelled; no stack was exported.")]
     Prompt,
+    #[error("Cannot export a portable stack with unsupported field {0}. No stack was exported.")]
+    ExportPortable(String),
 }
 impl Error {
     pub fn code(&self) -> ErrorCode {
@@ -54,7 +56,7 @@ impl Error {
             | Self::Secret => ErrorCode::ImportError,
             Self::Write => ErrorCode::ConfigWriteError,
             Self::Backup => ErrorCode::BackupError,
-            Self::Prompt => ErrorCode::ExportError,
+            Self::Prompt | Self::ExportPortable(_) => ErrorCode::ExportError,
         }
     }
 }
@@ -390,12 +392,13 @@ fn prepare(
                         };
                         let mut mapped_headers = Map::new();
                         for (header, value) in headers {
-                            add_header(
-                                &mut mapped_headers,
-                                header,
-                                Value::String(source(value, resolver)?),
-                                name,
-                            )?;
+                            let text = match value {
+                                ValueSource::Literal(value) => value.clone(),
+                                ValueSource::Environment(reference) => {
+                                    environment_reference(&reference.env, name)?
+                                }
+                            };
+                            add_header(&mut mapped_headers, header, Value::String(text), name)?;
                         }
                         if let Some(reference) = bearer_token {
                             let variable = environment_reference(&reference.env, name)?;
@@ -620,6 +623,8 @@ impl ClientAdapter for Claude {
                     .map_err(|_| Error::Config)?;
             }
         }
+        let stack = super::portable::normalize(stack, super::portable::Source::Claude)
+            .map_err(Error::ExportPortable)?;
         write!(output, "{}", to_yaml(&stack.into())?)?;
         Ok(())
     }

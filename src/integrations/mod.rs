@@ -1,6 +1,7 @@
 //! Client selection and adapter dispatch.
 mod claude;
 mod codex;
+mod portable;
 mod reserved;
 mod secrets;
 
@@ -32,6 +33,9 @@ pub struct ExportArgs {
     /// Read this client config file instead of the default configuration.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
+    /// Include every server normally skipped by the export filter.
+    #[arg(long)]
+    all: bool,
     /// Include the otherwise skipped workspace server.
     #[arg(long)]
     allow_workspace: bool,
@@ -55,12 +59,12 @@ pub struct ExportArgs {
 impl ExportArgs {
     fn filter(&self) -> reserved::ExportFilter {
         reserved::ExportFilter {
-            workspace: self.allow_workspace,
-            claude_in_chrome: self.allow_claude_in_chrome,
-            computer_use: self.allow_computer_use,
-            claude_preview: self.allow_claude_preview,
-            claude_browser: self.allow_claude_browser,
-            node_repl: self.allow_node_repl,
+            workspace: self.all || self.allow_workspace,
+            claude_in_chrome: self.all || self.allow_claude_in_chrome,
+            computer_use: self.all || self.allow_computer_use,
+            claude_preview: self.all || self.allow_claude_preview,
+            claude_browser: self.all || self.allow_claude_browser,
+            node_repl: self.all || self.allow_node_repl,
         }
     }
 }

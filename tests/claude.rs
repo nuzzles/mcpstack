@@ -67,7 +67,7 @@ fn masked_export_and_invalid_import_do_not_expose_or_write_secrets() {
     assert!(export.status.success(), "{export:?}");
     let yaml = String::from_utf8(export.stdout).unwrap();
     assert!(!yaml.contains("fixture-secret"));
-    assert!(yaml.contains("$env"));
+    assert!(yaml.contains("env: MCPSTACK_"));
     std::fs::write(
         &stack,
         "schema_version: 1\nservers:\n  bad:\n    config: {command: tool, codex_only: true}\n",
@@ -267,6 +267,10 @@ fn export_allow_flags_include_only_named_servers() {
         assert_eq!(exported.len(), 1);
         assert!(exported.contains_key(name));
     }
+    let all = run("export", None, &config, &["--all"]);
+    assert!(all.status.success(), "{all:?}");
+    let stack: serde_json::Value = yaml_serde::from_slice(&all.stdout).unwrap();
+    assert_eq!(stack["servers"].as_object().unwrap().len(), names.len());
 }
 
 #[test]
@@ -299,6 +303,66 @@ fn codex_http_headers_and_runtime_bindings_map_to_claude_headers() {
         "Bearer ${PORTABLE_TOKEN}"
     );
     assert_eq!(value["theme"], "dark");
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn codex_and_claude_exports_share_portable_http_bindings() {
+    let dir = tempfile::tempdir().unwrap();
+    let codex = dir.path().join("config.toml");
+    let claude = dir.path().join("claude.json");
+    std::fs::write(&codex, "[mcp_servers.api]\nurl='https://example.com/mcp'\nbearer_token_env_var='SERVICE_TOKEN'\n[mcp_servers.api.env_http_headers]\nX-Key='SERVICE_KEY'\n").unwrap();
+    std::fs::write(&claude, r#"{"mcpServers":{},"theme":"dark"}"#).unwrap();
+    let export = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["--non-interactive", "codex", "export", "--config"])
+        .arg(&codex)
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(export.status.success(), "{export:?}");
+    let portable: serde_json::Value = yaml_serde::from_slice(&export.stdout).unwrap();
+    let transport = &portable["servers"]["api"]["transport"];
+    assert!(portable["servers"]["api"].get("config").is_none());
+    assert_eq!(transport["bearer_token"]["env"], "SERVICE_TOKEN");
+    assert_eq!(transport["headers"]["X-Key"]["env"], "SERVICE_KEY");
+    let stack = dir.path().join("stack.yml");
+    std::fs::write(&stack, export.stdout).unwrap();
+    let applied = run("use", Some(&stack), &claude, &["-y"]);
+    assert!(applied.status.success(), "{applied:?}");
+    let value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&claude).unwrap()).unwrap();
+    assert_eq!(
+        value["mcpServers"]["api"]["headers"]["Authorization"],
+        "Bearer ${SERVICE_TOKEN}"
+    );
+    assert_eq!(
+        value["mcpServers"]["api"]["headers"]["X-Key"],
+        "${SERVICE_KEY}"
+    );
+    let reexport = run("export", None, &claude, &[]);
+    assert!(reexport.status.success(), "{reexport:?}");
+    let roundtrip: serde_json::Value = yaml_serde::from_slice(&reexport.stdout).unwrap();
+    assert_eq!(roundtrip["servers"]["api"]["transport"], *transport);
+}
+
+#[test]
+fn codex_export_omits_nonportable_approval_with_a_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    let codex = dir.path().join("config.toml");
+    std::fs::write(&codex, "[mcp_servers.obsidian]\nurl='https://example.com/mcp'\ndefault_tools_approval_mode='prompt'\n").unwrap();
+    let exported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["--non-interactive", "codex", "export", "--config"])
+        .arg(&codex)
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(exported.status.success(), "{exported:?}");
+    let stack: serde_json::Value = yaml_serde::from_slice(&exported.stdout).unwrap();
+    assert_eq!(stack["servers"]["obsidian"]["transport"]["type"], "http");
+    assert!(stack["servers"]["obsidian"].get("config").is_none());
+    assert!(String::from_utf8_lossy(&exported.stderr).contains("default_tools_approval_mode"));
 }
 
 #[test]

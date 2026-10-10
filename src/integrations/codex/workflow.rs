@@ -59,6 +59,11 @@ pub(crate) async fn run_export(
         })?
     };
     // Prepare the complete result before exposing any content on stdout.
+    let stack = crate::integrations::portable::normalize(
+        stack,
+        crate::integrations::portable::Source::Codex,
+    )
+    .map_err(ExportError::Portable)?;
     let yaml = to_yaml(&stack.into()).map_err(|_| ExportError::Stack)?;
     write!(output, "{yaml}")?;
     Ok(())

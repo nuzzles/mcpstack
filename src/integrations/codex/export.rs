@@ -17,6 +17,8 @@ pub enum ExportError {
     Stack,
     #[error("Secret selection was cancelled or could not be completed. No stack was exported.")]
     Prompt,
+    #[error("Cannot export a portable stack with unsupported field {0}. No stack was exported.")]
+    Portable(String),
 }
 
 /// Export one native entry per server. This reads data only: it does not resolve
@@ -317,6 +319,8 @@ fn protect(
                 next_secret = following_secret;
             }
         }
+        ConfigValue::String(text)
+            if sensitive && crate::integrations::portable::is_claude_reference(text) => {}
         ConfigValue::String(_) | ConfigValue::Number(_) if sensitive => {
             if expose(display_path)? {
                 return Ok(());

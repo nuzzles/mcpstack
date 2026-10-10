@@ -178,15 +178,19 @@ follow-up work.
 For unsupported stack fields, Claude Code operations report every affected
 server and field name without printing field values.
 Both client exporters omit MCP servers whose names Claude Code reserves for its
-built-in servers. The filter runs before server validation and leaves source
-configuration unchanged.
+built-in servers, plus the app-managed `node_repl` server. Individual `--allow-*`
+flags include one name; `--all` includes every normally skipped name. The filter
+runs before server validation and leaves source configuration unchanged.
 Codex `http_headers` map to Claude `headers`. `bearer_token_env_var` and
 `env_http_headers` become `${VAR}` header references, preserving runtime lookup;
 the portable HTTP/SSE bearer binding maps the same way. Claude Code may suppress
 expansion of its protected credential variables, so those names require a separate
 user-managed environment variable. Duplicate header names fail instead of
 overwriting either value. Claude Code's reserved server names also fail before
-writes. Per-server Codex startup timeouts and tool approval modes remain unsupported.
+writes. Claude Code cannot apply per-server Codex startup timeouts or tool approval modes.
+Both exporters emit portable `transport` entries. Codex approval mode is omitted
+with a warning because Claude permissions are configured separately; other
+unmappable source fields fail export without emitting a partial stack.
 
 ### Switching stacks
 
@@ -320,13 +324,13 @@ Other platforms reject import safely.
 ### Codex export
 
 `codex export` reads the default Codex TOML config and prints client-independent server
-entries as a YAML stack to stdout. In noninteractive use, credential values become
-`{"$env":"MCPSTACK_SERVER_FIELD"}`. Recognition uses credential field names
+entries as portable YAML `transport` definitions on stdout. In noninteractive use,
+credential values become `{env: MCPSTACK_SERVER_FIELD}` references. Recognition uses credential field names
 (token, secret, password, API/access/private key), authorization/cookie headers,
 and named token arguments (`--token VALUE` or `--token=VALUE`). Nested credential
 fields and matching environment variable names are covered. Commands, URLs,
-ordinary arguments, timeouts, booleans, and existing environment-name settings
-remain unchanged. This is name-based detection, not a guarantee that arbitrary
+ordinary arguments and existing environment-name settings retain their meaning.
+This is name-based detection, not a guarantee that arbitrary
 unnamed values or credentials embedded in URLs will be recognized.
 
 Nested fields and array indices contribute to reference names. Names are uppercase
@@ -349,8 +353,9 @@ config. Relative paths resolve from the current working directory.
 
 Import conversion and export validate MCP entries against
 `src/integrations/codex/mcp.schema.json`, extracted from the current official Codex config
-schema. Validation is offline and does not require Codex to be installed. Configuration
-definitions preserve supported fields; obsolete inline `bearer_token` and unknown
+schema. Validation is offline and does not require Codex to be installed. Native
+config definitions preserve supported fields on import; exported portable
+definitions preserve supported transport and settings. Obsolete inline `bearer_token` and unknown
 fields are rejected without exposing values. Refresh the snapshot deliberately
 when adding support for schema changes. Portable conversion supports STDIO/HTTP;
 filesystem writes support Unix and Windows.
