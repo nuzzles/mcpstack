@@ -42,9 +42,41 @@ pub enum ConfigValue {
     Null(()),
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Transport {
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<ValueSource>,
+        #[serde(default, deserialize_with = "unique_map")]
+        env: BTreeMap<String, ValueSource>,
+        #[serde(default)]
+        env_vars: Vec<String>,
+        #[serde(default)]
+        cwd: Option<String>,
+    },
+    Http {
+        url: String,
+        #[serde(default, deserialize_with = "unique_map")]
+        headers: BTreeMap<String, ValueSource>,
+    },
+    Sse {
+        url: String,
+        #[serde(default, deserialize_with = "unique_map")]
+        headers: BTreeMap<String, ValueSource>,
+    },
+    Websocket {
+        url: String,
+        #[serde(default, deserialize_with = "unique_map")]
+        headers: BTreeMap<String, ValueSource>,
+    },
+}
+
+// Read older v1 bearer_token entries, but serialize only the unified headers form.
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum TransportInput {
     Stdio {
         command: String,
         #[serde(default)]
@@ -79,18 +111,92 @@ pub enum Transport {
     },
 }
 
+impl<'de> Deserialize<'de> for Transport {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let input = TransportInput::deserialize(deserializer)?;
+        let migrate = |mut headers: BTreeMap<String, ValueSource>,
+                       bearer_token: Option<EnvironmentReference>| {
+            if let Some(reference) = bearer_token {
+                if headers
+                    .keys()
+                    .any(|key| key.eq_ignore_ascii_case("Authorization"))
+                {
+                    return Err(serde::de::Error::custom(
+                        "bearer token conflicts with Authorization header",
+                    ));
+                }
+                headers.insert(
+                    "Authorization".into(),
+                    ValueSource::PrefixedEnvironment(PrefixedEnvironmentReference {
+                        env: reference.env,
+                        prefix: "Bearer ".into(),
+                    }),
+                );
+            }
+            Ok(headers)
+        };
+        Ok(match input {
+            TransportInput::Stdio {
+                command,
+                args,
+                env,
+                env_vars,
+                cwd,
+            } => Self::Stdio {
+                command,
+                args,
+                env,
+                env_vars,
+                cwd,
+            },
+            TransportInput::Http {
+                url,
+                bearer_token,
+                headers,
+            } => Self::Http {
+                url,
+                headers: migrate(headers, bearer_token)?,
+            },
+            TransportInput::Sse {
+                url,
+                bearer_token,
+                headers,
+            } => Self::Sse {
+                url,
+                headers: migrate(headers, bearer_token)?,
+            },
+            TransportInput::Websocket {
+                url,
+                bearer_token,
+                headers,
+            } => Self::Websocket {
+                url,
+                headers: migrate(headers, bearer_token)?,
+            },
+        })
+    }
+}
+
 /// Explicit references cannot be confused with literal strings.
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum ValueSource {
     Literal(String),
     Environment(EnvironmentReference),
+    PrefixedEnvironment(PrefixedEnvironmentReference),
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnvironmentReference {
     pub env: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrefixedEnvironmentReference {
+    pub env: String,
+    pub prefix: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -205,21 +311,9 @@ impl Server {
                     return Err(ValidationError::InvalidEnvironment);
                 }
             }
-            Transport::Http {
-                url,
-                bearer_token,
-                headers,
-            }
-            | Transport::Sse {
-                url,
-                bearer_token,
-                headers,
-            }
-            | Transport::Websocket {
-                url,
-                bearer_token,
-                headers,
-            } => {
+            Transport::Http { url, headers }
+            | Transport::Sse { url, headers }
+            | Transport::Websocket { url, headers } => {
                 let endpoint =
                     url::Url::parse(url).map_err(|_| ValidationError::InvalidEndpoint)?;
                 let valid_scheme = match transport {
@@ -235,9 +329,6 @@ impl Server {
                     || url.trim() != url
                 {
                     return Err(ValidationError::InvalidEndpoint);
-                }
-                if let Some(reference) = bearer_token {
-                    reference.validate()?;
                 }
                 let mut header_names = std::collections::HashSet::new();
                 for (name, value) in headers {
@@ -317,6 +408,16 @@ impl ValueSource {
     fn validate_reference(&self) -> Result<(), ValidationError> {
         match self {
             Self::Environment(reference) => reference.validate(),
+            Self::PrefixedEnvironment(reference) => {
+                EnvironmentReference {
+                    env: reference.env.clone(),
+                }
+                .validate()?;
+                if reference.prefix.is_empty() || reference.prefix.chars().any(char::is_control) {
+                    return Err(ValidationError::InvalidValue);
+                }
+                Ok(())
+            }
             Self::Literal(value) if value.contains('\0') => Err(ValidationError::InvalidValue),
             Self::Literal(_) => Ok(()),
         }

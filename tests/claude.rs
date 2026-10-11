@@ -181,7 +181,7 @@ fn unsupported_stack_reports_all_server_fields_without_values_or_writes() {
     let stack = dir.path().join("stack.yml");
     let original = r#"{"mcpServers":{}}"#;
     std::fs::write(&config, original).unwrap();
-    std::fs::write(&stack, "schema_version: 1\nservers:\n  computer-use:\n    config: {command: tool, cwd: '/private/fixture-secret', enabled: true}\n  github:\n    config: {url: 'https://example.com/mcp', bearer_token_env_var: PRIVATE_TOKEN}\n  remote:\n    transport: {type: http, url: 'https://example.com/mcp', bearer_token: {env: PRIVATE_TOKEN}}\n").unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  computer-use:\n    config: {command: tool, cwd: '/private/fixture-secret', enabled: true}\n  github:\n    config: {url: 'https://example.com/mcp', bearer_token_env_var: PRIVATE_TOKEN}\n  remote:\n    transport: {type: http, url: 'https://example.com/mcp', headers: {Authorization: {env: PRIVATE_TOKEN, prefix: 'Bearer '}}}\n").unwrap();
     let output = run("use", Some(&stack), &config, &["--dry-run"]);
     assert!(!output.status.success());
     let error = String::from_utf8(output.stderr).unwrap();
@@ -280,7 +280,7 @@ fn codex_http_headers_and_runtime_bindings_map_to_claude_headers() {
     let config = dir.path().join("claude.json");
     let stack = dir.path().join("stack.yml");
     std::fs::write(&config, r#"{"mcpServers":{},"theme":"dark"}"#).unwrap();
-    std::fs::write(&stack, "schema_version: 1\nservers:\n  direct:\n    config: {url: 'https://example.com/mcp', http_headers: {X-Test: fixture-value}}\n  bearer:\n    config: {url: 'https://example.com/mcp', bearer_token_env_var: SERVICE_TOKEN}\n  environment:\n    config: {url: 'https://example.com/mcp', env_http_headers: {X-API-Key: SERVICE_KEY}}\n  portable:\n    transport: {type: http, url: 'https://example.com/mcp', bearer_token: {env: PORTABLE_TOKEN}}\n").unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  direct:\n    config: {url: 'https://example.com/mcp', http_headers: {X-Test: fixture-value}}\n  bearer:\n    config: {url: 'https://example.com/mcp', bearer_token_env_var: SERVICE_TOKEN}\n  environment:\n    config: {url: 'https://example.com/mcp', env_http_headers: {X-API-Key: SERVICE_KEY}}\n  portable:\n    transport: {type: http, url: 'https://example.com/mcp', headers: {Authorization: {env: PORTABLE_TOKEN, prefix: 'Bearer '}}}\n").unwrap();
     let output = run("use", Some(&stack), &config, &["-y"]);
     assert!(output.status.success(), "{output:?}");
     let value: serde_json::Value =
@@ -324,7 +324,11 @@ fn codex_and_claude_exports_share_portable_http_bindings() {
     let portable: serde_json::Value = yaml_serde::from_slice(&export.stdout).unwrap();
     let transport = &portable["servers"]["api"]["transport"];
     assert!(portable["servers"]["api"].get("config").is_none());
-    assert_eq!(transport["bearer_token"]["env"], "SERVICE_TOKEN");
+    assert!(transport.get("bearer_token").is_none());
+    assert_eq!(
+        transport["headers"]["Authorization"],
+        serde_json::json!({"env":"SERVICE_TOKEN","prefix":"Bearer "})
+    );
     assert_eq!(transport["headers"]["X-Key"]["env"], "SERVICE_KEY");
     let stack = dir.path().join("stack.yml");
     std::fs::write(&stack, export.stdout).unwrap();

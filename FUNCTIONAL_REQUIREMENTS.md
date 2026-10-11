@@ -181,9 +181,10 @@ Both client exporters omit MCP servers whose names Claude Code reserves for its
 built-in servers, plus the app-managed `node_repl` server. Individual `--allow-*`
 flags include one name; `--all` includes every normally skipped name. The filter
 runs before server validation and leaves source configuration unchanged.
-Codex `http_headers` map to Claude `headers`. `bearer_token_env_var` and
-`env_http_headers` become `${VAR}` header references, preserving runtime lookup;
-the portable HTTP/SSE bearer binding maps the same way. Claude Code may suppress
+Codex `http_headers` map to portable `headers`. `bearer_token_env_var` maps to
+`headers.Authorization: {env: VAR, prefix: "Bearer "}`; `env_http_headers` maps
+to `{env: VAR}` header references. Claude Code emits these as `${VAR}` strings,
+preserving runtime lookup. Claude Code may suppress
 expansion of its protected credential variables, so those names require a separate
 user-managed environment variable. Duplicate header names fail instead of
 overwriting either value. Claude Code's reserved server names also fail before
@@ -191,6 +192,11 @@ writes. Claude Code cannot apply per-server Codex startup timeouts or tool appro
 Both exporters emit portable `transport` entries. Codex approval mode is omitted
 with a warning because Claude permissions are configured separately; other
 unmappable source fields fail export without emitting a partial stack.
+Claude Code permission rules live in `settings.json` under `permissions.allow`,
+`permissions.ask`, and `permissions.deny`; a rule such as `mcp__obsidian__*`
+matches tools from that server. These rules are outside MCP server transport data.
+Older v1 stacks with `bearer_token` are accepted and normalized to an
+Authorization header when read. New exports write only `headers`.
 
 ### Switching stacks
 

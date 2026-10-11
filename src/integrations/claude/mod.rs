@@ -194,6 +194,10 @@ fn source(value: &ValueSource, resolver: &mut SecretResolver) -> Result<String, 
     match value {
         ValueSource::Literal(v) => Ok(v.clone()),
         ValueSource::Environment(r) => resolver.resolve(&r.env).ok_or(Error::Secret),
+        ValueSource::PrefixedEnvironment(r) => resolver
+            .resolve(&r.env)
+            .map(|v| format!("{}{v}", r.prefix))
+            .ok_or(Error::Secret),
     }
 }
 fn environment_reference(name: &str, server: &str) -> Result<String, Error> {
@@ -375,16 +379,7 @@ fn prepare(
                         }
                         serde_json::json!({"type":"stdio", "command":command, "args": args.iter().map(|v| source(v, resolver)).collect::<Result<Vec<_>,_>>()?, "env": env.iter().map(|(k,v)| Ok((k.clone(),source(v, resolver)?))).collect::<Result<BTreeMap<_,_>,Error>>()?})
                     }
-                    Transport::Http {
-                        url,
-                        bearer_token,
-                        headers,
-                    }
-                    | Transport::Sse {
-                        url,
-                        bearer_token,
-                        headers,
-                    } => {
+                    Transport::Http { url, headers } | Transport::Sse { url, headers } => {
                         let kind = if matches!(transport, Transport::Http { .. }) {
                             "http"
                         } else {
@@ -397,17 +392,13 @@ fn prepare(
                                 ValueSource::Environment(reference) => {
                                     environment_reference(&reference.env, name)?
                                 }
+                                ValueSource::PrefixedEnvironment(reference) => format!(
+                                    "{}{}",
+                                    reference.prefix,
+                                    environment_reference(&reference.env, name)?
+                                ),
                             };
                             add_header(&mut mapped_headers, header, Value::String(text), name)?;
-                        }
-                        if let Some(reference) = bearer_token {
-                            let variable = environment_reference(&reference.env, name)?;
-                            add_header(
-                                &mut mapped_headers,
-                                "Authorization",
-                                Value::String(format!("Bearer {variable}")),
-                                name,
-                            )?;
                         }
                         serde_json::json!({"type":kind,"url":url,"headers":mapped_headers})
                     }

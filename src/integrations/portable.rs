@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use crate::schema::v1::{EnvironmentReference, Settings, Transport, ValueSource};
+use crate::schema::v1::{
+    EnvironmentReference, PrefixedEnvironmentReference, Settings, Transport, ValueSource,
+};
 use crate::schema::{Server, StackV1};
 
 #[derive(Clone, Copy)]
@@ -206,9 +208,8 @@ fn codex_transport(fields: &mut Map<String, Value>, name: &str) -> Result<Transp
                 }
                 headers.insert(key, reference(&variable));
             }
-            let bearer_token = take_string(fields, "bearer_token_env_var", name)?
-                .map(|env| EnvironmentReference { env });
-            if bearer_token.is_some()
+            let bearer = take_string(fields, "bearer_token_env_var", name)?;
+            if bearer.is_some()
                 && headers
                     .keys()
                     .any(|key| key.eq_ignore_ascii_case("Authorization"))
@@ -217,11 +218,16 @@ fn codex_transport(fields: &mut Map<String, Value>, name: &str) -> Result<Transp
                     "{name:?}.Authorization: bearer token and header conflict"
                 ));
             }
-            Ok(Transport::Http {
-                url,
-                bearer_token,
-                headers,
-            })
+            if let Some(env) = bearer {
+                headers.insert(
+                    "Authorization".into(),
+                    ValueSource::PrefixedEnvironment(PrefixedEnvironmentReference {
+                        env,
+                        prefix: "Bearer ".into(),
+                    }),
+                );
+            }
+            Ok(Transport::Http { url, headers })
         }
         _ => Err(format!("{name:?}: expected one command or URL")),
     }
@@ -241,7 +247,7 @@ fn claude_transport(fields: &mut Map<String, Value>, name: &str) -> Result<Trans
         }),
         (None, Some(url), Some("http") | Some("sse")) => {
             let mut headers = take_map(fields, "headers", name, true)?;
-            let bearer_token = if let Some(key) = headers
+            if let Some(key) = headers
                 .keys()
                 .find(|key| key.eq_ignore_ascii_case("Authorization"))
                 .cloned()
@@ -253,25 +259,20 @@ fn claude_transport(fields: &mut Map<String, Value>, name: &str) -> Result<Trans
                         .map(str::to_owned),
                     _ => None,
                 };
-                if bearer.is_some() {
-                    headers.remove(&key);
+                if let Some(env) = bearer {
+                    headers.insert(
+                        key,
+                        ValueSource::PrefixedEnvironment(PrefixedEnvironmentReference {
+                            env,
+                            prefix: "Bearer ".into(),
+                        }),
+                    );
                 }
-                bearer.map(|env| EnvironmentReference { env })
-            } else {
-                None
-            };
+            }
             Ok(if kind.as_deref() == Some("sse") {
-                Transport::Sse {
-                    url,
-                    bearer_token,
-                    headers,
-                }
+                Transport::Sse { url, headers }
             } else {
-                Transport::Http {
-                    url,
-                    bearer_token,
-                    headers,
-                }
+                Transport::Http { url, headers }
             })
         }
         _ => Err(format!("{name:?}: unsupported Claude transport")),

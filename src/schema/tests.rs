@@ -21,8 +21,7 @@ fn document() -> Value {
             "remote": {
                 "transport": {
                     "type": "http", "url": "https://mcp.example.com/mcp",
-                    "bearer_token": {"env": "REMOTE_TOKEN"},
-                    "headers": {"X-Region": "east", "Authorization": {"env": "AUTH_HEADER"}}
+                    "headers": {"X-Region": "east", "Authorization": {"env": "REMOTE_TOKEN", "prefix": "Bearer "}}
                 }
             }
         }
@@ -181,7 +180,8 @@ fn validates_secret_references_and_forwarded_environment_names() {
             ValidationError::InvalidSecretReference
         );
         value = document();
-        value["servers"]["remote"]["transport"]["bearer_token"] = json!({"env":name});
+        value["servers"]["remote"]["transport"]["headers"]["Authorization"] =
+            json!({"env":name,"prefix":"Bearer "});
         assert_eq!(
             parse(&value).err().unwrap(),
             ValidationError::InvalidSecretReference
@@ -199,10 +199,43 @@ fn validates_secret_references_and_forwarded_environment_names() {
         ValidationError::InvalidEnvironment
     );
     value = document();
-    value["servers"]["remote"]["transport"]["bearer_token"] = json!("fixture-secret");
+    value["servers"]["remote"]["transport"]["bearer_token"] = json!({"env":"TOKEN"});
     assert_eq!(
         parse(&value).err().unwrap(),
         ValidationError::InvalidDocument
+    );
+    value = document();
+    value["servers"]["remote"]["transport"]["headers"]["Authorization"] =
+        json!({"env":"TOKEN","prefix":"\n"});
+    assert_eq!(parse(&value).err().unwrap(), ValidationError::InvalidValue);
+}
+
+#[test]
+fn reads_legacy_bearer_bindings_but_writes_only_headers() {
+    let old = json!({"schema_version":1,"servers":{"remote":{"transport":{
+        "type":"http", "url":"https://example.com/mcp", "bearer_token":{"env":"TOKEN"}
+    }}}});
+    let stack = parse(&old).unwrap();
+    let value = serde_json::to_value(stack).unwrap();
+    let transport = &value["servers"]["remote"]["transport"];
+    assert!(transport.get("bearer_token").is_none());
+    assert_eq!(
+        transport["headers"]["Authorization"],
+        json!({"env":"TOKEN","prefix":"Bearer "})
+    );
+    let mut old_null = old;
+    old_null["servers"]["remote"]["transport"]["bearer_token"] = Value::Null;
+    let value = serde_json::to_value(parse(&old_null).unwrap()).unwrap();
+    assert!(
+        value["servers"]["remote"]["transport"]
+            .get("bearer_token")
+            .is_none()
+    );
+    assert!(
+        value["servers"]["remote"]["transport"]["headers"]
+            .as_object()
+            .unwrap()
+            .is_empty()
     );
 }
 

@@ -415,6 +415,39 @@ fn export_exposes_secrets_only_when_explicitly_requested() {
 }
 
 #[test]
+fn authorization_header_is_not_misclassified_as_bearer_binding() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    std::fs::write(&config, "[mcp_servers.api]\nurl='https://example.com/mcp'\n[mcp_servers.api.http_headers]\nAuthorization='Bearer fixture-value'\n").unwrap();
+    for (flag, exposed) in [(None, false), (Some("--expose-secrets"), true)] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
+        command
+            .args(["--non-interactive", "codex", "export", "--config"])
+            .arg(&config);
+        if let Some(flag) = flag {
+            command.arg(flag);
+        }
+        let output = command
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stack: Value = yaml_serde::from_slice(&output.stdout).unwrap();
+        let transport = &stack["servers"]["api"]["transport"];
+        assert!(transport.get("bearer_token").is_none());
+        let auth = &transport["headers"]["Authorization"];
+        if exposed {
+            assert_eq!(auth, "Bearer fixture-value");
+        } else {
+            assert!(auth["env"].is_string());
+            assert!(auth.get("prefix").is_none());
+            assert!(!String::from_utf8_lossy(&output.stdout).contains("fixture-value"));
+        }
+    }
+}
+
+#[test]
 fn codex_export_all_includes_default_skipped_names() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.toml");
