@@ -888,7 +888,6 @@ fn preview(
         .filter(|(name, value)| before.get(*name).is_some_and(|old| old != *value))
         .map(|(name, _)| name.clone())
         .collect();
-    super::write_change_summary(output, &added, &modified, &deleted)?;
     let mut before_mask = mask(before.clone())?;
     let mut after_mask = mask(after.clone())?;
     for (name, after_value) in &after {
@@ -938,6 +937,7 @@ fn preview(
         "Redacted preview; credential placeholders prevent applying this patch directly."
     )?;
     super::diff_output::write_diff(output, &diff, colored)?;
+    super::write_change_summary(output, &added, &modified, &deleted)?;
     Ok(())
 }
 async fn read_stack(file: &Path) -> Result<StackV1, AppError> {
@@ -1238,6 +1238,9 @@ impl ClientAdapter for Claude {
             )?;
             return Ok(());
         }
+        if permission_preview {
+            writeln!(output, "Permission rules would change.")?;
+        }
         if all_changes != before {
             preview(
                 output,
@@ -1247,9 +1250,6 @@ impl ClientAdapter for Claude {
                 all_changes.clone(),
                 colored,
             )?;
-        }
-        if permission_preview {
-            writeln!(output, "Permission rules would change.")?;
         }
         if !auto_approve && (non_interactive || !stdin().is_terminal() || !stderr().is_terminal()) {
             return Err(AppError::ImportApprovalRequired);
@@ -1400,6 +1400,9 @@ impl ClientAdapter for Claude {
             )?;
             return Ok(());
         }
+        if permissions_changed {
+            writeln!(output, "Permission rules would change.")?;
+        }
         if proposed != before {
             preview(
                 output,
@@ -1409,9 +1412,6 @@ impl ClientAdapter for Claude {
                 proposed.clone(),
                 colored,
             )?;
-        }
-        if permissions_changed {
-            writeln!(output, "Permission rules would change.")?;
         }
         if dry_run {
             return Ok(());

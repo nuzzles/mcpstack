@@ -85,6 +85,12 @@ fn claude_shows_changes_before_requiring_approval() {
             plan.contains(&format!("--- {}", config.display())),
             "{plan}"
         );
+        let last = if operation == "use" {
+            "Deleted: \"old\""
+        } else {
+            "Deleted: none"
+        };
+        assert!(plan.trim_end().ends_with(last), "{plan}");
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
         assert!(!dir.path().join("claude.json.~1~").exists());
     }

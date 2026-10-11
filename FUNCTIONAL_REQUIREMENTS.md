@@ -161,8 +161,8 @@ input disables prompts. Export defaults to masking credentials; `--expose-secret
 includes them without prompting.
 
 Import defaults to skipping each addition or replacement, with per-server and
-bulk choices. A named change summary and redacted diff appear before approval
-prompts. `-y` / `--auto-approve` approves all changes. Dry-run retains these
+bulk choices. A redacted diff appears before approval prompts, followed by a
+named change summary directly above the prompt. `-y` / `--auto-approve` approves all changes. Dry-run retains these
 prompts; unattended dry-run requires `-y`.
 `diff` shows all proposed changes without server approval prompts. Both preview
 modes can ask for missing masked values and never write files. A preliminary

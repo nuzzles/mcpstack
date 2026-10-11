@@ -1218,7 +1218,7 @@ fn diff_is_read_only_redacted_and_available_without_a_terminal() {
             .unwrap();
         assert!(output.status.success(), "{output:?}");
         let diff = String::from_utf8(output.stdout).unwrap();
-        assert!(diff.starts_with("MCP server changes:\n  Added: \"added\"\n"));
+        assert!(diff.contains("MCP server changes:\n  Added: \"added\"\n"));
         if target_exists {
             assert!(diff.contains(&format!("--- {}\n", config.display())));
         } else {
@@ -1703,6 +1703,9 @@ fn diff_hunk_positions_match_original_and_imported_files() {
     let patch = String::from_utf8(preview.stdout).unwrap();
     let (mut old, mut new, mut hunks) = (0, 0, 0);
     for line in patch.lines().skip(2) {
+        if line == "MCP server changes:" {
+            break;
+        }
         if hunks == 0 && !line.starts_with("@@") {
             continue;
         }

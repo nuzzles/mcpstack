@@ -45,6 +45,7 @@ fn codex_shows_changes_before_requiring_approval() {
         plan.contains(&format!("--- {}", config.display())),
         "{plan}"
     );
+    assert!(plan.trim_end().ends_with("Deleted: \"old\""), "{plan}");
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     assert!(!dir.path().join("config.toml.~1~").exists());
 }

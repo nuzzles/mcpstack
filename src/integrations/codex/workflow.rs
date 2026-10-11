@@ -325,7 +325,6 @@ pub(crate) async fn run_import(
                 .filter(|(_, (before, _))| before.is_some())
                 .map(|(name, _)| name.clone())
                 .collect();
-            super::super::write_change_summary(output, &added, &modified, &BTreeSet::new())?;
             super::diff::show_diff(
                 &snapshot,
                 &path,
@@ -334,6 +333,7 @@ pub(crate) async fn run_import(
                 output,
                 colored,
             )?;
+            super::super::write_change_summary(output, &added, &modified, &BTreeSet::new())?;
         }
     }
     let mut resolver = SecretResolver {
@@ -378,9 +378,9 @@ pub(crate) async fn run_import(
         .filter(|(_, (before, _))| before.is_some())
         .map(|(name, _)| name.clone())
         .collect();
-    super::super::write_change_summary(output, &added, &modified, &BTreeSet::new())?;
     let secrets: Vec<_> = resolver.values.values().flatten().cloned().collect();
     super::diff::show_diff(&snapshot, &path, &additions, &secrets, output, colored)?;
+    super::super::write_change_summary(output, &added, &modified, &BTreeSet::new())?;
     let proposed_count = additions.len();
     let approved = if auto_approve {
         additions
@@ -434,13 +434,13 @@ pub(crate) async fn run_import(
             .filter(|name| changes[*name].0.is_some())
             .cloned()
             .collect();
+        super::diff::show_diff(&snapshot, &path, &approved, &secrets, output, colored)?;
         super::super::write_change_summary(
             output,
             &selected_added,
             &selected_modified,
             &BTreeSet::new(),
         )?;
-        super::diff::show_diff(&snapshot, &path, &approved, &secrets, output, colored)?;
     }
     if dry_run {
         writeln!(output, "Would import {} server(s).", approved.len())?;
@@ -544,7 +544,6 @@ pub(crate) async fn run_use(
             .filter(|name| !preliminary.contains_key(*name))
             .cloned()
             .collect();
-        super::super::write_change_summary(output, &added, &modified, &deleted)?;
         super::diff::show_replacement_diff(
             &snapshot,
             &path,
@@ -553,6 +552,7 @@ pub(crate) async fn run_use(
             output,
             colored,
         )?;
+        super::super::write_change_summary(output, &added, &modified, &deleted)?;
     }
     let interactive = !non_interactive && stdin().is_terminal() && stderr().is_terminal();
     let mut resolver = SecretResolver {
@@ -603,7 +603,6 @@ pub(crate) async fn run_use(
         .filter(|name| !definitions.contains_key(*name))
         .cloned()
         .collect();
-    super::super::write_change_summary(output, &added, &modified, &deleted)?;
     let secrets: Vec<_> = resolver.values.values().flatten().cloned().collect();
     super::diff::show_replacement_diff(&snapshot, &path, &definitions, &secrets, output, colored)?;
     writeln!(
@@ -611,6 +610,7 @@ pub(crate) async fn run_use(
         "Would switch to {} MCP server(s); all servers absent from the stack would be removed.",
         definitions.len()
     )?;
+    super::super::write_change_summary(output, &added, &modified, &deleted)?;
     if dry_run {
         return Ok(());
     }

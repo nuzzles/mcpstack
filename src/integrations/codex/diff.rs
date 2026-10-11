@@ -49,7 +49,6 @@ pub(crate) async fn run(
                 .filter(|(_, (before, _))| before.is_some())
                 .map(|(name, _)| name.clone())
                 .collect();
-            super::super::write_change_summary(output, &added, &modified, &Default::default())?;
             show_diff(
                 &snapshot,
                 &path,
@@ -58,6 +57,7 @@ pub(crate) async fn run(
                 output,
                 colored,
             )?;
+            super::super::write_change_summary(output, &added, &modified, &Default::default())?;
         }
     }
     let mut resolver = SecretResolver {
@@ -107,9 +107,10 @@ pub(crate) async fn run(
         .filter(|(_, (before, _))| before.is_some())
         .map(|(name, _)| name.clone())
         .collect();
-    super::super::write_change_summary(output, &added, &modified, &Default::default())?;
     let secrets: Vec<_> = resolver.values.into_values().flatten().collect();
-    show_diff(&snapshot, &path, &incoming, &secrets, output, colored)
+    show_diff(&snapshot, &path, &incoming, &secrets, output, colored)?;
+    super::super::write_change_summary(output, &added, &modified, &Default::default())?;
+    Ok(())
 }
 
 pub(super) fn show_diff(
