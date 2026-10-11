@@ -150,6 +150,67 @@ fn credential_only_changes_remain_visible_in_both_previews() {
 }
 
 #[test]
+fn claude_previews_follow_shared_ansi_color_modes() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let stack = dir.path().join("stack.yml");
+    std::fs::write(&config, r#"{"mcpServers":{"old":{"command":"old-tool"}}}"#).unwrap();
+    std::fs::write(
+        &stack,
+        "schema_version: 1\nservers:\n  new:\n    config: {command: new-tool}\n",
+    )
+    .unwrap();
+    for operation in ["use", "import", "diff"] {
+        let execute = |flags: &[&str], no_color: Option<&str>| {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
+            command
+                .args(["claude", operation])
+                .arg(&stack)
+                .arg("--config")
+                .arg(&config)
+                .args(flags)
+                .env_remove("MCPSTACK_COLOR")
+                .env_remove("NO_COLOR")
+                .env_remove("RUST_LOG")
+                .stdin(Stdio::null());
+            if operation != "diff" {
+                command.arg("--dry-run");
+            }
+            if operation == "import" {
+                command.arg("-y");
+            }
+            if let Some(value) = no_color {
+                command.env("NO_COLOR", value);
+            }
+            command.output().unwrap()
+        };
+        let plain = execute(&[], None);
+        assert!(plain.status.success(), "{plain:?}");
+        assert!(!plain.stdout.contains(&0x1b));
+        let colored = execute(&["--color", "always"], None);
+        assert!(colored.status.success(), "{colored:?}");
+        let text = String::from_utf8(colored.stdout).unwrap();
+        assert!(
+            text.contains("\x1b[36m--- current MCP servers\x1b[0m"),
+            "{text}"
+        );
+        assert!(text.contains("\x1b[32m+"), "{text}");
+        if operation == "use" {
+            assert!(text.contains("\x1b[31m-"), "{text}");
+        }
+        let stripped = ["\x1b[36m", "\x1b[32m", "\x1b[31m", "\x1b[0m"]
+            .iter()
+            .fold(text, |text, sequence| text.replace(sequence, ""));
+        assert_eq!(stripped.as_bytes(), plain.stdout);
+        assert_eq!(execute(&["--color", "never"], None).stdout, plain.stdout);
+        assert_eq!(
+            execute(&["--color", "always"], Some("1")).stdout,
+            plain.stdout
+        );
+    }
+}
+
+#[test]
 fn non_string_server_type_is_rejected_before_a_backup_or_write() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("claude.json");

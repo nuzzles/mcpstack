@@ -522,6 +522,7 @@ fn preview(
     output: &mut impl Write,
     before: BTreeMap<String, Value>,
     after: BTreeMap<String, Value>,
+    colored: bool,
 ) -> Result<(), AppError> {
     let mut before_mask = mask(before.clone())?;
     let mut after_mask = mask(after.clone())?;
@@ -540,7 +541,7 @@ fn preview(
         .unified_diff()
         .header("current MCP servers", "proposed MCP servers")
         .to_string();
-    write!(output, "{diff}")?;
+    super::diff_output::write_diff(output, &diff, colored)?;
     Ok(())
 }
 async fn read_stack(file: &Path) -> Result<StackV1, AppError> {
@@ -718,7 +719,7 @@ impl ClientAdapter for Claude {
         args: StackArgs,
         output: &mut impl Write,
         non_interactive: bool,
-        _colored: bool,
+        colored: bool,
     ) -> Result<(), AppError> {
         let permission_path = if args.include_permissions {
             Some(permissions::path(
@@ -738,7 +739,7 @@ impl ClientAdapter for Claude {
         let mut proposed = servers(&config);
         let before = proposed.clone();
         proposed.extend(incoming);
-        preview(output, before, proposed)?;
+        preview(output, before, proposed, colored)?;
         if let Some(path) = permission_path {
             let settings = permissions::Snapshot::read(&path).await?;
             let names = stack.servers.keys().cloned().collect();
@@ -757,7 +758,7 @@ impl ClientAdapter for Claude {
         args: StackArgs,
         output: &mut impl Write,
         non_interactive: bool,
-        _colored: bool,
+        colored: bool,
         dry_run: bool,
         auto_approve: bool,
     ) -> Result<(), AppError> {
@@ -828,7 +829,7 @@ impl ClientAdapter for Claude {
         }
         if dry_run {
             if proposed != before {
-                preview(output, before, proposed)?;
+                preview(output, before, proposed, colored)?;
             }
             if permissions_changed {
                 writeln!(output, "Permission rules would change.")?;
@@ -862,7 +863,7 @@ impl ClientAdapter for Claude {
         args: StackArgs,
         output: &mut impl Write,
         non_interactive: bool,
-        _colored: bool,
+        colored: bool,
         dry_run: bool,
         auto_approve: bool,
     ) -> Result<(), AppError> {
@@ -906,7 +907,7 @@ impl ClientAdapter for Claude {
         }
         if dry_run {
             if proposed != before {
-                preview(output, before, proposed)?;
+                preview(output, before, proposed, colored)?;
             }
             if permissions_changed {
                 writeln!(output, "Permission rules would change.")?;

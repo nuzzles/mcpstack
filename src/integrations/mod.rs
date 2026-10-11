@@ -1,6 +1,7 @@
 //! Client selection and adapter dispatch.
 mod claude;
 mod codex;
+mod diff_output;
 mod portable;
 mod reserved;
 mod secrets;
