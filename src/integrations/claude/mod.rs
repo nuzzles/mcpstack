@@ -583,24 +583,140 @@ fn mark_changed_secrets(
     }
 }
 
-fn redact_preview_markers(value: &mut Value) {
-    if is_masked(value) {
-        *value = Value::String("<redacted>".into());
+fn collect_private_values(source: &Value, masked: &Value, values: &mut BTreeMap<String, String>) {
+    if is_masked(masked) || matches!(masked.as_str(), Some("<redacted>" | "<redacted: changed>")) {
+        let marker = masked
+            .as_str()
+            .filter(|text| *text == "<redacted: changed>")
+            .unwrap_or("<redacted>");
+        if let Some(text) = source.as_str() {
+            values.insert(text.into(), marker.into());
+        } else if let Some(number) = source.as_number() {
+            values.insert(number.to_string(), marker.into());
+        }
         return;
     }
-    match value {
-        Value::Object(values) => values.values_mut().for_each(redact_preview_markers),
-        Value::Array(values) => values.iter_mut().for_each(redact_preview_markers),
+    match (source, masked) {
+        (Value::Object(source), Value::Object(masked)) => {
+            for (key, value) in source {
+                if let Some(masked) = masked.get(key) {
+                    collect_private_values(value, masked, values);
+                }
+            }
+        }
+        (Value::Array(source), Value::Array(masked)) => {
+            for (value, masked) in source.iter().zip(masked) {
+                collect_private_values(value, masked, values);
+            }
+        }
         _ => {}
     }
+}
+
+fn collect_unrelated_values(config: &Value, values: &mut BTreeMap<String, String>) {
+    fn all_strings(value: &Value, values: &mut BTreeMap<String, String>) {
+        match value {
+            Value::String(text) => {
+                values.insert(text.clone(), "<redacted>".into());
+            }
+            Value::Number(number) => {
+                values.insert(number.to_string(), "<redacted>".into());
+            }
+            Value::Array(items) => items.iter().for_each(|item| all_strings(item, values)),
+            Value::Object(fields) => {
+                for (key, value) in fields {
+                    values.insert(key.clone(), "<redacted>".into());
+                    all_strings(value, values);
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(root) = config.as_object() {
+        for (key, value) in root {
+            if key != "mcpServers" {
+                values.insert(key.clone(), "<redacted>".into());
+                all_strings(value, values);
+            }
+        }
+    }
+}
+
+/// Replace complete JSON value tokens, including escaped string spellings, without
+/// changing physical newlines or accidentally exposing a credential in context.
+fn redact_json_values(source: &str, values: &BTreeMap<String, String>) -> String {
+    let mut redacted = String::with_capacity(source.len());
+    let bytes = source.as_bytes();
+    let mut cursor = 0;
+    let mut copied = 0;
+    while cursor < bytes.len() {
+        if bytes[cursor] == b'"' {
+            let start = cursor;
+            cursor += 1;
+            while cursor < bytes.len() {
+                if bytes[cursor] == b'\\' {
+                    cursor += 2;
+                } else if bytes[cursor] == b'"' {
+                    cursor += 1;
+                    break;
+                } else {
+                    cursor += 1;
+                }
+            }
+            if cursor > bytes.len() {
+                break;
+            }
+            if let Ok(decoded) = serde_json::from_str::<String>(&source[start..cursor])
+                && let Some(marker) = values.get(&decoded)
+            {
+                redacted.push_str(&source[copied..start]);
+                redacted
+                    .push_str(&serde_json::to_string(marker).expect("static marker is valid JSON"));
+                copied = cursor;
+            }
+        } else if bytes[cursor] == b'-' || bytes[cursor].is_ascii_digit() {
+            let start = cursor;
+            while cursor < bytes.len()
+                && !matches!(
+                    bytes[cursor],
+                    b',' | b']' | b'}' | b' ' | b'\t' | b'\r' | b'\n'
+                )
+            {
+                cursor += 1;
+            }
+            if let Ok(number) = serde_json::from_str::<serde_json::Number>(&source[start..cursor])
+                && let Some(marker) = values.get(&number.to_string())
+            {
+                redacted.push_str(&source[copied..start]);
+                redacted
+                    .push_str(&serde_json::to_string(marker).expect("static marker is valid JSON"));
+                copied = cursor;
+            }
+        } else {
+            cursor += 1;
+        }
+    }
+    redacted.push_str(&source[copied..]);
+    redacted
+}
+
+fn serialized_config(config: &Value) -> Result<String, Error> {
+    let mut text = serde_json::to_string_pretty(config).map_err(|_| Error::Config)?;
+    text.push('\n');
+    Ok(text)
 }
 fn preview(
     output: &mut impl Write,
     path: &Path,
+    file: &io::Snapshot,
+    config: &Value,
     before: BTreeMap<String, Value>,
     after: BTreeMap<String, Value>,
     colored: bool,
 ) -> Result<(), AppError> {
+    if before == after {
+        return Ok(());
+    }
     let mut before_mask = mask(before.clone())?;
     let mut after_mask = mask(after.clone())?;
     for (name, after_value) in &after {
@@ -612,16 +728,41 @@ fn preview(
             mark_changed_secrets(before_value, after_value, before_mask, after_mask);
         }
     }
-    for value in before_mask.values_mut().chain(after_mask.values_mut()) {
-        redact_preview_markers(value);
+    let mut before_private = BTreeMap::new();
+    let mut after_private = BTreeMap::new();
+    collect_unrelated_values(config, &mut before_private);
+    collect_unrelated_values(config, &mut after_private);
+    for (name, value) in &before {
+        if let Some(masked) = before_mask.get(name) {
+            collect_private_values(value, masked, &mut before_private);
+        }
     }
-    let before = serde_json::to_string_pretty(&before_mask).map_err(|_| Error::Config)?;
-    let after = serde_json::to_string_pretty(&after_mask).map_err(|_| Error::Config)?;
-    let label = format!("{} (mcpServers)", path.display());
-    let diff = similar::TextDiff::from_lines(&before, &after)
+    for (name, value) in &after {
+        if let Some(masked) = after_mask.get(name) {
+            collect_private_values(value, masked, &mut after_private);
+        }
+    }
+    let original = std::str::from_utf8(file.contents()).map_err(|_| Error::Config)?;
+    let proposed = serialized_config(&with_servers(config.clone(), &after))?;
+    let before_text = redact_json_values(original, &before_private);
+    let after_text = redact_json_values(&proposed, &after_private);
+    let label = path.to_string_lossy();
+    let diff = similar::TextDiff::from_lines(&before_text, &after_text)
         .unified_diff()
-        .header(&label, &label)
+        .context_radius(0)
+        .header(
+            if original.is_empty() {
+                "/dev/null"
+            } else {
+                &label
+            },
+            &label,
+        )
         .to_string();
+    writeln!(
+        output,
+        "Redacted preview; credential placeholders prevent applying this patch directly."
+    )?;
     super::diff_output::write_diff(output, &diff, colored)?;
     Ok(())
 }
@@ -642,9 +783,10 @@ async fn snapshot(
     Ok((path, file, parsed))
 }
 async fn write_config(file: io::Snapshot, config: Value) -> Result<(), AppError> {
-    let mut bytes = serde_json::to_vec_pretty(&config).map_err(|_| Error::Write)?;
-    bytes.push(b'\n');
-    file.replace(&bytes).await.map_err(|_| Error::Write)?;
+    let bytes = serialized_config(&config).map_err(|_| Error::Write)?;
+    file.replace(bytes.as_bytes())
+        .await
+        .map_err(|_| Error::Write)?;
     Ok(())
 }
 
@@ -810,7 +952,7 @@ impl ClientAdapter for Claude {
         } else {
             None
         };
-        let (config_path, _, config) = snapshot(args.config, false).await?;
+        let (config_path, file, config) = snapshot(args.config, false).await?;
         let stack = read_stack(&args.file).await?;
         let incoming = prepared(
             &stack,
@@ -821,7 +963,15 @@ impl ClientAdapter for Claude {
         let before = proposed.clone();
         proposed.extend(incoming);
         preserve_equivalent_servers(&before, &mut proposed);
-        preview(output, &config_path, before, proposed, colored)?;
+        preview(
+            output,
+            &config_path,
+            &file,
+            &config,
+            before,
+            proposed,
+            colored,
+        )?;
         if let Some(path) = permission_path {
             let settings = permissions::Snapshot::read(&path).await?;
             let names = stack.servers.keys().cloned().collect();
@@ -914,7 +1064,15 @@ impl ClientAdapter for Claude {
         }
         if dry_run {
             if proposed != before {
-                preview(output, &config_path, before, proposed, colored)?;
+                preview(
+                    output,
+                    &config_path,
+                    &file,
+                    &config,
+                    before,
+                    proposed,
+                    colored,
+                )?;
             }
             if permissions_changed {
                 writeln!(output, "Permission rules would change.")?;
@@ -993,7 +1151,15 @@ impl ClientAdapter for Claude {
         }
         if dry_run {
             if proposed != before {
-                preview(output, &config_path, before, proposed, colored)?;
+                preview(
+                    output,
+                    &config_path,
+                    &file,
+                    &config,
+                    before,
+                    proposed,
+                    colored,
+                )?;
             }
             if permissions_changed {
                 writeln!(output, "Permission rules would change.")?;

@@ -306,6 +306,9 @@ deterministic redacted configuration previews for the same stack, target config,
 secrets, approvals, and color settings. Server processing uses ordered maps;
 previews retain the target file's layout and line numbers. Installation plans
 remain Phase 2 work.
+Claude previews compute hunk positions from the current JSON file and the exact
+serialized JSON proposed for a write. Preview placeholders redact credentials
+and unrelated settings, so the displayed patch is not independently applicable.
 
 ### Output formats
 

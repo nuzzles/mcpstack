@@ -174,7 +174,7 @@ fn credential_only_changes_remain_visible_in_both_previews() {
         assert!(output.status.success(), "{output:?}");
         let preview = String::from_utf8(output.stdout).unwrap();
         assert!(preview.contains("<redacted: changed>"), "{preview}");
-        assert!(preview.contains(&format!("--- {} (mcpServers)", config.display())));
+        assert!(preview.contains(&format!("--- {}", config.display())));
         assert!(!preview.contains("\"$env\""), "{preview}");
         assert!(!preview.contains("old-fixture"));
         assert!(!preview.contains("new-fixture"));
@@ -194,11 +194,83 @@ fn preview_shows_masked_literal_instead_of_synthetic_env_marker() {
     let output = run("use", Some(&stack), &config, &["--dry-run"]);
     assert!(output.status.success(), "{output:?}");
     let preview = String::from_utf8(output.stdout).unwrap();
-    assert!(preview.contains(&format!("--- {} (mcpServers)", config.display())));
+    assert!(preview.contains(&format!("--- {}", config.display())));
     assert!(preview.contains("<redacted>"), "{preview}");
     assert!(preview.contains("Bearer ${GITHUB_TOKEN}"), "{preview}");
     assert!(!preview.contains("$env"), "{preview}");
     assert!(!preview.contains("fixture-secret"), "{preview}");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+}
+
+#[test]
+fn claude_preview_hunks_use_physical_config_file_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let stack = dir.path().join("stack.yml");
+    let existing = serde_json::json!({
+        "aaa": ["one", "two", "three", "four"],
+        "mcpServers": {"service": {"command": "old-tool"}}
+    });
+    let original = format!("{}\n", serde_json::to_string_pretty(&existing).unwrap());
+    std::fs::write(&config, &original).unwrap();
+    std::fs::write(
+        &stack,
+        "schema_version: 1\nservers:\n  service:\n    config: {command: new-tool}\n",
+    )
+    .unwrap();
+    let line = original
+        .lines()
+        .position(|line| line.contains("old-tool"))
+        .unwrap()
+        + 1;
+    assert!(line > 5);
+    let output = run("use", Some(&stack), &config, &["--dry-run"]);
+    assert!(output.status.success(), "{output:?}");
+    let preview = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        preview.contains(&format!("@@ -{line} +{line} @@")),
+        "{preview}"
+    );
+    assert!(
+        preview.contains(&format!("--- {}", config.display())),
+        "{preview}"
+    );
+    assert!(
+        preview.contains("-      \"command\": \"old-tool\""),
+        "{preview}"
+    );
+    assert!(
+        preview.contains("+      \"command\": \"new-tool\""),
+        "{preview}"
+    );
+    assert!(preview.contains("Redacted preview;"), "{preview}");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    let applied = run("use", Some(&stack), &config, &["-y"]);
+    assert!(applied.status.success(), "{applied:?}");
+    let written = std::fs::read_to_string(&config).unwrap();
+    assert!(written.lines().nth(line - 1).unwrap().contains("new-tool"));
+}
+
+#[test]
+fn whole_file_preview_redacts_unrelated_values_in_minified_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let stack = dir.path().join("stack.yml");
+    let original = r#"{"local":{"token":"fixture\u002dsecret","pin":123456},"mcpServers":{"service":{"command":"old-tool"}}}"#;
+    std::fs::write(&config, original).unwrap();
+    std::fs::write(
+        &stack,
+        "schema_version: 1\nservers:\n  service:\n    config: {command: new-tool}\n",
+    )
+    .unwrap();
+    let output = run("use", Some(&stack), &config, &["--dry-run"]);
+    assert!(output.status.success(), "{output:?}");
+    let preview = String::from_utf8(output.stdout).unwrap();
+    assert!(preview.contains("@@ -1 +1,"), "{preview}");
+    assert!(!preview.contains("fixture-secret"), "{preview}");
+    assert!(!preview.contains("fixture\\u002dsecret"), "{preview}");
+    assert!(!preview.contains("123456"), "{preview}");
+    assert!(preview.contains("<redacted>"), "{preview}");
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
 }
 
@@ -244,10 +316,7 @@ fn claude_previews_follow_shared_ansi_color_modes() {
         assert!(colored.status.success(), "{colored:?}");
         let text = String::from_utf8(colored.stdout).unwrap();
         assert!(
-            text.contains(&format!(
-                "\x1b[36m--- {} (mcpServers)\x1b[0m",
-                config.display()
-            )),
+            text.contains(&format!("\x1b[36m--- {}\x1b[0m", config.display())),
             "{text}"
         );
         assert!(text.contains("\x1b[32m+"), "{text}");
