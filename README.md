@@ -12,7 +12,7 @@ and switch stacks, and share setups across teams.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 0.0.0 (unpublished) | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
-✅ Supported · ❌ Not implemented
+✅ Supported · 🚧 In progress · ❌ Not implemented
 
 ## Development
 
