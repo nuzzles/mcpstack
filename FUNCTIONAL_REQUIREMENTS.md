@@ -162,8 +162,10 @@ includes them without prompting.
 
 Import defaults to skipping each addition or replacement, with per-server and
 bulk choices. A redacted diff appears before approval prompts, followed by a
-named change summary directly above the prompt. `-y` / `--auto-approve` approves all changes. Dry-run retains these
-prompts; unattended dry-run requires `-y`.
+named change summary directly above the prompt. Added, modified, and deleted
+entries use green `+`, yellow `~`, and red `-` when color is enabled; plain
+output keeps the markers. `-y` / `--auto-approve` approves all changes. Dry-run
+retains these prompts; unattended dry-run requires `-y`.
 `diff` shows all proposed changes without server approval prompts. Both preview
 modes can ask for missing masked values and never write files. A preliminary
 redacted preview appears before a missing-secret prompt; the exact plan is

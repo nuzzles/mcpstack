@@ -1218,7 +1218,7 @@ fn diff_is_read_only_redacted_and_available_without_a_terminal() {
             .unwrap();
         assert!(output.status.success(), "{output:?}");
         let diff = String::from_utf8(output.stdout).unwrap();
-        assert!(diff.contains("MCP server changes:\n  Added: \"added\"\n"));
+        assert!(diff.contains("MCP server changes:\n  + Added: \"added\"\n"));
         if target_exists {
             assert!(diff.contains(&format!("--- {}\n", config.display())));
         } else {
@@ -1526,7 +1526,8 @@ fn diff_color_honors_modes_environment_and_no_color() {
             assert!(text.contains("\x1b[36m--- "));
             assert!(text.contains("\x1b[32m+command = \"new-tool\"\x1b[0m"));
             assert!(text.contains("\x1b[31m-command='old-tool'\x1b[0m"));
-            let stripped = ["\x1b[36m", "\x1b[32m", "\x1b[31m", "\x1b[0m"]
+            assert!(text.contains("\x1b[33m  ~ Modified: \"shared\"\x1b[0m"));
+            let stripped = ["\x1b[36m", "\x1b[32m", "\x1b[33m", "\x1b[31m", "\x1b[0m"]
                 .iter()
                 .fold(text, |text, sequence| text.replace(sequence, ""));
             assert_eq!(stripped.as_bytes(), plain.stdout);

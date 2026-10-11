@@ -39,13 +39,13 @@ fn codex_shows_changes_before_requiring_approval() {
     let output = execute(&stack, &config, &[]);
     assert!(!output.status.success(), "{output:?}");
     let plan = String::from_utf8(output.stdout).unwrap();
-    assert!(plan.contains("  Added: \"new\"\n"), "{plan}");
-    assert!(plan.contains("  Deleted: \"old\"\n"), "{plan}");
+    assert!(plan.contains("  + Added: \"new\"\n"), "{plan}");
+    assert!(plan.contains("  - Deleted: \"old\"\n"), "{plan}");
     assert!(
         plan.contains(&format!("--- {}", config.display())),
         "{plan}"
     );
-    assert!(plan.trim_end().ends_with("Deleted: \"old\""), "{plan}");
+    assert!(plan.trim_end().ends_with("- Deleted: \"old\""), "{plan}");
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     assert!(!dir.path().join("config.toml.~1~").exists());
 }
@@ -138,9 +138,9 @@ fn dry_run_shows_redacted_removals_and_changes_without_any_writes() {
         execute(&stack, &config, &["--dry-run"]).stdout
     );
     let diff = String::from_utf8(first.stdout).unwrap();
-    assert!(diff.contains("  Added: \"added\"\n"), "{diff}");
-    assert!(diff.contains("  Modified: \"shared\"\n"), "{diff}");
-    assert!(diff.contains("  Deleted: \"removed\"\n"), "{diff}");
+    assert!(diff.contains("  + Added: \"added\"\n"), "{diff}");
+    assert!(diff.contains("  ~ Modified: \"shared\"\n"), "{diff}");
+    assert!(diff.contains("  - Deleted: \"removed\"\n"), "{diff}");
     assert!(diff.contains("-[mcp_servers.removed]"), "{diff}");
     assert!(diff.contains("+[mcp_servers.added]"), "{diff}");
     assert!(diff.contains("+command = \"after\""), "{diff}");
@@ -226,7 +226,7 @@ fn rejects_invalid_stacks_missing_secrets_and_unapproved_switches_without_writes
         assert_eq!(output.status.code(), Some(code), "{output:?}");
         if flags.is_empty() {
             let plan = String::from_utf8_lossy(&output.stdout);
-            assert!(plan.contains("  Deleted: \"keep\"\n"), "{plan}");
+            assert!(plan.contains("  - Deleted: \"keep\"\n"), "{plan}");
         } else if document.contains("MCPSTACK_USE_TOKEN") {
             let plan = String::from_utf8_lossy(&output.stdout);
             assert!(plan.contains("Preliminary preview;"), "{plan}");

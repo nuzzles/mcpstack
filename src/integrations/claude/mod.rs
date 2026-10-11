@@ -937,7 +937,7 @@ fn preview(
         "Redacted preview; credential placeholders prevent applying this patch directly."
     )?;
     super::diff_output::write_diff(output, &diff, colored)?;
-    super::write_change_summary(output, &added, &modified, &deleted)?;
+    super::write_change_summary(output, &added, &modified, &deleted, colored)?;
     Ok(())
 }
 async fn read_stack(file: &Path) -> Result<StackV1, AppError> {

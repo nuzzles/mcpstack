@@ -333,7 +333,13 @@ pub(crate) async fn run_import(
                 output,
                 colored,
             )?;
-            super::super::write_change_summary(output, &added, &modified, &BTreeSet::new())?;
+            super::super::write_change_summary(
+                output,
+                &added,
+                &modified,
+                &BTreeSet::new(),
+                colored,
+            )?;
         }
     }
     let mut resolver = SecretResolver {
@@ -380,7 +386,7 @@ pub(crate) async fn run_import(
         .collect();
     let secrets: Vec<_> = resolver.values.values().flatten().cloned().collect();
     super::diff::show_diff(&snapshot, &path, &additions, &secrets, output, colored)?;
-    super::super::write_change_summary(output, &added, &modified, &BTreeSet::new())?;
+    super::super::write_change_summary(output, &added, &modified, &BTreeSet::new(), colored)?;
     let proposed_count = additions.len();
     let approved = if auto_approve {
         additions
@@ -440,6 +446,7 @@ pub(crate) async fn run_import(
             &selected_added,
             &selected_modified,
             &BTreeSet::new(),
+            colored,
         )?;
     }
     if dry_run {
@@ -552,7 +559,7 @@ pub(crate) async fn run_use(
             output,
             colored,
         )?;
-        super::super::write_change_summary(output, &added, &modified, &deleted)?;
+        super::super::write_change_summary(output, &added, &modified, &deleted, colored)?;
     }
     let interactive = !non_interactive && stdin().is_terminal() && stderr().is_terminal();
     let mut resolver = SecretResolver {
@@ -610,7 +617,7 @@ pub(crate) async fn run_use(
         "Would switch to {} MCP server(s); all servers absent from the stack would be removed.",
         definitions.len()
     )?;
-    super::super::write_change_summary(output, &added, &modified, &deleted)?;
+    super::super::write_change_summary(output, &added, &modified, &deleted, colored)?;
     if dry_run {
         return Ok(());
     }

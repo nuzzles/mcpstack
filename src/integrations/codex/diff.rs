@@ -57,7 +57,13 @@ pub(crate) async fn run(
                 output,
                 colored,
             )?;
-            super::super::write_change_summary(output, &added, &modified, &Default::default())?;
+            super::super::write_change_summary(
+                output,
+                &added,
+                &modified,
+                &Default::default(),
+                colored,
+            )?;
         }
     }
     let mut resolver = SecretResolver {
@@ -109,7 +115,7 @@ pub(crate) async fn run(
         .collect();
     let secrets: Vec<_> = resolver.values.into_values().flatten().collect();
     show_diff(&snapshot, &path, &incoming, &secrets, output, colored)?;
-    super::super::write_change_summary(output, &added, &modified, &Default::default())?;
+    super::super::write_change_summary(output, &added, &modified, &Default::default(), colored)?;
     Ok(())
 }
 

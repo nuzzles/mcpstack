@@ -21,22 +21,27 @@ fn write_change_summary(
     added: &BTreeSet<String>,
     modified: &BTreeSet<String>,
     deleted: &BTreeSet<String>,
+    colored: bool,
 ) -> std::io::Result<()> {
     writeln!(output, "MCP server changes:")?;
-    for (label, names) in [
-        ("Added", added),
-        ("Modified", modified),
-        ("Deleted", deleted),
+    for (marker, label, color, names) in [
+        ("+", "Added", 32, added),
+        ("~", "Modified", 33, modified),
+        ("-", "Deleted", 31, deleted),
     ] {
-        if names.is_empty() {
-            writeln!(output, "  {label}: none")?;
+        let entries = if names.is_empty() {
+            "none".to_owned()
         } else {
-            let names = names
+            names
                 .iter()
                 .map(|name| format!("{name:?}"))
                 .collect::<Vec<_>>()
-                .join(", ");
-            writeln!(output, "  {label}: {names}")?;
+                .join(", ")
+        };
+        if colored && !names.is_empty() {
+            writeln!(output, "\x1b[{color}m  {marker} {label}: {entries}\x1b[0m")?;
+        } else {
+            writeln!(output, "  {marker} {label}: {entries}")?;
         }
     }
     Ok(())

@@ -29,9 +29,9 @@ fn user_config_round_trip_and_switch_preserve_unrelated_settings() {
     let preview = run("use", Some(&stack), &config, &["--dry-run"]);
     assert!(preview.status.success(), "{preview:?}");
     let plan = String::from_utf8_lossy(&preview.stdout);
-    assert!(plan.contains("  Added: \"api\", \"process\"\n"), "{plan}");
-    assert!(plan.contains("  Modified: none\n"), "{plan}");
-    assert!(plan.contains("  Deleted: \"old\"\n"), "{plan}");
+    assert!(plan.contains("  + Added: \"api\", \"process\"\n"), "{plan}");
+    assert!(plan.contains("  ~ Modified: none\n"), "{plan}");
+    assert!(plan.contains("  - Deleted: \"old\"\n"), "{plan}");
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     assert!(!dir.path().join("claude.json.~1~").exists());
     let applied = run("use", Some(&stack), &config, &["-y"]);
@@ -76,9 +76,9 @@ fn claude_shows_changes_before_requiring_approval() {
         let output = run(operation, Some(&stack), &config, &[]);
         assert!(!output.status.success(), "{output:?}");
         let plan = String::from_utf8(output.stdout).unwrap();
-        assert!(plan.contains("  Added: \"new\"\n"), "{plan}");
+        assert!(plan.contains("  + Added: \"new\"\n"), "{plan}");
         assert!(
-            plan.contains("  Deleted: \"old\"\n") == (operation == "use"),
+            plan.contains("  - Deleted: \"old\"\n") == (operation == "use"),
             "{plan}"
         );
         assert!(
@@ -86,9 +86,9 @@ fn claude_shows_changes_before_requiring_approval() {
             "{plan}"
         );
         let last = if operation == "use" {
-            "Deleted: \"old\""
+            "- Deleted: \"old\""
         } else {
-            "Deleted: none"
+            "- Deleted: none"
         };
         assert!(plan.trim_end().ends_with(last), "{plan}");
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
@@ -112,7 +112,7 @@ fn claude_shows_preliminary_plan_before_a_missing_secret_is_requested() {
     assert!(!output.status.success(), "{output:?}");
     let preview = String::from_utf8(output.stdout).unwrap();
     assert!(preview.contains("Preliminary preview;"), "{preview}");
-    assert!(preview.contains("  Added: \"new\"\n"), "{preview}");
+    assert!(preview.contains("  + Added: \"new\"\n"), "{preview}");
     assert!(
         !preview.contains("MCPSTACK_CLAUDE_TEST_MISSING_PREVIEW_SECRET"),
         "{preview}"
@@ -296,7 +296,7 @@ fn claude_preview_hunks_use_physical_config_file_lines() {
         preview.contains(&format!("@@ -{line} +{line} @@")),
         "{preview}"
     );
-    assert!(preview.contains("  Modified: \"service\"\n"), "{preview}");
+    assert!(preview.contains("  ~ Modified: \"service\"\n"), "{preview}");
     assert!(
         preview.contains(&format!("--- {}", config.display())),
         "{preview}"
@@ -419,10 +419,14 @@ fn claude_previews_follow_shared_ansi_color_modes() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("claude.json");
     let stack = dir.path().join("stack.yml");
-    std::fs::write(&config, r#"{"mcpServers":{"old":{"command":"old-tool"}}}"#).unwrap();
+    std::fs::write(
+        &config,
+        r#"{"mcpServers":{"old":{"command":"old-tool"},"removed":{"command":"removed-tool"}}}"#,
+    )
+    .unwrap();
     std::fs::write(
         &stack,
-        "schema_version: 1\nservers:\n  new:\n    config: {command: new-tool}\n",
+        "schema_version: 1\nservers:\n  new:\n    config: {command: new-tool}\n  old:\n    config: {command: changed-tool}\n",
     )
     .unwrap();
     for operation in ["use", "import", "diff"] {
@@ -459,11 +463,18 @@ fn claude_previews_follow_shared_ansi_color_modes() {
             text.contains(&format!("\x1b[36m--- {}\x1b[0m", config.display())),
             "{text}"
         );
-        assert!(text.contains("\x1b[32m+"), "{text}");
+        assert!(text.contains("\x1b[32m  + Added: \"new\"\x1b[0m"), "{text}");
+        assert!(
+            text.contains("\x1b[33m  ~ Modified: \"old\"\x1b[0m"),
+            "{text}"
+        );
         if operation == "use" {
-            assert!(text.contains("\x1b[31m-"), "{text}");
+            assert!(
+                text.contains("\x1b[31m  - Deleted: \"removed\"\x1b[0m"),
+                "{text}"
+            );
         }
-        let stripped = ["\x1b[36m", "\x1b[32m", "\x1b[31m", "\x1b[0m"]
+        let stripped = ["\x1b[36m", "\x1b[32m", "\x1b[33m", "\x1b[31m", "\x1b[0m"]
             .iter()
             .fold(text, |text, sequence| text.replace(sequence, ""));
         assert_eq!(stripped.as_bytes(), plain.stdout);
