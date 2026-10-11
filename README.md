@@ -10,9 +10,9 @@ and switch stacks, and share setups across teams.
 
 | mcpstack | Codex | Claude Code | Claude Desktop | Cursor | Gemini CLI | OpenCode | VS Code/Copilot | Windsurf |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0.0.0 (unpublished) | ✅ | ✅ | — | — | — | — | — | — |
+| 0.0.0 (unpublished) | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
-✅ Supported · — Not implemented
+✅ Supported · ❌ Not implemented
 
 ## Development
 
