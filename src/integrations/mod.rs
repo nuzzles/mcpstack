@@ -6,6 +6,7 @@ mod portable;
 mod reserved;
 mod secrets;
 
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -14,6 +15,32 @@ use thiserror::Error;
 
 use crate::cmd::{diff::Diff, export::Export, import::Import, r#use::Use};
 use crate::error::{AppError, ErrorCode};
+
+fn write_change_summary(
+    output: &mut impl Write,
+    added: &BTreeSet<String>,
+    modified: &BTreeSet<String>,
+    deleted: &BTreeSet<String>,
+) -> std::io::Result<()> {
+    writeln!(output, "MCP server changes:")?;
+    for (label, names) in [
+        ("Added", added),
+        ("Modified", modified),
+        ("Deleted", deleted),
+    ] {
+        if names.is_empty() {
+            writeln!(output, "  {label}: none")?;
+        } else {
+            let names = names
+                .iter()
+                .map(|name| format!("{name:?}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(output, "  {label}: {names}")?;
+        }
+    }
+    Ok(())
+}
 
 pub const EXAMPLES: &[&str] = &[
     "mcpstack --schema",

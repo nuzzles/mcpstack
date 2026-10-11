@@ -145,6 +145,32 @@ pub(super) fn apply_permissions(stack: &Stack, definitions: &mut BTreeMap<String
     }
 }
 
+pub(super) type Preliminary = (BTreeMap<String, toml::Table>, Vec<String>, bool);
+
+pub(super) fn preliminary_definitions(
+    snapshot: &Snapshot,
+    stack: &Stack,
+    include_permissions: bool,
+) -> Result<Preliminary, AppError> {
+    let mut resolver = SecretResolver {
+        dry_run: true,
+        interactive: false,
+        preview_missing: true,
+        missing_used: false,
+        values: BTreeMap::new(),
+        cancelled: false,
+    };
+    let mut definitions = match stack {
+        Stack::V1(stack) => prepare(stack, |name| resolver.resolve(name))?,
+    };
+    retain_target_policy(snapshot, stack, &mut definitions, include_permissions)?;
+    if include_permissions {
+        apply_permissions(stack, &mut definitions);
+    }
+    let secrets = resolver.values.into_values().flatten().collect();
+    Ok((definitions, secrets, resolver.missing_used))
+}
+
 /// Fields excluded from portable stacks remain owned by the destination Codex config.
 /// Permission fields are copied only when the operation did not request a policy restore.
 pub(super) fn retain_target_policy(
@@ -268,56 +294,53 @@ pub(crate) async fn run_import(
     let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
     let snapshot = Snapshot::read(&path).await?;
     let interactive = !non_interactive && stdin().is_terminal() && stderr().is_terminal();
-    if !dry_run {
-        if !auto_approve && !interactive {
-            return Err(AppError::ImportApprovalRequired);
-        }
+    if !auto_approve && !interactive {
+        return Err(AppError::ImportApprovalRequired);
+    }
+    if !dry_run && auto_approve {
         snapshot.ensure_write_supported()?;
-        let backup_path = choose_backup_path(
-            &snapshot,
-            auto_approve,
-            || {
-                Confirm::new()
-                    .with_prompt("Create a backup before importing?")
-                    .default(true)
-                    .report(false)
-                    .interact()
-                    .map_err(|_| AppError::ImportApprovalCancelled)
-            },
-            |default| {
-                let mut input = Input::<String>::new()
-                    .with_prompt("Backup path")
-                    .report(false);
-                let default_text = default.map(|path| path.to_string_lossy().into_owned());
-                if let Some(text) = &default_text {
-                    input = input.default(text.clone());
-                } else {
-                    tracing::warn!(
-                        "Cannot determine a default backup path; enter an unused custom path."
-                    );
-                }
-                let selected = input
-                    .interact_text()
-                    .map_err(|_| AppError::ImportApprovalCancelled)?;
-                if default_text.as_ref() == Some(&selected) {
-                    Ok(default.unwrap().to_path_buf())
-                } else {
-                    Ok(PathBuf::from(selected))
-                }
-            },
-        )
-        .await?;
-        if let Some(backup_path) = backup_path {
-            snapshot.create_backup_at(&backup_path).await?;
-        }
+        let backup = snapshot.default_backup_path().await?;
+        snapshot.create_backup_at(&backup).await?;
     }
     let document = fs::read_to_string(file)
         .await
         .map_err(AppError::StackRead)?;
     let stack = Stack::from_yaml(&document)?;
+    let (preliminary, preliminary_secrets, missing) =
+        preliminary_definitions(&snapshot, &stack, include_permissions)?;
+    if missing {
+        let changes = snapshot.preview(&preliminary)?;
+        if !changes.is_empty() {
+            writeln!(
+                output,
+                "Preliminary preview; missing secrets will be requested for an exact comparison."
+            )?;
+            let added = changes
+                .iter()
+                .filter(|(_, (before, _))| before.is_none())
+                .map(|(name, _)| name.clone())
+                .collect();
+            let modified = changes
+                .iter()
+                .filter(|(_, (before, _))| before.is_some())
+                .map(|(name, _)| name.clone())
+                .collect();
+            super::super::write_change_summary(output, &added, &modified, &BTreeSet::new())?;
+            super::diff::show_diff(
+                &snapshot,
+                &path,
+                &preliminary,
+                &preliminary_secrets,
+                output,
+                colored,
+            )?;
+        }
+    }
     let mut resolver = SecretResolver {
         dry_run,
         interactive: (dry_run || !auto_approve) && interactive,
+        preview_missing: false,
+        missing_used: false,
         values: BTreeMap::new(),
         cancelled: false,
     };
@@ -345,9 +368,20 @@ pub(crate) async fn run_import(
         )?;
         return Ok(());
     }
-    if !auto_approve && !interactive {
-        return Err(AppError::ImportApprovalRequired);
-    }
+    let added = changes
+        .iter()
+        .filter(|(_, (before, _))| before.is_none())
+        .map(|(name, _)| name.clone())
+        .collect();
+    let modified = changes
+        .iter()
+        .filter(|(_, (before, _))| before.is_some())
+        .map(|(name, _)| name.clone())
+        .collect();
+    super::super::write_change_summary(output, &added, &modified, &BTreeSet::new())?;
+    let secrets: Vec<_> = resolver.values.values().flatten().cloned().collect();
+    super::diff::show_diff(&snapshot, &path, &additions, &secrets, output, colored)?;
+    let proposed_count = additions.len();
     let approved = if auto_approve {
         additions
     } else {
@@ -388,11 +422,69 @@ pub(crate) async fn run_import(
         )?;
         return Ok(());
     }
-    if dry_run {
-        let secrets: Vec<_> = resolver.values.into_values().flatten().collect();
+    if approved.len() != proposed_count {
+        writeln!(output, "Selected server changes:")?;
+        let selected_added = approved
+            .keys()
+            .filter(|name| changes[*name].0.is_none())
+            .cloned()
+            .collect();
+        let selected_modified = approved
+            .keys()
+            .filter(|name| changes[*name].0.is_some())
+            .cloned()
+            .collect();
+        super::super::write_change_summary(
+            output,
+            &selected_added,
+            &selected_modified,
+            &BTreeSet::new(),
+        )?;
         super::diff::show_diff(&snapshot, &path, &approved, &secrets, output, colored)?;
+    }
+    if dry_run {
         writeln!(output, "Would import {} server(s).", approved.len())?;
         return Ok(());
+    }
+    if !auto_approve {
+        snapshot.ensure_write_supported()?;
+        let backup_path = choose_backup_path(
+            &snapshot,
+            false,
+            || {
+                Confirm::new()
+                    .with_prompt("Create a backup before importing?")
+                    .default(true)
+                    .report(false)
+                    .interact()
+                    .map_err(|_| AppError::ImportApprovalCancelled)
+            },
+            |default| {
+                let mut input = Input::<String>::new()
+                    .with_prompt("Backup path")
+                    .report(false);
+                let default_text = default.map(|path| path.to_string_lossy().into_owned());
+                if let Some(text) = &default_text {
+                    input = input.default(text.clone());
+                } else {
+                    tracing::warn!(
+                        "Cannot determine a default backup path; enter an unused custom path."
+                    );
+                }
+                let selected = input
+                    .interact_text()
+                    .map_err(|_| AppError::ImportApprovalCancelled)?;
+                if default_text.as_ref() == Some(&selected) {
+                    Ok(default.unwrap().to_path_buf())
+                } else {
+                    Ok(PathBuf::from(selected))
+                }
+            },
+        )
+        .await?;
+        if let Some(backup_path) = backup_path {
+            snapshot.create_backup_at(&backup_path).await?;
+        }
     }
     // Check that the target still matches the snapshot before
     // atomic replacement.
@@ -428,10 +520,46 @@ pub(crate) async fn run_use(
         .await
         .map_err(AppError::StackRead)?;
     let stack = Stack::from_yaml(&document)?;
+    let (preliminary, preliminary_secrets, missing) =
+        preliminary_definitions(&snapshot, &stack, include_permissions)?;
+    if missing && snapshot.replacement_proposal(&preliminary)?.0 {
+        writeln!(
+            output,
+            "Preliminary preview; missing secrets will be requested for an exact comparison."
+        )?;
+        let changes = snapshot.preview(&preliminary)?;
+        let current = snapshot.servers()?;
+        let added = changes
+            .iter()
+            .filter(|(_, (before, _))| before.is_none())
+            .map(|(name, _)| name.clone())
+            .collect();
+        let modified = changes
+            .iter()
+            .filter(|(_, (before, _))| before.is_some())
+            .map(|(name, _)| name.clone())
+            .collect();
+        let deleted = current
+            .keys()
+            .filter(|name| !preliminary.contains_key(*name))
+            .cloned()
+            .collect();
+        super::super::write_change_summary(output, &added, &modified, &deleted)?;
+        super::diff::show_replacement_diff(
+            &snapshot,
+            &path,
+            &preliminary,
+            &preliminary_secrets,
+            output,
+            colored,
+        )?;
+    }
     let interactive = !non_interactive && stdin().is_terminal() && stderr().is_terminal();
     let mut resolver = SecretResolver {
         dry_run,
         interactive: (dry_run || !auto_approve) && interactive,
+        preview_missing: false,
+        missing_used: false,
         values: BTreeMap::new(),
         cancelled: false,
     };
@@ -458,21 +586,32 @@ pub(crate) async fn run_use(
         return Ok(());
     }
     warn_runtime_bindings(&definitions);
+    let changes = snapshot.preview(&definitions)?;
+    let current = snapshot.servers()?;
+    let added = changes
+        .iter()
+        .filter(|(_, (before, _))| before.is_none())
+        .map(|(name, _)| name.clone())
+        .collect();
+    let modified = changes
+        .iter()
+        .filter(|(_, (before, _))| before.is_some())
+        .map(|(name, _)| name.clone())
+        .collect();
+    let deleted = current
+        .keys()
+        .filter(|name| !definitions.contains_key(*name))
+        .cloned()
+        .collect();
+    super::super::write_change_summary(output, &added, &modified, &deleted)?;
+    let secrets: Vec<_> = resolver.values.values().flatten().cloned().collect();
+    super::diff::show_replacement_diff(&snapshot, &path, &definitions, &secrets, output, colored)?;
+    writeln!(
+        output,
+        "Would switch to {} MCP server(s); all servers absent from the stack would be removed.",
+        definitions.len()
+    )?;
     if dry_run {
-        let secrets: Vec<_> = resolver.values.into_values().flatten().collect();
-        super::diff::show_replacement_diff(
-            &snapshot,
-            &path,
-            &definitions,
-            &secrets,
-            output,
-            colored,
-        )?;
-        writeln!(
-            output,
-            "Would switch to {} MCP server(s); all servers absent from the stack would be removed.",
-            definitions.len()
-        )?;
         return Ok(());
     }
     if !auto_approve {

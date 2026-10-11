@@ -490,6 +490,8 @@ fn prepared(
     let mut resolver = SecretResolver {
         dry_run,
         interactive,
+        preview_missing: false,
+        missing_used: false,
         values: BTreeMap::new(),
         cancelled: false,
     };
@@ -498,6 +500,18 @@ fn prepared(
         return Err(AppError::ImportApprovalCancelled);
     }
     result.map_err(Into::into)
+}
+fn prepared_preview(stack: &StackV1) -> Result<(BTreeMap<String, Value>, bool), AppError> {
+    let mut resolver = SecretResolver {
+        dry_run: true,
+        interactive: false,
+        preview_missing: true,
+        missing_used: false,
+        values: BTreeMap::new(),
+        cancelled: false,
+    };
+    let values = prepare(stack, &mut resolver)?;
+    Ok((values, resolver.missing_used))
 }
 fn as_stack(values: BTreeMap<String, Value>) -> Result<StackV1, AppError> {
     let document = serde_json::json!({"schema_version":SCHEMA_VERSION,"servers":values.iter().map(|(k,v)| (k.clone(),serde_json::json!({"config":v}))).collect::<Map<_,_>>()});
@@ -859,6 +873,22 @@ fn preview(
     if before == after {
         return Ok(());
     }
+    let added = after
+        .keys()
+        .filter(|name| !before.contains_key(*name))
+        .cloned()
+        .collect();
+    let deleted = before
+        .keys()
+        .filter(|name| !after.contains_key(*name))
+        .cloned()
+        .collect();
+    let modified = after
+        .iter()
+        .filter(|(name, value)| before.get(*name).is_some_and(|old| old != *value))
+        .map(|(name, _)| name.clone())
+        .collect();
+    super::write_change_summary(output, &added, &modified, &deleted)?;
     let mut before_mask = mask(before.clone())?;
     let mut after_mask = mask(after.clone())?;
     for (name, after_value) in &after {
@@ -1099,6 +1129,27 @@ impl ClientAdapter for Claude {
         };
         let (config_path, file, config) = snapshot(args.config, false).await?;
         let stack = read_stack(&args.file).await?;
+        let before = servers(&config);
+        let (preview_values, missing) = prepared_preview(&stack)?;
+        if missing {
+            let mut preliminary = before.clone();
+            preliminary.extend(preview_values);
+            preserve_equivalent_servers(&before, &mut preliminary);
+            if preliminary != before {
+                writeln!(
+                    output,
+                    "Preliminary preview; missing secrets will be requested for an exact comparison."
+                )?;
+                preview(
+                    output,
+                    &config_path,
+                    &file,
+                    before.clone(),
+                    preliminary,
+                    colored,
+                )?;
+            }
+        }
         let incoming = prepared(
             &stack,
             true,
@@ -1140,13 +1191,28 @@ impl ClientAdapter for Claude {
             None
         };
         let (config_path, file, config) = snapshot(args.config, false).await?;
-        if !dry_run
-            && !auto_approve
-            && (non_interactive || !stdin().is_terminal() || !stderr().is_terminal())
-        {
-            return Err(AppError::ImportApprovalRequired);
-        }
         let stack = read_stack(&args.file).await?;
+        let before = servers(&config);
+        let (preview_values, missing) = prepared_preview(&stack)?;
+        if missing {
+            let mut preliminary = before.clone();
+            preliminary.extend(preview_values);
+            preserve_equivalent_servers(&before, &mut preliminary);
+            if preliminary != before {
+                writeln!(
+                    output,
+                    "Preliminary preview; missing secrets will be requested for an exact comparison."
+                )?;
+                preview(
+                    output,
+                    &config_path,
+                    &file,
+                    before.clone(),
+                    preliminary,
+                    colored,
+                )?;
+            }
+        }
         let incoming = prepared(
             &stack,
             dry_run,
@@ -1155,7 +1221,39 @@ impl ClientAdapter for Claude {
                 && stdin().is_terminal()
                 && stderr().is_terminal(),
         )?;
-        let before = servers(&config);
+        let mut all_changes = before.clone();
+        all_changes.extend(incoming.clone());
+        preserve_equivalent_servers(&before, &mut all_changes);
+        let permission_preview = if let Some(path) = &permission_path {
+            let settings = permissions::Snapshot::read(path).await?;
+            let names = stack.servers.keys().cloned().collect();
+            settings.proposed(&stack, &names)? != settings.config
+        } else {
+            false
+        };
+        if all_changes == before && !permission_preview {
+            writeln!(
+                output,
+                "No changes; existing identical entries were unchanged."
+            )?;
+            return Ok(());
+        }
+        if all_changes != before {
+            preview(
+                output,
+                &config_path,
+                &file,
+                before.clone(),
+                all_changes.clone(),
+                colored,
+            )?;
+        }
+        if permission_preview {
+            writeln!(output, "Permission rules would change.")?;
+        }
+        if !auto_approve && (non_interactive || !stdin().is_terminal() || !stderr().is_terminal()) {
+            return Err(AppError::ImportApprovalRequired);
+        }
         let mut proposed = before.clone();
         let mut approved = std::collections::BTreeSet::new();
         for (name, definition) in incoming {
@@ -1192,6 +1290,17 @@ impl ClientAdapter for Claude {
         let permissions_changed = permission_change
             .as_ref()
             .is_some_and(|(settings, change)| settings.config != *change);
+        if proposed != all_changes && proposed != before {
+            writeln!(output, "Selected server changes:")?;
+            preview(
+                output,
+                &config_path,
+                &file,
+                before.clone(),
+                proposed.clone(),
+                colored,
+            )?;
+        }
         if proposed == before && !permissions_changed {
             writeln!(
                 output,
@@ -1200,12 +1309,7 @@ impl ClientAdapter for Claude {
             return Ok(());
         }
         if dry_run {
-            if proposed != before {
-                preview(output, &config_path, &file, before, proposed, colored)?;
-            }
-            if permissions_changed {
-                writeln!(output, "Permission rules would change.")?;
-            }
+            writeln!(output, "Would import {} server(s).", approved.len())?;
             return Ok(());
         }
         if permissions_changed
@@ -1249,6 +1353,25 @@ impl ClientAdapter for Claude {
         };
         let (config_path, file, config) = snapshot(args.config, false).await?;
         let stack = read_stack(&args.file).await?;
+        let before = servers(&config);
+        let (mut preliminary, missing) = prepared_preview(&stack)?;
+        if missing {
+            preserve_equivalent_servers(&before, &mut preliminary);
+            if preliminary != before {
+                writeln!(
+                    output,
+                    "Preliminary preview; missing secrets will be requested for an exact comparison."
+                )?;
+                preview(
+                    output,
+                    &config_path,
+                    &file,
+                    before.clone(),
+                    preliminary,
+                    colored,
+                )?;
+            }
+        }
         let mut proposed = prepared(
             &stack,
             dry_run,
@@ -1257,7 +1380,6 @@ impl ClientAdapter for Claude {
                 && stdin().is_terminal()
                 && stderr().is_terminal(),
         )?;
-        let before = servers(&config);
         preserve_equivalent_servers(&before, &mut proposed);
         let permission_change = if let Some(path) = permission_path {
             let settings = permissions::Snapshot::read(&path).await?;
@@ -1278,13 +1400,20 @@ impl ClientAdapter for Claude {
             )?;
             return Ok(());
         }
+        if proposed != before {
+            preview(
+                output,
+                &config_path,
+                &file,
+                before.clone(),
+                proposed.clone(),
+                colored,
+            )?;
+        }
+        if permissions_changed {
+            writeln!(output, "Permission rules would change.")?;
+        }
         if dry_run {
-            if proposed != before {
-                preview(output, &config_path, &file, before, proposed, colored)?;
-            }
-            if permissions_changed {
-                writeln!(output, "Permission rules would change.")?;
-            }
             return Ok(());
         }
         if !auto_approve {

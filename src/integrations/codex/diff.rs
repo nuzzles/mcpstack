@@ -30,9 +30,41 @@ pub(crate) async fn run(
         .await
         .map_err(AppError::StackRead)?;
     let stack = Stack::from_yaml(&document)?;
+    let (preliminary, preliminary_secrets, missing) =
+        super::workflow::preliminary_definitions(&snapshot, &stack, include_permissions)?;
+    if missing {
+        let changes = snapshot.preview(&preliminary)?;
+        if !changes.is_empty() {
+            writeln!(
+                output,
+                "Preliminary preview; missing secrets will be requested for an exact comparison."
+            )?;
+            let added = changes
+                .iter()
+                .filter(|(_, (before, _))| before.is_none())
+                .map(|(name, _)| name.clone())
+                .collect();
+            let modified = changes
+                .iter()
+                .filter(|(_, (before, _))| before.is_some())
+                .map(|(name, _)| name.clone())
+                .collect();
+            super::super::write_change_summary(output, &added, &modified, &Default::default())?;
+            show_diff(
+                &snapshot,
+                &path,
+                &preliminary,
+                &preliminary_secrets,
+                output,
+                colored,
+            )?;
+        }
+    }
     let mut resolver = SecretResolver {
         dry_run: true,
         interactive: !non_interactive && stdin().is_terminal() && stderr().is_terminal(),
+        preview_missing: false,
+        missing_used: false,
         values: BTreeMap::new(),
         cancelled: false,
     };
@@ -65,6 +97,17 @@ pub(crate) async fn run(
         .map(|(name, (_, value))| (name.clone(), value.clone()))
         .collect();
     warn_runtime_bindings(&incoming);
+    let added = changes
+        .iter()
+        .filter(|(_, (before, _))| before.is_none())
+        .map(|(name, _)| name.clone())
+        .collect();
+    let modified = changes
+        .iter()
+        .filter(|(_, (before, _))| before.is_some())
+        .map(|(name, _)| name.clone())
+        .collect();
+    super::super::write_change_summary(output, &added, &modified, &Default::default())?;
     let secrets: Vec<_> = resolver.values.into_values().flatten().collect();
     show_diff(&snapshot, &path, &incoming, &secrets, output, colored)
 }

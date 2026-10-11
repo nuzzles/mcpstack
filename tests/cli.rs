@@ -1069,7 +1069,11 @@ fn import_backs_up_before_validation_and_preserves_original_on_failure() {
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(status), "{output:?}");
-        assert!(output.stdout.is_empty());
+        if document.contains("MCPSTACK_MISSING_IMPORT_TOKEN") {
+            assert!(String::from_utf8_lossy(&output.stdout).contains("Preliminary preview;"));
+        } else {
+            assert!(output.stdout.is_empty());
+        }
         assert!(!String::from_utf8_lossy(&output.stderr).contains("fixture-secret"));
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
         assert_eq!(
@@ -1214,8 +1218,9 @@ fn diff_is_read_only_redacted_and_available_without_a_terminal() {
             .unwrap();
         assert!(output.status.success(), "{output:?}");
         let diff = String::from_utf8(output.stdout).unwrap();
+        assert!(diff.starts_with("MCP server changes:\n  Added: \"added\"\n"));
         if target_exists {
-            assert!(diff.starts_with(&format!("--- {}\n", config.display())));
+            assert!(diff.contains(&format!("--- {}\n", config.display())));
         } else {
             assert!(diff.contains("--- /dev/null\n+++ "));
             assert!(diff.contains("@@ -0,0 +1,"));
@@ -1332,7 +1337,9 @@ fn masked_import_rejects_missing_values_without_interactive_input() {
         }
         assert_eq!(output.status.code(), Some(10));
         assert!(diagnostics.contains("interactive import"));
-        assert!(output.stdout.is_empty());
+        let preview = String::from_utf8_lossy(&output.stdout);
+        assert!(preview.contains("Preliminary preview;"), "{preview}");
+        assert!(!preview.contains("MCPSTACK_MASKED_SECRET"), "{preview}");
         assert!(!config.exists());
         let backup = fixture.directory.path().join("config.toml.~1~");
         if flag == "--dry-run" {
@@ -1689,13 +1696,16 @@ fn diff_hunk_positions_match_original_and_imported_files() {
     assert!(!config.with_extension("toml.~1~").exists());
     let applied = invoke(&["codex", "import", "-y"]);
     assert!(applied.status.success(), "{applied:?}");
-    assert!(!String::from_utf8_lossy(&applied.stdout).contains("@@"));
+    assert!(applied.stdout.starts_with(&preview.stdout));
     let proposed = std::fs::read_to_string(&config).unwrap();
     let before: Vec<_> = original.lines().collect();
     let after: Vec<_> = proposed.lines().collect();
     let patch = String::from_utf8(preview.stdout).unwrap();
     let (mut old, mut new, mut hunks) = (0, 0, 0);
     for line in patch.lines().skip(2) {
+        if hunks == 0 && !line.starts_with("@@") {
+            continue;
+        }
         if line.starts_with("@@") {
             let ranges: Vec<_> = line.split_whitespace().collect();
             old = ranges[1][1..]

@@ -7,6 +7,8 @@ use std::env;
 pub(crate) struct SecretResolver {
     pub(crate) dry_run: bool,
     pub(crate) interactive: bool,
+    pub(crate) preview_missing: bool,
+    pub(crate) missing_used: bool,
     pub(crate) values: BTreeMap<String, Option<String>>,
     pub(crate) cancelled: bool,
 }
@@ -23,7 +25,10 @@ impl SecretResolver {
             .ok()
             .filter(|value| !value.is_empty() && !value.contains('\0'));
         if value.is_none() {
-            if self.interactive {
+            if self.preview_missing {
+                self.missing_used = true;
+                value = Some("https://example.invalid/mcpstack-secret-preview".into());
+            } else if self.interactive {
                 match Password::new()
                     .with_prompt(if self.dry_run {
                         format!("Enter secret for {name}")

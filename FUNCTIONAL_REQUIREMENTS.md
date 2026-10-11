@@ -140,8 +140,8 @@ starting server software. Validate and resolve the stack before changing config.
 Preserve unrelated settings, skip identical servers, and apply only approved
 additions or replacements. Backups and file writes are described under
 [Codex import](#codex-import).
-Phase 1 previews are redacted configuration diffs from `diff` and import
-`--dry-run`. Installation plans covering downloads, commands, and
+Phase 1 previews are redacted configuration diffs from `diff`, `import`, and
+`use`, including before interactive approval. Installation plans covering downloads, commands, and
 prerequisite verification remain Phase 2 work. Configuration-only stack switching
 is implemented by `use`.
 
@@ -161,10 +161,13 @@ input disables prompts. Export defaults to masking credentials; `--expose-secret
 includes them without prompting.
 
 Import defaults to skipping each addition or replacement, with per-server and
-bulk choices. `-y` / `--auto-approve` approves all changes. Dry-run retains these
-prompts and shows only approved changes; unattended dry-run requires `-y`.
+bulk choices. A named change summary and redacted diff appear before approval
+prompts. `-y` / `--auto-approve` approves all changes. Dry-run retains these
+prompts; unattended dry-run requires `-y`.
 `diff` shows all proposed changes without server approval prompts. Both preview
-modes can ask for missing masked values and never write files.
+modes can ask for missing masked values and never write files. A preliminary
+redacted preview appears before a missing-secret prompt; the exact plan is
+recomputed after the value is supplied and before an approval prompt.
 
 ### Claude support
 
@@ -397,15 +400,15 @@ without running Codex or servers.
 | Command | Behavior |
 | --- | --- |
 | `codex diff stack.yml` | Show all proposed changes; prompt only for missing masked values. |
-| `codex import stack.yml` | Offer backup, approve additions/replacements, and apply without printing a diff. |
+| `codex import stack.yml` | Show proposed additions/replacements and a redacted diff, approve servers, offer backup, then apply. |
 | `codex import stack.yml -y` | Create a default backup and approve all changes automatically. |
-| `codex import stack.yml --dry-run` | Follow secret and server prompts, then show only approved changes without writes. |
+| `codex import stack.yml --dry-run` | Show proposed changes before server prompts, then report the approved count without writes. |
 
 Backups default to numbered sibling files (`config.toml.~1~`, `config.toml.~2~`,
 etc.) beyond the highest existing generation. The prompt allows another path or
-skipping backup. Requested backups must succeed before stack reads or secret
-prompts, never overwrite existing files, and remain after later failures,
-cancellation, or no-op imports.
+skipping backup. Automatically approved imports create the backup before stack
+reads; interactive imports offer it after the change preview and server choices.
+Backups never overwrite existing files and remain after later failures.
 
 Replacements update the complete server definition. Unrelated settings, comments,
 and servers are preserved; identical entries do not rewrite the config. Shared

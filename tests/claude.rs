@@ -28,6 +28,10 @@ fn user_config_round_trip_and_switch_preserve_unrelated_settings() {
     std::fs::write(&stack,"schema_version: 1\nservers:\n  api:\n    transport: {type: http, url: 'https://example.com/mcp'}\n  process:\n    config: {command: tool, args: ['--quiet']}\n").unwrap();
     let preview = run("use", Some(&stack), &config, &["--dry-run"]);
     assert!(preview.status.success(), "{preview:?}");
+    let plan = String::from_utf8_lossy(&preview.stdout);
+    assert!(plan.contains("  Added: \"api\", \"process\"\n"), "{plan}");
+    assert!(plan.contains("  Modified: none\n"), "{plan}");
+    assert!(plan.contains("  Deleted: \"old\"\n"), "{plan}");
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     assert!(!dir.path().join("claude.json.~1~").exists());
     let applied = run("use", Some(&stack), &config, &["-y"]);
@@ -54,6 +58,61 @@ fn user_config_round_trip_and_switch_preserve_unrelated_settings() {
     assert!(run("use", Some(&stack), &config, &["-y"]).status.success());
     assert_eq!(std::fs::read(&config).unwrap(), bytes);
     assert!(!dir.path().join("claude.json.~2~").exists());
+}
+
+#[test]
+fn claude_shows_changes_before_requiring_approval() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let stack = dir.path().join("stack.yml");
+    let original = r#"{"mcpServers":{"old":{"command":"old-tool"}}}"#;
+    std::fs::write(&config, original).unwrap();
+    std::fs::write(
+        &stack,
+        "schema_version: 1\nservers:\n  new:\n    config: {command: new-tool}\n",
+    )
+    .unwrap();
+    for operation in ["use", "import"] {
+        let output = run(operation, Some(&stack), &config, &[]);
+        assert!(!output.status.success(), "{output:?}");
+        let plan = String::from_utf8(output.stdout).unwrap();
+        assert!(plan.contains("  Added: \"new\"\n"), "{plan}");
+        assert!(
+            plan.contains("  Deleted: \"old\"\n") == (operation == "use"),
+            "{plan}"
+        );
+        assert!(
+            plan.contains(&format!("--- {}", config.display())),
+            "{plan}"
+        );
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+        assert!(!dir.path().join("claude.json.~1~").exists());
+    }
+}
+
+#[test]
+fn claude_shows_preliminary_plan_before_a_missing_secret_is_requested() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let stack = dir.path().join("stack.yml");
+    let original = r#"{"mcpServers":{}}"#;
+    std::fs::write(&config, original).unwrap();
+    std::fs::write(
+        &stack,
+        "schema_version: 1\nservers:\n  new:\n    config:\n      command: new-tool\n      env: {TOKEN: {'$env': MCPSTACK_CLAUDE_TEST_MISSING_PREVIEW_SECRET}}\n",
+    )
+    .unwrap();
+    let output = run("use", Some(&stack), &config, &["-y"]);
+    assert!(!output.status.success(), "{output:?}");
+    let preview = String::from_utf8(output.stdout).unwrap();
+    assert!(preview.contains("Preliminary preview;"), "{preview}");
+    assert!(preview.contains("  Added: \"new\"\n"), "{preview}");
+    assert!(
+        !preview.contains("MCPSTACK_CLAUDE_TEST_MISSING_PREVIEW_SECRET"),
+        "{preview}"
+    );
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    assert!(!dir.path().join("claude.json.~1~").exists());
 }
 
 #[test]
@@ -231,6 +290,7 @@ fn claude_preview_hunks_use_physical_config_file_lines() {
         preview.contains(&format!("@@ -{line} +{line} @@")),
         "{preview}"
     );
+    assert!(preview.contains("  Modified: \"service\"\n"), "{preview}");
     assert!(
         preview.contains(&format!("--- {}", config.display())),
         "{preview}"
