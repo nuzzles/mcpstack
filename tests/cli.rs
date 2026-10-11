@@ -567,7 +567,8 @@ fn codex_export_all_use_round_trip_has_no_diff_with_matching_credentials() {
         .output()
         .unwrap();
     assert!(changed.status.success(), "{changed:?}");
-    assert!(String::from_utf8_lossy(&changed.stdout).contains("@@"));
+    assert!(String::from_utf8_lossy(&changed.stdout).contains("  ~ Modified: \"obsidian\""));
+    assert!(!String::from_utf8_lossy(&changed.stdout).contains("@@"));
     assert!(!String::from_utf8_lossy(&changed.stdout).contains("different-fixture-secret"));
     assert!(!String::from_utf8_lossy(&changed.stdout).contains("fixture-secret"));
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
@@ -1070,7 +1071,7 @@ fn import_backs_up_before_validation_and_preserves_original_on_failure() {
             .unwrap();
         assert_eq!(output.status.code(), Some(status), "{output:?}");
         if document.contains("MCPSTACK_MISSING_IMPORT_TOKEN") {
-            assert!(String::from_utf8_lossy(&output.stdout).contains("Preliminary preview;"));
+            assert!(String::from_utf8_lossy(&output.stdout).contains("Preliminary changes;"));
         } else {
             assert!(output.stdout.is_empty());
         }
@@ -1338,7 +1339,7 @@ fn masked_import_rejects_missing_values_without_interactive_input() {
         assert_eq!(output.status.code(), Some(10));
         assert!(diagnostics.contains("interactive import"));
         let preview = String::from_utf8_lossy(&output.stdout);
-        assert!(preview.contains("Preliminary preview;"), "{preview}");
+        assert!(preview.contains("Preliminary changes;"), "{preview}");
         assert!(!preview.contains("MCPSTACK_MASKED_SECRET"), "{preview}");
         assert!(!config.exists());
         let backup = fixture.directory.path().join("config.toml.~1~");
@@ -1597,6 +1598,7 @@ fn previews_redact_old_values_at_incoming_secret_reference_locations() {
         vec!["codex", "diff"],
         vec!["codex", "import", "--dry-run", "-y"],
     ] {
+        let is_diff = args[1] == "diff";
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
             .args(args)
             .arg(&fixture.file)
@@ -1610,7 +1612,8 @@ fn previews_redact_old_values_at_incoming_secret_reference_locations() {
             .unwrap();
         assert!(output.status.success(), "{output:?}");
         let preview = String::from_utf8_lossy(&output.stdout);
-        assert!(preview.contains("<redacted: changed>"));
+        assert!(preview.contains("  ~ Modified: \"process\", \"remote\""));
+        assert_eq!(preview.contains("<redacted: changed>"), is_diff);
         for credential in [
             "old-argument-credential",
             "old-environment-credential",
@@ -1620,8 +1623,12 @@ fn previews_redact_old_values_at_incoming_secret_reference_locations() {
             assert!(!preview.contains(credential), "{preview}");
             assert!(!String::from_utf8_lossy(&output.stderr).contains(credential));
         }
-        for ordinary in ["visible-arg", "visible-env", "visible-header"] {
-            assert!(preview.contains(ordinary), "{preview}");
+        if is_diff {
+            for ordinary in ["visible-arg", "visible-env", "visible-header"] {
+                assert!(preview.contains(ordinary), "{preview}");
+            }
+        } else {
+            assert!(!preview.contains("@@"), "{preview}");
         }
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
         assert!(!config.with_extension("toml.~1~").exists());
@@ -1691,13 +1698,15 @@ fn diff_hunk_positions_match_original_and_imported_files() {
     assert!(!config.with_extension("toml.~1~").exists());
     let dry = invoke(&["codex", "import", "--dry-run", "-y"]);
     assert!(dry.status.success(), "{dry:?}");
-    assert!(dry.stdout.starts_with(&preview.stdout));
+    assert!(String::from_utf8_lossy(&dry.stdout).contains("  ~ Modified: \"first\", \"last\""));
+    assert!(!String::from_utf8_lossy(&dry.stdout).contains("@@"));
     assert!(String::from_utf8_lossy(&dry.stdout).contains("Would import 2 server(s)."));
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     assert!(!config.with_extension("toml.~1~").exists());
     let applied = invoke(&["codex", "import", "-y"]);
     assert!(applied.status.success(), "{applied:?}");
-    assert!(applied.stdout.starts_with(&preview.stdout));
+    assert!(String::from_utf8_lossy(&applied.stdout).contains("  ~ Modified: \"first\", \"last\""));
+    assert!(!String::from_utf8_lossy(&applied.stdout).contains("@@"));
     let proposed = std::fs::read_to_string(&config).unwrap();
     let before: Vec<_> = original.lines().collect();
     let after: Vec<_> = proposed.lines().collect();

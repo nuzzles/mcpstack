@@ -873,24 +873,22 @@ fn preview(
     if before == after {
         return Ok(());
     }
-    let added = after
-        .keys()
-        .filter(|name| !before.contains_key(*name))
-        .cloned()
-        .collect();
-    let deleted = before
-        .keys()
-        .filter(|name| !after.contains_key(*name))
-        .cloned()
-        .collect();
-    let modified = after
-        .iter()
-        .filter(|(name, value)| before.get(*name).is_some_and(|old| old != *value))
-        .map(|(name, _)| name.clone())
-        .collect();
+    preview_diff(output, path, file, &before, &after, colored)?;
+    summarize_changes(output, &before, &after, colored)?;
+    Ok(())
+}
+
+fn preview_diff(
+    output: &mut impl Write,
+    path: &Path,
+    file: &io::Snapshot,
+    before: &BTreeMap<String, Value>,
+    after: &BTreeMap<String, Value>,
+    colored: bool,
+) -> Result<(), AppError> {
     let mut before_mask = mask(before.clone())?;
     let mut after_mask = mask(after.clone())?;
-    for (name, after_value) in &after {
+    for (name, after_value) in after {
         if let (Some(before_value), Some(before_mask), Some(after_mask)) = (
             before.get(name),
             before_mask.get_mut(name),
@@ -901,18 +899,18 @@ fn preview(
     }
     let mut before_private = BTreeMap::new();
     let mut after_private = BTreeMap::new();
-    for (name, value) in &before {
+    for (name, value) in before {
         if let Some(masked) = before_mask.get(name) {
             collect_private_values(value, masked, &mut before_private);
         }
     }
-    for (name, value) in &after {
+    for (name, value) in after {
         if let Some(masked) = after_mask.get(name) {
             collect_private_values(value, masked, &mut after_private);
         }
     }
     let original = std::str::from_utf8(file.contents()).map_err(|_| Error::Config)?;
-    let proposed = proposed_config_text(original, &after)?;
+    let proposed = proposed_config_text(original, after)?;
     let before_text = if original.is_empty() {
         String::new()
     } else {
@@ -937,6 +935,30 @@ fn preview(
         "Redacted preview; credential placeholders prevent applying this patch directly."
     )?;
     super::diff_output::write_diff(output, &diff, colored)?;
+    Ok(())
+}
+
+fn summarize_changes(
+    output: &mut impl Write,
+    before: &BTreeMap<String, Value>,
+    after: &BTreeMap<String, Value>,
+    colored: bool,
+) -> Result<(), AppError> {
+    let added = after
+        .keys()
+        .filter(|name| !before.contains_key(*name))
+        .cloned()
+        .collect();
+    let deleted = before
+        .keys()
+        .filter(|name| !after.contains_key(*name))
+        .cloned()
+        .collect();
+    let modified = after
+        .iter()
+        .filter(|(name, value)| before.get(*name).is_some_and(|old| old != *value))
+        .map(|(name, _)| name.clone())
+        .collect();
     super::write_change_summary(output, &added, &modified, &deleted, colored)?;
     Ok(())
 }
@@ -1201,16 +1223,9 @@ impl ClientAdapter for Claude {
             if preliminary != before {
                 writeln!(
                     output,
-                    "Preliminary preview; missing secrets will be requested for an exact comparison."
+                    "Preliminary changes; missing secrets will be requested for an exact comparison."
                 )?;
-                preview(
-                    output,
-                    &config_path,
-                    &file,
-                    before.clone(),
-                    preliminary,
-                    colored,
-                )?;
+                summarize_changes(output, &before, &preliminary, colored)?;
             }
         }
         let incoming = prepared(
@@ -1242,14 +1257,7 @@ impl ClientAdapter for Claude {
             writeln!(output, "Permission rules would change.")?;
         }
         if all_changes != before {
-            preview(
-                output,
-                &config_path,
-                &file,
-                before.clone(),
-                all_changes.clone(),
-                colored,
-            )?;
+            summarize_changes(output, &before, &all_changes, colored)?;
         }
         if !auto_approve && (non_interactive || !stdin().is_terminal() || !stderr().is_terminal()) {
             return Err(AppError::ImportApprovalRequired);
@@ -1292,14 +1300,7 @@ impl ClientAdapter for Claude {
             .is_some_and(|(settings, change)| settings.config != *change);
         if proposed != all_changes && proposed != before {
             writeln!(output, "Selected server changes:")?;
-            preview(
-                output,
-                &config_path,
-                &file,
-                before.clone(),
-                proposed.clone(),
-                colored,
-            )?;
+            summarize_changes(output, &before, &proposed, colored)?;
         }
         if proposed == before && !permissions_changed {
             writeln!(
@@ -1360,16 +1361,9 @@ impl ClientAdapter for Claude {
             if preliminary != before {
                 writeln!(
                     output,
-                    "Preliminary preview; missing secrets will be requested for an exact comparison."
+                    "Preliminary changes; missing secrets will be requested for an exact comparison."
                 )?;
-                preview(
-                    output,
-                    &config_path,
-                    &file,
-                    before.clone(),
-                    preliminary,
-                    colored,
-                )?;
+                summarize_changes(output, &before, &preliminary, colored)?;
             }
         }
         let mut proposed = prepared(
@@ -1404,14 +1398,7 @@ impl ClientAdapter for Claude {
             writeln!(output, "Permission rules would change.")?;
         }
         if proposed != before {
-            preview(
-                output,
-                &config_path,
-                &file,
-                before.clone(),
-                proposed.clone(),
-                colored,
-            )?;
+            summarize_changes(output, &before, &proposed, colored)?;
         }
         if dry_run {
             return Ok(());

@@ -146,37 +146,6 @@ pub(super) fn show_diff(
     render_diff(path, original, &before, &after, output, colored)
 }
 
-pub(super) fn show_replacement_diff(
-    snapshot: &Snapshot,
-    path: &Path,
-    definitions: &BTreeMap<String, toml::Table>,
-    secrets: &[String],
-    output: &mut impl Write,
-    colored: bool,
-) -> Result<(), AppError> {
-    let existing = snapshot.servers()?;
-    let mut before_masks = BTreeMap::new();
-    let mut after_masks = BTreeMap::new();
-    for (name, definition) in definitions {
-        after_masks.insert(
-            name.clone(),
-            masked_server(name, definition, existing.get(name), secrets)?,
-        );
-    }
-    for (name, definition) in &existing {
-        let mut mask = masked_server(name, definition, None, secrets)?;
-        if let Some(after) = after_masks.get(name) {
-            redact_matching_fields(&mut mask, after);
-        }
-        before_masks.insert(name.clone(), mask);
-    }
-    let original = snapshot.original_text()?;
-    let (_, proposed) = snapshot.replacement_proposal(definitions)?;
-    let before = redact_document(original, &before_masks)?;
-    let after = redact_document(&proposed, &after_masks)?;
-    render_diff(path, original, &before, &after, output, colored)
-}
-
 fn render_diff(
     path: &Path,
     original: &str,

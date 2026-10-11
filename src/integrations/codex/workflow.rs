@@ -306,14 +306,14 @@ pub(crate) async fn run_import(
         .await
         .map_err(AppError::StackRead)?;
     let stack = Stack::from_yaml(&document)?;
-    let (preliminary, preliminary_secrets, missing) =
+    let (preliminary, _, missing) =
         preliminary_definitions(&snapshot, &stack, include_permissions)?;
     if missing {
         let changes = snapshot.preview(&preliminary)?;
         if !changes.is_empty() {
             writeln!(
                 output,
-                "Preliminary preview; missing secrets will be requested for an exact comparison."
+                "Preliminary changes; missing secrets will be requested for an exact comparison."
             )?;
             let added = changes
                 .iter()
@@ -325,14 +325,6 @@ pub(crate) async fn run_import(
                 .filter(|(_, (before, _))| before.is_some())
                 .map(|(name, _)| name.clone())
                 .collect();
-            super::diff::show_diff(
-                &snapshot,
-                &path,
-                &preliminary,
-                &preliminary_secrets,
-                output,
-                colored,
-            )?;
             super::super::write_change_summary(
                 output,
                 &added,
@@ -384,8 +376,6 @@ pub(crate) async fn run_import(
         .filter(|(_, (before, _))| before.is_some())
         .map(|(name, _)| name.clone())
         .collect();
-    let secrets: Vec<_> = resolver.values.values().flatten().cloned().collect();
-    super::diff::show_diff(&snapshot, &path, &additions, &secrets, output, colored)?;
     super::super::write_change_summary(output, &added, &modified, &BTreeSet::new(), colored)?;
     let proposed_count = additions.len();
     let approved = if auto_approve {
@@ -440,7 +430,6 @@ pub(crate) async fn run_import(
             .filter(|name| changes[*name].0.is_some())
             .cloned()
             .collect();
-        super::diff::show_diff(&snapshot, &path, &approved, &secrets, output, colored)?;
         super::super::write_change_summary(
             output,
             &selected_added,
@@ -527,12 +516,12 @@ pub(crate) async fn run_use(
         .await
         .map_err(AppError::StackRead)?;
     let stack = Stack::from_yaml(&document)?;
-    let (preliminary, preliminary_secrets, missing) =
+    let (preliminary, _, missing) =
         preliminary_definitions(&snapshot, &stack, include_permissions)?;
     if missing && snapshot.replacement_proposal(&preliminary)?.0 {
         writeln!(
             output,
-            "Preliminary preview; missing secrets will be requested for an exact comparison."
+            "Preliminary changes; missing secrets will be requested for an exact comparison."
         )?;
         let changes = snapshot.preview(&preliminary)?;
         let current = snapshot.servers()?;
@@ -551,14 +540,6 @@ pub(crate) async fn run_use(
             .filter(|name| !preliminary.contains_key(*name))
             .cloned()
             .collect();
-        super::diff::show_replacement_diff(
-            &snapshot,
-            &path,
-            &preliminary,
-            &preliminary_secrets,
-            output,
-            colored,
-        )?;
         super::super::write_change_summary(output, &added, &modified, &deleted, colored)?;
     }
     let interactive = !non_interactive && stdin().is_terminal() && stderr().is_terminal();
@@ -610,8 +591,6 @@ pub(crate) async fn run_use(
         .filter(|name| !definitions.contains_key(*name))
         .cloned()
         .collect();
-    let secrets: Vec<_> = resolver.values.values().flatten().cloned().collect();
-    super::diff::show_replacement_diff(&snapshot, &path, &definitions, &secrets, output, colored)?;
     writeln!(
         output,
         "Would switch to {} MCP server(s); all servers absent from the stack would be removed.",

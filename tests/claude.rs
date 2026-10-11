@@ -82,7 +82,7 @@ fn claude_shows_changes_before_requiring_approval() {
             "{plan}"
         );
         assert!(
-            plan.contains(&format!("--- {}", config.display())),
+            !plan.contains(&format!("--- {}", config.display())),
             "{plan}"
         );
         let last = if operation == "use" {
@@ -111,7 +111,7 @@ fn claude_shows_preliminary_plan_before_a_missing_secret_is_requested() {
     let output = run("use", Some(&stack), &config, &["-y"]);
     assert!(!output.status.success(), "{output:?}");
     let preview = String::from_utf8(output.stdout).unwrap();
-    assert!(preview.contains("Preliminary preview;"), "{preview}");
+    assert!(preview.contains("Preliminary changes;"), "{preview}");
     assert!(preview.contains("  + Added: \"new\"\n"), "{preview}");
     assert!(
         !preview.contains("MCPSTACK_CLAUDE_TEST_MISSING_PREVIEW_SECRET"),
@@ -238,8 +238,17 @@ fn credential_only_changes_remain_visible_in_both_previews() {
         let output = run(operation, Some(&stack), &config, &flags);
         assert!(output.status.success(), "{output:?}");
         let preview = String::from_utf8(output.stdout).unwrap();
-        assert!(preview.contains("<redacted: changed>"), "{preview}");
-        assert!(preview.contains(&format!("--- {}", config.display())));
+        assert!(preview.contains("  ~ Modified: \"api\"\n"), "{preview}");
+        assert_eq!(
+            preview.contains("<redacted: changed>"),
+            operation == "diff",
+            "{preview}"
+        );
+        assert_eq!(
+            preview.contains(&format!("--- {}", config.display())),
+            operation == "diff",
+            "{preview}"
+        );
         assert!(!preview.contains("\"$env\""), "{preview}");
         assert!(!preview.contains("old-fixture"));
         assert!(!preview.contains("new-fixture"));
@@ -256,7 +265,7 @@ fn preview_shows_masked_literal_instead_of_synthetic_env_marker() {
     let original = r#"{"mcpServers":{"github":{"type":"http","url":"https://example.com/mcp","headers":{"Authorization":"Bearer fixture-secret"}}}}"#;
     std::fs::write(&config, original).unwrap();
     std::fs::write(&stack, "schema_version: 1\nservers:\n  github:\n    transport:\n      type: http\n      url: https://example.com/mcp\n      headers: {Authorization: {env: GITHUB_TOKEN, prefix: 'Bearer '}}\n").unwrap();
-    let output = run("use", Some(&stack), &config, &["--dry-run"]);
+    let output = run("diff", Some(&stack), &config, &[]);
     assert!(output.status.success(), "{output:?}");
     let preview = String::from_utf8(output.stdout).unwrap();
     assert!(preview.contains(&format!("--- {}", config.display())));
@@ -289,7 +298,7 @@ fn claude_preview_hunks_use_physical_config_file_lines() {
         .unwrap()
         + 1;
     assert!(line > 5);
-    let output = run("use", Some(&stack), &config, &["--dry-run"]);
+    let output = run("diff", Some(&stack), &config, &[]);
     assert!(output.status.success(), "{output:?}");
     let preview = String::from_utf8(output.stdout).unwrap();
     assert!(
@@ -329,7 +338,7 @@ fn whole_file_preview_redacts_unrelated_values_in_minified_json() {
         "schema_version: 1\nservers:\n  service:\n    config: {command: new-tool}\n",
     )
     .unwrap();
-    let output = run("use", Some(&stack), &config, &["--dry-run"]);
+    let output = run("diff", Some(&stack), &config, &[]);
     assert!(output.status.success(), "{output:?}");
     let preview = String::from_utf8(output.stdout).unwrap();
     assert!(preview.contains("@@ -1 +1,"), "{preview}");
@@ -363,7 +372,7 @@ fn claude_preview_and_write_leave_unrelated_json_text_untouched() {
         "schema_version: 1\nservers:\n  service:\n    config: {command: new-tool}\n",
     )
     .unwrap();
-    let output = run("use", Some(&stack), &config, &["--dry-run"]);
+    let output = run("diff", Some(&stack), &config, &[]);
     assert!(output.status.success(), "{output:?}");
     let preview = String::from_utf8(output.stdout).unwrap();
     assert!(preview.contains("@@ -6 +6 @@"), "{preview}");
@@ -459,8 +468,9 @@ fn claude_previews_follow_shared_ansi_color_modes() {
         let colored = execute(&["--color", "always"], None);
         assert!(colored.status.success(), "{colored:?}");
         let text = String::from_utf8(colored.stdout).unwrap();
-        assert!(
+        assert_eq!(
             text.contains(&format!("\x1b[36m--- {}\x1b[0m", config.display())),
+            operation == "diff",
             "{text}"
         );
         assert!(text.contains("\x1b[32m  + Added: \"new\"\x1b[0m"), "{text}");

@@ -41,10 +41,8 @@ fn codex_shows_changes_before_requiring_approval() {
     let plan = String::from_utf8(output.stdout).unwrap();
     assert!(plan.contains("  + Added: \"new\"\n"), "{plan}");
     assert!(plan.contains("  - Deleted: \"old\"\n"), "{plan}");
-    assert!(
-        plan.contains(&format!("--- {}", config.display())),
-        "{plan}"
-    );
+    assert!(!plan.contains("--- "), "{plan}");
+    assert!(!plan.contains("@@ "), "{plan}");
     assert!(plan.trim_end().ends_with("- Deleted: \"old\""), "{plan}");
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     assert!(!dir.path().join("config.toml.~1~").exists());
@@ -64,7 +62,9 @@ fn preliminary_secret_preview_keeps_other_credentials_redacted() {
     let output = execute(&stack, &config, &["-y"]);
     assert!(!output.status.success(), "{output:?}");
     let preview = String::from_utf8(output.stdout).unwrap();
-    assert!(preview.contains("Preliminary preview;"), "{preview}");
+    assert!(preview.contains("Preliminary changes;"), "{preview}");
+    assert!(preview.contains("  + Added: \"new\"\n"), "{preview}");
+    assert!(!preview.contains("--- "), "{preview}");
     assert!(!preview.contains("literal-preview-secret"), "{preview}");
     assert!(!preview.contains("MCPSTACK_USE_TOKEN"), "{preview}");
     assert!(!dir.path().join("config.toml.~1~").exists());
@@ -124,7 +124,7 @@ fn switches_between_files_replaces_all_servers_and_preserves_other_settings() {
 }
 
 #[test]
-fn dry_run_shows_redacted_removals_and_changes_without_any_writes() {
+fn dry_run_summarizes_removals_and_changes_without_any_writes() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.toml");
     let stack = dir.path().join("stack.yml");
@@ -141,10 +141,8 @@ fn dry_run_shows_redacted_removals_and_changes_without_any_writes() {
     assert!(diff.contains("  + Added: \"added\"\n"), "{diff}");
     assert!(diff.contains("  ~ Modified: \"shared\"\n"), "{diff}");
     assert!(diff.contains("  - Deleted: \"removed\"\n"), "{diff}");
-    assert!(diff.contains("-[mcp_servers.removed]"), "{diff}");
-    assert!(diff.contains("+[mcp_servers.added]"), "{diff}");
-    assert!(diff.contains("+command = \"after\""), "{diff}");
-    assert!(diff.contains("<redacted>"), "{diff}");
+    assert!(!diff.contains("--- "), "{diff}");
+    assert!(!diff.contains("@@ "), "{diff}");
     for secret in [
         "fixture-removal-secret",
         "fixture-old-secret",
@@ -160,7 +158,11 @@ fn dry_run_shows_redacted_removals_and_changes_without_any_writes() {
     std::fs::write(&stack, "schema_version: 1\nservers: {}\n").unwrap();
     let output = execute(&stack, &config, &["--dry-run"]);
     assert!(output.status.success(), "{output:?}");
-    assert!(String::from_utf8_lossy(&output.stdout).contains("-[mcp_servers.removed]"));
+    let plan = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        plan.contains("  - Deleted: \"removed\", \"shared\"\n"),
+        "{plan}"
+    );
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
 }
 
@@ -229,7 +231,7 @@ fn rejects_invalid_stacks_missing_secrets_and_unapproved_switches_without_writes
             assert!(plan.contains("  - Deleted: \"keep\"\n"), "{plan}");
         } else if document.contains("MCPSTACK_USE_TOKEN") {
             let plan = String::from_utf8_lossy(&output.stdout);
-            assert!(plan.contains("Preliminary preview;"), "{plan}");
+            assert!(plan.contains("Preliminary changes;"), "{plan}");
         } else {
             assert!(output.stdout.is_empty());
         }
