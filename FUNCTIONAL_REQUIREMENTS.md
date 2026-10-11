@@ -244,7 +244,7 @@ Transactional mode must not silently commit a partially installed stack.
 ### Secrets
 
 [*] Masked literal fields use `{"$env":"VARIABLE"}` in configuration definitions or
-`{env: VARIABLE}` in portable secret fields. Resolve them from the shell or hidden
+`{value_env: VARIABLE}` in portable secret fields. Resolve them from the shell or hidden
 interactive input, caching repeated references. Missing values fail when prompting
 is unavailable, including actual imports with `-y`. Both preview modes can prompt
 for missing values and always compare real values.
@@ -252,7 +252,9 @@ for missing values and always compare real values.
 Native `env_vars`, `bearer_token_env_var`, and `env_http_headers` retain their runtime
 bindings without embedding values. Missing local runtime variables warn; remote
 bindings are not checked against the local shell. Masking does not convert literal
-fields into runtime bindings. Export recognition and exposure are described under
+fields into runtime bindings. `{env: VARIABLE}` remains a runtime binding in portable
+headers; `{value_env: VARIABLE}` restores a masked literal during import. Export
+recognition and exposure are described under
 [Codex export](#codex-export). Additional secret providers remain Phase 2 work.
 
 ## Open decisions
@@ -340,7 +342,7 @@ Other platforms reject import safely.
 
 `codex export` reads the default Codex TOML config and prints client-independent server
 entries as portable YAML `transport` definitions on stdout. In noninteractive use,
-credential values become `{env: MCPSTACK_SERVER_FIELD}` references. Recognition uses credential field names
+credential values become `{value_env: MCPSTACK_SERVER_FIELD}` references. Recognition uses credential field names
 (token, secret, password, API/access/private key), authorization/cookie headers,
 and named token arguments (`--token VALUE` or `--token=VALUE`). Nested credential
 fields and matching environment variable names are covered. Commands, URLs,
@@ -377,7 +379,9 @@ filesystem writes support Unix and Windows.
 
 Export omits `sandbox_mode` and `approval_policy` when they appear directly in an
 MCP server definition. These policy fields are not part of the exported server
-stack; other unsupported server fields still fail validation.
+stack; Codex import/use preserve their existing values for servers with the same
+name. Permission fields also remain in the target unless `--include-permissions`
+requests restoration. Other unsupported server fields still fail validation.
 
 ### Codex import
 

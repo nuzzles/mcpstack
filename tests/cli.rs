@@ -440,7 +440,7 @@ fn authorization_header_is_not_misclassified_as_bearer_binding() {
         if exposed {
             assert_eq!(auth, "Bearer fixture-value");
         } else {
-            assert!(auth["env"].is_string());
+            assert!(auth["value_env"].is_string());
             assert!(auth.get("prefix").is_none());
             assert!(!String::from_utf8_lossy(&output.stdout).contains("fixture-value"));
         }
@@ -505,6 +505,73 @@ fn codex_permissions_opt_in_round_trip_preserves_modes() {
         config["mcp_servers"]["example"]["tools"]["read"]["approval_mode"].as_str(),
         Some("prompt")
     );
+}
+
+#[test]
+fn codex_export_all_use_round_trip_has_no_diff_with_matching_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    let stack = dir.path().join("stack.yml");
+    let original = "[mcp_servers.notion]\nurl='https://example.com/mcp'\nsandbox_mode='workspace-write'\napproval_policy='on-request'\n[mcp_servers.obsidian]\nurl='https://example.com/obsidian'\ndefault_tools_approval_mode='approve'\nhttp_headers={ Authorization='Bearer fixture-secret' }\n";
+    std::fs::write(&config, original).unwrap();
+    let exported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["--non-interactive", "codex", "export", "--all", "--config"])
+        .arg(&config)
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(exported.status.success(), "{exported:?}");
+    let value: Value = yaml_serde::from_slice(&exported.stdout).unwrap();
+    let variable =
+        value["servers"]["obsidian"]["transport"]["headers"]["Authorization"]["value_env"]
+            .as_str()
+            .unwrap();
+    assert_eq!(
+        value["servers"]["obsidian"]["permissions"]["default_mode"],
+        "approve"
+    );
+    std::fs::write(&stack, exported.stdout).unwrap();
+    for flags in [vec![], vec!["--include-permissions"]] {
+        let result = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["--non-interactive", "codex", "use"])
+            .arg(&stack)
+            .arg("--config")
+            .arg(&config)
+            .arg("--dry-run")
+            .args(flags)
+            .env(variable, "Bearer fixture-secret")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("No changes"),
+            "{result:?}"
+        );
+        assert!(
+            !String::from_utf8_lossy(&result.stdout).contains("@@"),
+            "{result:?}"
+        );
+    }
+    let changed = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["--non-interactive", "codex", "use"])
+        .arg(&stack)
+        .arg("--config")
+        .arg(&config)
+        .arg("--dry-run")
+        .env(variable, "Bearer different-fixture-secret")
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(changed.status.success(), "{changed:?}");
+    assert!(String::from_utf8_lossy(&changed.stdout).contains("@@"));
+    assert!(!String::from_utf8_lossy(&changed.stdout).contains("different-fixture-secret"));
+    assert!(!String::from_utf8_lossy(&changed.stdout).contains("fixture-secret"));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    assert!(!dir.path().join("config.toml.~1~").exists());
 }
 
 #[test]
@@ -609,7 +676,7 @@ fn codex_export_prints_a_stack_without_changing_values_or_files() {
     );
     assert_eq!(
         value["servers"]["local"]["transport"]["env"]["TOKEN"],
-        serde_json::json!({"env":"MCPSTACK_LOCAL_ENV_TOKEN"})
+        serde_json::json!({"value_env":"MCPSTACK_LOCAL_ENV_TOKEN"})
     );
     assert_eq!(std::fs::read_to_string(&config).unwrap(), document);
     std::fs::write(&config, "invalid TOML fixture-secret").unwrap();
@@ -846,7 +913,7 @@ fn export_logs_respect_verbosity_filters_and_color() {
         let value: Value = yaml_serde::from_slice(&output.stdout).unwrap();
         assert_eq!(
             value["servers"]["example"]["transport"]["env"]["TOKEN"],
-            serde_json::json!({"env":"MCPSTACK_EXAMPLE_ENV_TOKEN"})
+            serde_json::json!({"value_env":"MCPSTACK_EXAMPLE_ENV_TOKEN"})
         );
         assert!(!output.stdout.contains(&0x1b));
         let log = String::from_utf8_lossy(&output.stderr);
@@ -1078,9 +1145,9 @@ fn codex_export_import_round_trip_preserves_supported_fields() {
     std::fs::write(&fixture.file, &exported.stdout).unwrap();
     let stack: serde_json::Value = yaml_serde::from_slice(&exported.stdout).unwrap();
     let config = &stack["servers"]["process"]["transport"];
-    let argument = config["args"][0]["env"].as_str().unwrap();
-    let api_key = config["env"]["API_KEY"]["env"].as_str().unwrap();
-    let authorization = stack["servers"]["remote"]["transport"]["headers"]["X-Secret"]["env"]
+    let argument = config["args"][0]["value_env"].as_str().unwrap();
+    let api_key = config["env"]["API_KEY"]["value_env"].as_str().unwrap();
+    let authorization = stack["servers"]["remote"]["transport"]["headers"]["X-Secret"]["value_env"]
         .as_str()
         .unwrap();
     let imported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
@@ -1101,14 +1168,6 @@ fn codex_export_import_round_trip_preserves_supported_fields() {
     let after: toml::Table = toml::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
     for (name, definition) in before["mcp_servers"].as_table().unwrap() {
         for (field, expected) in definition.as_table().unwrap() {
-            if field == "http_headers" {
-                assert!(after["mcp_servers"][name].get("http_headers").is_none());
-                assert_eq!(
-                    after["mcp_servers"][name]["env_http_headers"]["X-Secret"].as_str(),
-                    Some(authorization)
-                );
-                continue;
-            }
             let actual = &after["mcp_servers"][name][field];
             if field == "env_http_headers" {
                 assert_eq!(actual["X-Auth"], expected["X-Auth"]);

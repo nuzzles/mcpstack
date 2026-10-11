@@ -213,6 +213,7 @@ impl<'de> Deserialize<'de> for Transport {
 pub enum ValueSource {
     Literal(String),
     Environment(EnvironmentReference),
+    ResolvedEnvironment(ResolvedEnvironmentReference),
     PrefixedEnvironment(PrefixedEnvironmentReference),
 }
 
@@ -220,6 +221,13 @@ pub enum ValueSource {
 #[serde(deny_unknown_fields)]
 pub struct EnvironmentReference {
     pub env: String,
+}
+
+/// Supply a masked literal from the environment during import, not at client runtime.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResolvedEnvironmentReference {
+    pub value_env: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -461,6 +469,10 @@ impl ValueSource {
     fn validate_reference(&self) -> Result<(), ValidationError> {
         match self {
             Self::Environment(reference) => reference.validate(),
+            Self::ResolvedEnvironment(reference) => EnvironmentReference {
+                env: reference.value_env.clone(),
+            }
+            .validate(),
             Self::PrefixedEnvironment(reference) => {
                 EnvironmentReference {
                     env: reference.env.clone(),

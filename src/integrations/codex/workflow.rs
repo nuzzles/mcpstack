@@ -145,6 +145,44 @@ pub(super) fn apply_permissions(stack: &Stack, definitions: &mut BTreeMap<String
     }
 }
 
+/// Fields excluded from portable stacks remain owned by the destination Codex config.
+/// Permission fields are copied only when the operation did not request a policy restore.
+pub(super) fn retain_target_policy(
+    snapshot: &Snapshot,
+    stack: &Stack,
+    definitions: &mut BTreeMap<String, toml::Table>,
+    include_permissions: bool,
+) -> Result<(), super::config::FileError> {
+    let existing = snapshot.servers()?;
+    let Stack::V1(stack) = stack;
+    for (name, definition) in definitions {
+        let Some(current) = existing.get(name) else {
+            continue;
+        };
+        for field in ["sandbox_mode", "approval_policy"] {
+            if let Some(value) = current.get(field) {
+                definition.entry(field).or_insert_with(|| value.clone());
+            }
+        }
+        let restoring_permissions = include_permissions
+            && matches!(
+                stack.servers.get(name),
+                Some(Server::Portable {
+                    permissions: Some(_),
+                    ..
+                })
+            );
+        if !restoring_permissions {
+            for field in ["default_tools_approval_mode", "tools"] {
+                if let Some(value) = current.get(field) {
+                    definition.entry(field).or_insert_with(|| value.clone());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn mode_text(mode: ApprovalMode) -> &'static str {
     match mode {
         ApprovalMode::Auto => "auto",
@@ -290,6 +328,7 @@ pub(crate) async fn run_import(
         return Err(AppError::ImportApprovalCancelled);
     }
     let mut definitions = prepared?;
+    retain_target_policy(&snapshot, &stack, &mut definitions, include_permissions)?;
     if include_permissions {
         apply_permissions(&stack, &mut definitions);
     }
@@ -403,6 +442,7 @@ pub(crate) async fn run_use(
         return Err(AppError::ImportApprovalCancelled);
     }
     let mut definitions = prepared?;
+    retain_target_policy(&snapshot, &stack, &mut definitions, include_permissions)?;
     if include_permissions {
         apply_permissions(&stack, &mut definitions);
     }

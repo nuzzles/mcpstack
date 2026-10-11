@@ -43,6 +43,12 @@ pub(crate) async fn run(
         return Err(AppError::ImportApprovalCancelled);
     }
     let mut definitions = prepared?;
+    super::workflow::retain_target_policy(
+        &snapshot,
+        &stack,
+        &mut definitions,
+        include_permissions,
+    )?;
     if include_permissions {
         super::workflow::apply_permissions(&stack, &mut definitions);
     }

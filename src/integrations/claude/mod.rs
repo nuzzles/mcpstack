@@ -199,6 +199,7 @@ fn source(value: &ValueSource, resolver: &mut SecretResolver) -> Result<String, 
     match value {
         ValueSource::Literal(v) => Ok(v.clone()),
         ValueSource::Environment(r) => resolver.resolve(&r.env).ok_or(Error::Secret),
+        ValueSource::ResolvedEnvironment(r) => resolver.resolve(&r.value_env).ok_or(Error::Secret),
         ValueSource::PrefixedEnvironment(r) => resolver
             .resolve(&r.env)
             .map(|v| format!("{}{v}", r.prefix))
@@ -399,6 +400,9 @@ fn prepare(
                                 ValueSource::Environment(reference) => {
                                     environment_reference(&reference.env, name)?
                                 }
+                                ValueSource::ResolvedEnvironment(reference) => resolver
+                                    .resolve(&reference.value_env)
+                                    .ok_or(Error::Secret)?,
                                 ValueSource::PrefixedEnvironment(reference) => format!(
                                     "{}{}",
                                     reference.prefix,

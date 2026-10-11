@@ -47,9 +47,9 @@ struct Definition {
     env_http_headers: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     bearer_token_env_var: Option<String>,
-    #[serde(default = "enabled_default")]
+    #[serde(default = "enabled_default", skip_serializing_if = "is_enabled")]
     enabled: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     startup_timeout_sec: Option<f64>,
@@ -62,6 +62,12 @@ struct Definition {
 }
 fn enabled_default() -> bool {
     true
+}
+fn is_enabled(value: &bool) -> bool {
+    *value
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn secret(
@@ -79,6 +85,7 @@ fn source(
     match value {
         ValueSource::Literal(value) => Ok(value.clone()),
         ValueSource::Environment(reference) => secret(&reference.env, lookup),
+        ValueSource::ResolvedEnvironment(reference) => secret(&reference.value_env, lookup),
         ValueSource::PrefixedEnvironment(reference) => Ok(format!(
             "{}{}",
             reference.prefix,
@@ -184,6 +191,12 @@ pub fn prepare(
                                         definition
                                             .env_http_headers
                                             .insert(key.clone(), reference.env.clone());
+                                    }
+                                    ValueSource::ResolvedEnvironment(reference) => {
+                                        definition.http_headers.insert(
+                                            key.clone(),
+                                            secret(&reference.value_env, &mut lookup)?,
+                                        );
                                     }
                                     ValueSource::PrefixedEnvironment(reference)
                                         if key.eq_ignore_ascii_case("Authorization")

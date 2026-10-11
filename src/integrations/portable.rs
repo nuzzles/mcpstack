@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use crate::schema::v1::{
-    ApprovalMode, EnvironmentReference, Permissions, PrefixedEnvironmentReference, Settings,
-    Transport, ValueSource,
+    ApprovalMode, EnvironmentReference, Permissions, PrefixedEnvironmentReference,
+    ResolvedEnvironmentReference, Settings, Transport, ValueSource,
 };
 use crate::schema::{Server, StackV1};
 
@@ -221,7 +221,11 @@ fn source(value: Value, recognize_template: bool) -> Option<ValueSource> {
     if value.as_object()?.len() != 1 {
         return None;
     }
-    Some(reference(env))
+    Some(ValueSource::ResolvedEnvironment(
+        ResolvedEnvironmentReference {
+            value_env: env.into(),
+        },
+    ))
 }
 
 fn codex_transport(fields: &mut Map<String, Value>, name: &str) -> Result<Transport, String> {
