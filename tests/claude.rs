@@ -142,11 +142,32 @@ fn credential_only_changes_remain_visible_in_both_previews() {
         assert!(output.status.success(), "{output:?}");
         let preview = String::from_utf8(output.stdout).unwrap();
         assert!(preview.contains("<redacted: changed>"), "{preview}");
+        assert!(preview.contains(&format!("--- {} (mcpServers)", config.display())));
+        assert!(!preview.contains("\"$env\""), "{preview}");
         assert!(!preview.contains("old-fixture"));
         assert!(!preview.contains("new-fixture"));
     }
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     assert!(!dir.path().join("claude.json.~1~").exists());
+}
+
+#[test]
+fn preview_shows_masked_literal_instead_of_synthetic_env_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let stack = dir.path().join("stack.yml");
+    let original = r#"{"mcpServers":{"github":{"type":"http","url":"https://example.com/mcp","headers":{"Authorization":"Bearer fixture-secret"}}}}"#;
+    std::fs::write(&config, original).unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  github:\n    transport:\n      type: http\n      url: https://example.com/mcp\n      headers: {Authorization: {env: GITHUB_TOKEN, prefix: 'Bearer '}}\n").unwrap();
+    let output = run("use", Some(&stack), &config, &["--dry-run"]);
+    assert!(output.status.success(), "{output:?}");
+    let preview = String::from_utf8(output.stdout).unwrap();
+    assert!(preview.contains(&format!("--- {} (mcpServers)", config.display())));
+    assert!(preview.contains("<redacted>"), "{preview}");
+    assert!(preview.contains("Bearer ${GITHUB_TOKEN}"), "{preview}");
+    assert!(!preview.contains("$env"), "{preview}");
+    assert!(!preview.contains("fixture-secret"), "{preview}");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
 }
 
 #[test]
@@ -191,7 +212,10 @@ fn claude_previews_follow_shared_ansi_color_modes() {
         assert!(colored.status.success(), "{colored:?}");
         let text = String::from_utf8(colored.stdout).unwrap();
         assert!(
-            text.contains("\x1b[36m--- current MCP servers\x1b[0m"),
+            text.contains(&format!(
+                "\x1b[36m--- {} (mcpServers)\x1b[0m",
+                config.display()
+            )),
             "{text}"
         );
         assert!(text.contains("\x1b[32m+"), "{text}");

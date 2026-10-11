@@ -522,8 +522,21 @@ fn mark_changed_secrets(
         _ => {}
     }
 }
+
+fn redact_preview_markers(value: &mut Value) {
+    if is_masked(value) {
+        *value = Value::String("<redacted>".into());
+        return;
+    }
+    match value {
+        Value::Object(values) => values.values_mut().for_each(redact_preview_markers),
+        Value::Array(values) => values.iter_mut().for_each(redact_preview_markers),
+        _ => {}
+    }
+}
 fn preview(
     output: &mut impl Write,
+    path: &Path,
     before: BTreeMap<String, Value>,
     after: BTreeMap<String, Value>,
     colored: bool,
@@ -539,11 +552,15 @@ fn preview(
             mark_changed_secrets(before_value, after_value, before_mask, after_mask);
         }
     }
+    for value in before_mask.values_mut().chain(after_mask.values_mut()) {
+        redact_preview_markers(value);
+    }
     let before = serde_json::to_string_pretty(&before_mask).map_err(|_| Error::Config)?;
     let after = serde_json::to_string_pretty(&after_mask).map_err(|_| Error::Config)?;
+    let label = format!("{} (mcpServers)", path.display());
     let diff = similar::TextDiff::from_lines(&before, &after)
         .unified_diff()
-        .header("current MCP servers", "proposed MCP servers")
+        .header(&label, &label)
         .to_string();
     super::diff_output::write_diff(output, &diff, colored)?;
     Ok(())
@@ -733,7 +750,7 @@ impl ClientAdapter for Claude {
         } else {
             None
         };
-        let (_, _, config) = snapshot(args.config, false).await?;
+        let (config_path, _, config) = snapshot(args.config, false).await?;
         let stack = read_stack(&args.file).await?;
         let incoming = prepared(
             &stack,
@@ -743,7 +760,7 @@ impl ClientAdapter for Claude {
         let mut proposed = servers(&config);
         let before = proposed.clone();
         proposed.extend(incoming);
-        preview(output, before, proposed, colored)?;
+        preview(output, &config_path, before, proposed, colored)?;
         if let Some(path) = permission_path {
             let settings = permissions::Snapshot::read(&path).await?;
             let names = stack.servers.keys().cloned().collect();
@@ -833,7 +850,7 @@ impl ClientAdapter for Claude {
         }
         if dry_run {
             if proposed != before {
-                preview(output, before, proposed, colored)?;
+                preview(output, &config_path, before, proposed, colored)?;
             }
             if permissions_changed {
                 writeln!(output, "Permission rules would change.")?;
@@ -911,7 +928,7 @@ impl ClientAdapter for Claude {
         }
         if dry_run {
             if proposed != before {
-                preview(output, before, proposed, colored)?;
+                preview(output, &config_path, before, proposed, colored)?;
             }
             if permissions_changed {
                 writeln!(output, "Permission rules would change.")?;
