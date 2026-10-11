@@ -57,6 +57,38 @@ fn user_config_round_trip_and_switch_preserve_unrelated_settings() {
 }
 
 #[test]
+fn claude_export_then_use_omits_empty_optional_fields_without_a_diff() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let stack = dir.path().join("stack.yml");
+    let original = r#"{"theme":"dark","mcpServers":{"linear-server":{"type":"http","url":"https://example.com/mcp"},"plain":{"command":"plain-tool"},"explicit":{"type":"stdio","command":"explicit-tool","args":[],"env":{}},"empty-headers":{"type":"http","url":"https://example.com/other","headers":{}}}}"#;
+    std::fs::write(&config, original).unwrap();
+    let exported = run("export", None, &config, &[]);
+    assert!(exported.status.success(), "{exported:?}");
+    std::fs::write(&stack, exported.stdout).unwrap();
+    let preview = run("use", Some(&stack), &config, &["--dry-run"]);
+    assert!(preview.status.success(), "{preview:?}");
+    assert!(
+        String::from_utf8_lossy(&preview.stdout).contains("No changes"),
+        "{preview:?}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&preview.stdout).contains("@@"),
+        "{preview:?}"
+    );
+    let diff = run("diff", Some(&stack), &config, &[]);
+    assert!(diff.status.success(), "{diff:?}");
+    assert!(
+        !String::from_utf8_lossy(&diff.stdout).contains("@@"),
+        "{diff:?}"
+    );
+    let applied = run("use", Some(&stack), &config, &["-y"]);
+    assert!(applied.status.success(), "{applied:?}");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    assert!(!dir.path().join("claude.json.~1~").exists());
+}
+
+#[test]
 #[cfg(any(unix, windows))]
 fn masked_export_and_invalid_import_do_not_expose_or_write_secrets() {
     let dir = tempfile::tempdir().unwrap();

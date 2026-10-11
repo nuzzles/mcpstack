@@ -169,6 +169,37 @@ fn with_servers(mut config: Value, values: &BTreeMap<String, Value>) -> Value {
     );
     config
 }
+fn canonical_server(server: &Value) -> Value {
+    let mut canonical = server.clone();
+    let Some(fields) = canonical.as_object_mut() else {
+        return canonical;
+    };
+    for field in ["args", "env", "headers"] {
+        if fields.get(field).is_some_and(|value| {
+            value.as_array().is_some_and(Vec::is_empty)
+                || value.as_object().is_some_and(Map::is_empty)
+        }) {
+            fields.remove(field);
+        }
+    }
+    if fields.contains_key("command") && fields.get("type").and_then(Value::as_str) == Some("stdio")
+    {
+        fields.remove("type");
+    }
+    canonical
+}
+fn preserve_equivalent_servers(
+    before: &BTreeMap<String, Value>,
+    proposed: &mut BTreeMap<String, Value>,
+) {
+    for (name, definition) in proposed {
+        if let Some(current) = before.get(name)
+            && canonical_server(current) == canonical_server(definition)
+        {
+            *definition = current.clone();
+        }
+    }
+}
 fn resolve(value: &ConfigValue, resolver: &mut SecretResolver) -> Result<Value, Error> {
     Ok(match value {
         ConfigValue::Object(object) if object.contains_key("$env") => {
@@ -385,7 +416,29 @@ fn prepare(
                         if !env_vars.is_empty() || cwd.is_some() {
                             return Err(Error::Unsupported);
                         }
-                        serde_json::json!({"type":"stdio", "command":command, "args": args.iter().map(|v| source(v, resolver)).collect::<Result<Vec<_>,_>>()?, "env": env.iter().map(|(k,v)| Ok((k.clone(),source(v, resolver)?))).collect::<Result<BTreeMap<_,_>,Error>>()?})
+                        let mut definition = serde_json::json!({"type":"stdio", "command":command});
+                        let object = definition.as_object_mut().ok_or(Error::Config)?;
+                        if !args.is_empty() {
+                            object.insert(
+                                "args".into(),
+                                serde_json::json!(
+                                    args.iter()
+                                        .map(|v| source(v, resolver))
+                                        .collect::<Result<Vec<_>, _>>()?
+                                ),
+                            );
+                        }
+                        if !env.is_empty() {
+                            object.insert(
+                                "env".into(),
+                                serde_json::json!(
+                                    env.iter()
+                                        .map(|(k, v)| Ok((k.clone(), source(v, resolver)?)))
+                                        .collect::<Result<BTreeMap<_, _>, Error>>()?
+                                ),
+                            );
+                        }
+                        definition
                     }
                     Transport::Http { url, headers } | Transport::Sse { url, headers } => {
                         let kind = if matches!(transport, Transport::Http { .. }) {
@@ -411,7 +464,14 @@ fn prepare(
                             };
                             add_header(&mut mapped_headers, header, Value::String(text), name)?;
                         }
-                        serde_json::json!({"type":kind,"url":url,"headers":mapped_headers})
+                        let mut definition = serde_json::json!({"type":kind,"url":url});
+                        if !mapped_headers.is_empty() {
+                            definition
+                                .as_object_mut()
+                                .ok_or(Error::Config)?
+                                .insert("headers".into(), Value::Object(mapped_headers));
+                        }
+                        definition
                     }
                     _ => return Err(Error::Unsupported),
                 }
@@ -760,6 +820,7 @@ impl ClientAdapter for Claude {
         let mut proposed = servers(&config);
         let before = proposed.clone();
         proposed.extend(incoming);
+        preserve_equivalent_servers(&before, &mut proposed);
         preview(output, &config_path, before, proposed, colored)?;
         if let Some(path) = permission_path {
             let settings = permissions::Snapshot::read(&path).await?;
@@ -811,7 +872,10 @@ impl ClientAdapter for Claude {
         let mut proposed = before.clone();
         let mut approved = std::collections::BTreeSet::new();
         for (name, definition) in incoming {
-            if proposed.get(&name) == Some(&definition) {
+            if proposed
+                .get(&name)
+                .is_some_and(|existing| canonical_server(existing) == canonical_server(&definition))
+            {
                 approved.insert(name);
                 continue;
             }
@@ -898,7 +962,7 @@ impl ClientAdapter for Claude {
         };
         let (config_path, file, config) = snapshot(args.config, false).await?;
         let stack = read_stack(&args.file).await?;
-        let proposed = prepared(
+        let mut proposed = prepared(
             &stack,
             dry_run,
             (dry_run || !auto_approve)
@@ -907,6 +971,7 @@ impl ClientAdapter for Claude {
                 && stderr().is_terminal(),
         )?;
         let before = servers(&config);
+        preserve_equivalent_servers(&before, &mut proposed);
         let permission_change = if let Some(path) = permission_path {
             let settings = permissions::Snapshot::read(&path).await?;
             let names = stack.servers.keys().cloned().collect();
