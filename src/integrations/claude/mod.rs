@@ -613,33 +613,149 @@ fn collect_private_values(source: &Value, masked: &Value, values: &mut BTreeMap<
     }
 }
 
-fn collect_unrelated_values(config: &Value, values: &mut BTreeMap<String, String>) {
-    fn all_strings(value: &Value, values: &mut BTreeMap<String, String>) {
-        match value {
-            Value::String(text) => {
-                values.insert(text.clone(), "<redacted>".into());
-            }
-            Value::Number(number) => {
-                values.insert(number.to_string(), "<redacted>".into());
-            }
-            Value::Array(items) => items.iter().for_each(|item| all_strings(item, values)),
-            Value::Object(fields) => {
-                for (key, value) in fields {
-                    values.insert(key.clone(), "<redacted>".into());
-                    all_strings(value, values);
+struct RootField {
+    name: String,
+    start: usize,
+    value_start: usize,
+    value_end: usize,
+}
+
+fn skip_space(bytes: &[u8], cursor: &mut usize) {
+    while bytes.get(*cursor).is_some_and(u8::is_ascii_whitespace) {
+        *cursor += 1;
+    }
+}
+
+fn string_end(bytes: &[u8], start: usize) -> Result<usize, Error> {
+    if bytes.get(start) != Some(&b'"') {
+        return Err(Error::Config);
+    }
+    let mut cursor = start + 1;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'\\' => cursor += 2,
+            b'"' => return Ok(cursor + 1),
+            _ => cursor += 1,
+        }
+    }
+    Err(Error::Config)
+}
+
+fn value_end(bytes: &[u8], start: usize) -> Result<usize, Error> {
+    match bytes.get(start) {
+        Some(b'"') => string_end(bytes, start),
+        Some(b'{' | b'[') => {
+            let mut depth = 0;
+            let mut cursor = start;
+            while cursor < bytes.len() {
+                match bytes[cursor] {
+                    b'"' => cursor = string_end(bytes, cursor)?,
+                    b'{' | b'[' => {
+                        depth += 1;
+                        cursor += 1;
+                    }
+                    b'}' | b']' => {
+                        depth -= 1;
+                        cursor += 1;
+                        if depth == 0 {
+                            return Ok(cursor);
+                        }
+                    }
+                    _ => cursor += 1,
                 }
             }
-            _ => {}
+            Err(Error::Config)
         }
-    }
-    if let Some(root) = config.as_object() {
-        for (key, value) in root {
-            if key != "mcpServers" {
-                values.insert(key.clone(), "<redacted>".into());
-                all_strings(value, values);
+        Some(_) => {
+            let mut cursor = start;
+            while bytes
+                .get(cursor)
+                .is_some_and(|byte| !matches!(byte, b',' | b'}' | b'\n' | b'\r' | b' ' | b'\t'))
+            {
+                cursor += 1;
             }
+            Ok(cursor)
+        }
+        None => Err(Error::Config),
+    }
+}
+
+// The configuration has already been parsed and validated. Locate only root
+// fields so nested project mcpServers never affect user-scope operations.
+fn root_fields(source: &str) -> Result<Vec<RootField>, Error> {
+    let bytes = source.as_bytes();
+    let mut cursor = 0;
+    skip_space(bytes, &mut cursor);
+    if bytes.get(cursor) != Some(&b'{') {
+        return Err(Error::Config);
+    }
+    cursor += 1;
+    let mut fields = Vec::new();
+    loop {
+        skip_space(bytes, &mut cursor);
+        if bytes.get(cursor) == Some(&b'}') {
+            return Ok(fields);
+        }
+        let start = cursor;
+        let key_end = string_end(bytes, start)?;
+        let name = serde_json::from_str(&source[start..key_end]).map_err(|_| Error::Config)?;
+        cursor = key_end;
+        skip_space(bytes, &mut cursor);
+        if bytes.get(cursor) != Some(&b':') {
+            return Err(Error::Config);
+        }
+        cursor += 1;
+        skip_space(bytes, &mut cursor);
+        let value_start = cursor;
+        let end = value_end(bytes, cursor)?;
+        if fields.iter().any(|field: &RootField| field.name == name) {
+            return Err(Error::Config);
+        }
+        fields.push(RootField {
+            name,
+            start,
+            value_start,
+            value_end: end,
+        });
+        cursor = end;
+        skip_space(bytes, &mut cursor);
+        match bytes.get(cursor) {
+            Some(b',') => cursor += 1,
+            Some(b'}') => return Ok(fields),
+            _ => return Err(Error::Config),
         }
     }
+}
+
+fn proposed_config_text(original: &str, values: &BTreeMap<String, Value>) -> Result<String, Error> {
+    if original.is_empty() {
+        return serialized_config(&with_servers(Value::Object(Map::new()), values));
+    }
+    let fields = root_fields(original)?;
+    let existing = fields.iter().find(|field| field.name == "mcpServers");
+    let indent = existing.map_or(0, |field| {
+        let line = &original[original[..field.start]
+            .rfind('\n')
+            .map_or(0, |index| index + 1)..field.start];
+        line.bytes().take_while(|byte| *byte == b' ').count()
+    });
+    let mut rendered = serde_json::to_string_pretty(values).map_err(|_| Error::Config)?;
+    if indent > 0 {
+        rendered = rendered.replace('\n', &format!("\n{}", " ".repeat(indent)));
+    }
+    if let Some(field) = existing {
+        let mut output = original.to_owned();
+        output.replace_range(field.value_start..field.value_end, &rendered);
+        return Ok(output);
+    }
+    let close = original.rfind('}').ok_or(Error::Config)?;
+    let mut output = original.to_owned();
+    if let Some(last) = fields.last() {
+        output.insert_str(last.value_end, &format!(",\"mcpServers\":{rendered}"));
+    } else {
+        output.insert_str(close, &format!("\"mcpServers\":{rendered}"));
+    }
+    Ok(output)
 }
 
 /// Replace complete JSON value tokens, including escaped string spellings, without
@@ -700,6 +816,33 @@ fn redact_json_values(source: &str, values: &BTreeMap<String, String>) -> String
     redacted
 }
 
+fn redact_preview_text(source: &str, values: &BTreeMap<String, String>) -> Result<String, Error> {
+    let mut output = String::new();
+    let mut copied = 0;
+    for field in root_fields(source)? {
+        output.push_str(&source[copied..field.start]);
+        if field.name == "mcpServers" {
+            output.push_str(&source[field.start..field.value_start]);
+            output.push_str(&redact_json_values(
+                &source[field.value_start..field.value_end],
+                values,
+            ));
+        } else {
+            output.push_str("<unrelated setting omitted>");
+            for _ in 0..source[field.start..field.value_end]
+                .bytes()
+                .filter(|byte| *byte == b'\n')
+                .count()
+            {
+                output.push('\n');
+            }
+        }
+        copied = field.value_end;
+    }
+    output.push_str(&source[copied..]);
+    Ok(output)
+}
+
 fn serialized_config(config: &Value) -> Result<String, Error> {
     let mut text = serde_json::to_string_pretty(config).map_err(|_| Error::Config)?;
     text.push('\n');
@@ -709,7 +852,6 @@ fn preview(
     output: &mut impl Write,
     path: &Path,
     file: &io::Snapshot,
-    config: &Value,
     before: BTreeMap<String, Value>,
     after: BTreeMap<String, Value>,
     colored: bool,
@@ -730,8 +872,6 @@ fn preview(
     }
     let mut before_private = BTreeMap::new();
     let mut after_private = BTreeMap::new();
-    collect_unrelated_values(config, &mut before_private);
-    collect_unrelated_values(config, &mut after_private);
     for (name, value) in &before {
         if let Some(masked) = before_mask.get(name) {
             collect_private_values(value, masked, &mut before_private);
@@ -743,9 +883,13 @@ fn preview(
         }
     }
     let original = std::str::from_utf8(file.contents()).map_err(|_| Error::Config)?;
-    let proposed = serialized_config(&with_servers(config.clone(), &after))?;
-    let before_text = redact_json_values(original, &before_private);
-    let after_text = redact_json_values(&proposed, &after_private);
+    let proposed = proposed_config_text(original, &after)?;
+    let before_text = if original.is_empty() {
+        String::new()
+    } else {
+        redact_preview_text(original, &before_private)?
+    };
+    let after_text = redact_preview_text(&proposed, &after_private)?;
     let label = path.to_string_lossy();
     let diff = similar::TextDiff::from_lines(&before_text, &after_text)
         .unified_diff()
@@ -783,7 +927,8 @@ async fn snapshot(
     Ok((path, file, parsed))
 }
 async fn write_config(file: io::Snapshot, config: Value) -> Result<(), AppError> {
-    let bytes = serialized_config(&config).map_err(|_| Error::Write)?;
+    let original = std::str::from_utf8(file.contents()).map_err(|_| Error::Write)?;
+    let bytes = proposed_config_text(original, &servers(&config)).map_err(|_| Error::Write)?;
     file.replace(bytes.as_bytes())
         .await
         .map_err(|_| Error::Write)?;
@@ -963,15 +1108,7 @@ impl ClientAdapter for Claude {
         let before = proposed.clone();
         proposed.extend(incoming);
         preserve_equivalent_servers(&before, &mut proposed);
-        preview(
-            output,
-            &config_path,
-            &file,
-            &config,
-            before,
-            proposed,
-            colored,
-        )?;
+        preview(output, &config_path, &file, before, proposed, colored)?;
         if let Some(path) = permission_path {
             let settings = permissions::Snapshot::read(&path).await?;
             let names = stack.servers.keys().cloned().collect();
@@ -1064,15 +1201,7 @@ impl ClientAdapter for Claude {
         }
         if dry_run {
             if proposed != before {
-                preview(
-                    output,
-                    &config_path,
-                    &file,
-                    &config,
-                    before,
-                    proposed,
-                    colored,
-                )?;
+                preview(output, &config_path, &file, before, proposed, colored)?;
             }
             if permissions_changed {
                 writeln!(output, "Permission rules would change.")?;
@@ -1151,15 +1280,7 @@ impl ClientAdapter for Claude {
         }
         if dry_run {
             if proposed != before {
-                preview(
-                    output,
-                    &config_path,
-                    &file,
-                    &config,
-                    before,
-                    proposed,
-                    colored,
-                )?;
+                preview(output, &config_path, &file, before, proposed, colored)?;
             }
             if permissions_changed {
                 writeln!(output, "Permission rules would change.")?;

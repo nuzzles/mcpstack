@@ -270,8 +270,82 @@ fn whole_file_preview_redacts_unrelated_values_in_minified_json() {
     assert!(!preview.contains("fixture-secret"), "{preview}");
     assert!(!preview.contains("fixture\\u002dsecret"), "{preview}");
     assert!(!preview.contains("123456"), "{preview}");
-    assert!(preview.contains("<redacted>"), "{preview}");
+    assert!(preview.contains("<unrelated setting omitted>"), "{preview}");
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+}
+
+#[test]
+fn claude_preview_and_write_leave_unrelated_json_text_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let stack = dir.path().join("stack.yml");
+    let original = concat!(
+        "{\n",
+        "  \"theme\": \"dark\",\n",
+        "  \"projects\": {\"private-path\": {\"mcpServers\": {\"nested\": {\"command\": \"private-tool\"}}}},\n",
+        "  \"mcpServers\": {\n",
+        "    \"service\": {\n",
+        "      \"command\": \"old-tool\"\n",
+        "    }\n",
+        "  },\n",
+        "  \"accessKey\": \"fixture-secret\"\n",
+        "}\n"
+    );
+    std::fs::write(&config, original).unwrap();
+    std::fs::write(
+        &stack,
+        "schema_version: 1\nservers:\n  service:\n    config: {command: new-tool}\n",
+    )
+    .unwrap();
+    let output = run("use", Some(&stack), &config, &["--dry-run"]);
+    assert!(output.status.success(), "{output:?}");
+    let preview = String::from_utf8(output.stdout).unwrap();
+    assert!(preview.contains("@@ -6 +6 @@"), "{preview}");
+    assert!(
+        preview.contains("-      \"command\": \"old-tool\""),
+        "{preview}"
+    );
+    assert!(
+        preview.contains("+      \"command\": \"new-tool\""),
+        "{preview}"
+    );
+    assert!(!preview.contains("private-path"), "{preview}");
+    assert!(!preview.contains("private-tool"), "{preview}");
+    assert!(!preview.contains("fixture-secret"), "{preview}");
+    assert!(
+        !preview.contains("<unrelated setting omitted>"),
+        "{preview}"
+    );
+    let applied = run("use", Some(&stack), &config, &["-y"]);
+    assert!(applied.status.success(), "{applied:?}");
+    let written = std::fs::read_to_string(&config).unwrap();
+    assert_eq!(written, original.replace("old-tool", "new-tool"));
+}
+
+#[test]
+fn claude_adds_user_scope_servers_without_rewriting_other_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let stack = dir.path().join("stack.yml");
+    let original = "{\n  \"theme\": \"dark\",\n  \"projects\": {\"private-path\": true}\n}\n";
+    std::fs::write(&config, original).unwrap();
+    std::fs::write(
+        &stack,
+        "schema_version: 1\nservers:\n  service:\n    config: {command: new-tool}\n",
+    )
+    .unwrap();
+    let preview = run("use", Some(&stack), &config, &["--dry-run"]);
+    assert!(preview.status.success(), "{preview:?}");
+    let text = String::from_utf8(preview.stdout).unwrap();
+    assert!(!text.contains("private-path"), "{text}");
+    let applied = run("use", Some(&stack), &config, &["-y"]);
+    assert!(applied.status.success(), "{applied:?}");
+    let written = std::fs::read_to_string(&config).unwrap();
+    assert!(written.starts_with(
+        "{\n  \"theme\": \"dark\",\n  \"projects\": {\"private-path\": true},\"mcpServers\":"
+    ));
+    let parsed: serde_json::Value = serde_json::from_str(&written).unwrap();
+    assert_eq!(parsed["mcpServers"]["service"]["command"], "new-tool");
 }
 
 #[test]
