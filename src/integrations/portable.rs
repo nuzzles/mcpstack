@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use crate::schema::v1::{
-    EnvironmentReference, PrefixedEnvironmentReference, Settings, Transport, ValueSource,
+    ApprovalMode, EnvironmentReference, Permissions, PrefixedEnvironmentReference, Settings,
+    Transport, ValueSource,
 };
 use crate::schema::{Server, StackV1};
 
@@ -14,7 +15,11 @@ pub(super) enum Source {
     Claude,
 }
 
-pub(super) fn normalize(mut stack: StackV1, source: Source) -> Result<StackV1, String> {
+pub(super) fn normalize(
+    mut stack: StackV1,
+    source: Source,
+    include_permissions: bool,
+) -> Result<StackV1, String> {
     let mut converted = BTreeMap::new();
     for (name, server) in stack.servers {
         let Server::Configuration { config } = server else {
@@ -30,6 +35,11 @@ pub(super) fn normalize(mut stack: StackV1, source: Source) -> Result<StackV1, S
         let transport = match source {
             Source::Codex => codex_transport(&mut fields, &name)?,
             Source::Claude => claude_transport(&mut fields, &name)?,
+        };
+        let permissions = if matches!(source, Source::Codex) {
+            codex_permissions(&mut fields, &name, include_permissions)?
+        } else {
+            None
         };
         let settings = if matches!(source, Source::Codex) {
             let mut settings = Settings::default();
@@ -58,11 +68,6 @@ pub(super) fn normalize(mut stack: StackV1, source: Source) -> Result<StackV1, S
                 settings.disabled_tools = serde_json::from_value(value)
                     .map_err(|_| format!("{name:?}.disabled_tools"))?;
             }
-            if fields.remove("default_tools_approval_mode").is_some() {
-                tracing::warn!(
-                    "Omitting {name:?}.default_tools_approval_mode: Claude Code permissions are configured separately."
-                );
-            }
             settings
         } else {
             Settings::default()
@@ -75,6 +80,7 @@ pub(super) fn normalize(mut stack: StackV1, source: Source) -> Result<StackV1, S
             Server::Portable {
                 transport,
                 settings,
+                permissions: permissions.map(Box::new),
             },
         );
     }
@@ -83,6 +89,48 @@ pub(super) fn normalize(mut stack: StackV1, source: Source) -> Result<StackV1, S
         .validate()
         .map_err(|_| "Portable stack validation failed".to_string())?;
     Ok(stack)
+}
+
+fn codex_permissions(
+    fields: &mut Map<String, Value>,
+    name: &str,
+    include: bool,
+) -> Result<Option<Permissions>, String> {
+    let default_mode = fields
+        .remove("default_tools_approval_mode")
+        .map(|value| {
+            serde_json::from_value::<ApprovalMode>(value)
+                .map_err(|_| format!("{name:?}.default_tools_approval_mode"))
+        })
+        .transpose()?;
+    let mut tools = BTreeMap::new();
+    if let Some(value) = fields.remove("tools") {
+        let entries = value.as_object().ok_or_else(|| format!("{name:?}.tools"))?;
+        for (tool, definition) in entries {
+            let mut definition = definition
+                .as_object()
+                .cloned()
+                .ok_or_else(|| format!("{name:?}.tools.{tool:?}"))?;
+            if let Some(value) = definition.remove("approval_mode") {
+                let mode = serde_json::from_value(value)
+                    .map_err(|_| format!("{name:?}.tools.{tool:?}.approval_mode"))?;
+                tools.insert(tool.clone(), mode);
+            }
+            if let Some(field) = definition.keys().next() {
+                return Err(format!("{name:?}.tools.{tool:?}.{field:?}"));
+            }
+        }
+    }
+    Ok(
+        if include && (default_mode.is_some() || !tools.is_empty()) {
+            Some(Permissions::Codex {
+                default_mode,
+                tools,
+            })
+        } else {
+            None
+        },
+    )
 }
 
 fn take_string(

@@ -33,6 +33,12 @@ pub struct ExportArgs {
     /// Read this client config file instead of the default configuration.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
+    /// Include per-server MCP tool permissions when available.
+    #[arg(long)]
+    include_permissions: bool,
+    /// Read Claude Code permission rules from this settings file.
+    #[arg(long, value_name = "PATH")]
+    permissions_config: Option<PathBuf>,
     /// Include every server normally skipped by the export filter.
     #[arg(long)]
     all: bool,
@@ -57,6 +63,9 @@ pub struct ExportArgs {
 }
 
 impl ExportArgs {
+    fn includes_permissions(&self) -> bool {
+        self.all || self.include_permissions
+    }
     fn filter(&self) -> reserved::ExportFilter {
         reserved::ExportFilter {
             workspace: self.all || self.allow_workspace,
@@ -77,6 +86,12 @@ pub struct StackArgs {
     /// Use this client config file instead of the default configuration.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
+    /// Apply or compare permission rules stored in the stack.
+    #[arg(long)]
+    include_permissions: bool,
+    /// Use this Claude Code settings file for permission rules.
+    #[arg(long, value_name = "PATH", requires = "include_permissions")]
+    permissions_config: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -181,8 +196,16 @@ impl ClientAdapter for Codex {
         expose_secrets: bool,
     ) -> Result<(), AppError> {
         let filter = args.filter();
-        codex::workflow::run_export(args.config, filter, output, non_interactive, expose_secrets)
-            .await
+        let include_permissions = args.includes_permissions();
+        codex::workflow::run_export(
+            args.config,
+            filter,
+            include_permissions,
+            output,
+            non_interactive,
+            expose_secrets,
+        )
+        .await
     }
 
     async fn import(
@@ -197,6 +220,7 @@ impl ClientAdapter for Codex {
         codex::workflow::run_import(
             args.file,
             args.config,
+            args.include_permissions,
             output,
             non_interactive,
             colored,
@@ -218,6 +242,7 @@ impl ClientAdapter for Codex {
         codex::workflow::run_use(
             args.file,
             args.config,
+            args.include_permissions,
             output,
             non_interactive,
             colored,
@@ -234,7 +259,15 @@ impl ClientAdapter for Codex {
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {
-        codex::diff::run(args.file, args.config, output, non_interactive, colored).await
+        codex::diff::run(
+            args.file,
+            args.config,
+            args.include_permissions,
+            output,
+            non_interactive,
+            colored,
+        )
+        .await
     }
 }
 

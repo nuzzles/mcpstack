@@ -19,6 +19,7 @@ use super::{Error, default_config};
 pub(crate) async fn run(
     file: PathBuf,
     config: Option<PathBuf>,
+    include_permissions: bool,
     output: &mut impl Write,
     non_interactive: bool,
     colored: bool,
@@ -41,7 +42,10 @@ pub(crate) async fn run(
     if resolver.cancelled {
         return Err(AppError::ImportApprovalCancelled);
     }
-    let definitions = prepared?;
+    let mut definitions = prepared?;
+    if include_permissions {
+        super::workflow::apply_permissions(&stack, &mut definitions);
+    }
     let changes = snapshot.preview(&definitions)?;
     if changes.is_empty() {
         writeln!(

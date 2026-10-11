@@ -21,11 +21,41 @@ pub enum Server {
         transport: Transport,
         #[serde(default)]
         settings: Settings,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permissions: Option<Box<Permissions>>,
     },
     Configuration {
         #[serde(deserialize_with = "unique_map")]
         config: BTreeMap<String, ConfigValue>,
     },
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Permissions {
+    Codex {
+        #[serde(default)]
+        default_mode: Option<ApprovalMode>,
+        #[serde(default, deserialize_with = "unique_map")]
+        tools: BTreeMap<String, ApprovalMode>,
+    },
+    Claude {
+        #[serde(default)]
+        allow: Vec<String>,
+        #[serde(default)]
+        ask: Vec<String>,
+        #[serde(default)]
+        deny: Vec<String>,
+    },
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalMode {
+    Auto,
+    Prompt,
+    Writes,
+    Approve,
 }
 
 /// Client-independent configuration data. Target adapters validate supported fields.
@@ -271,6 +301,28 @@ impl StackV1 {
             if !nonempty_text(name) || name.trim() != name {
                 return Err(ValidationError::InvalidServerName);
             }
+            if let Server::Portable {
+                permissions: Some(policy),
+                ..
+            } = server
+            {
+                match &**policy {
+                    Permissions::Codex { tools, .. }
+                        if tools.keys().any(|name| !nonempty_text(name)) =>
+                    {
+                        return Err(ValidationError::InvalidDocument);
+                    }
+                    Permissions::Claude { allow, ask, deny } => {
+                        let prefix = format!("mcp__{name}");
+                        if allow.iter().chain(ask).chain(deny).any(|rule| {
+                            rule != &prefix && !rule.starts_with(&format!("{prefix}__"))
+                        }) {
+                            return Err(ValidationError::InvalidDocument);
+                        }
+                    }
+                    _ => {}
+                }
+            }
             server.validate()?;
         }
         Ok(())
@@ -283,6 +335,7 @@ impl Server {
             Self::Portable {
                 transport,
                 settings,
+                ..
             } => (transport, settings),
             Self::Configuration { config, .. } => {
                 return config.values().try_for_each(ConfigValue::validate);

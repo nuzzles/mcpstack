@@ -13,11 +13,151 @@ use super::{Error, default_config};
 use crate::error::AppError;
 use crate::exporters::to_yaml;
 use crate::integrations::secrets::SecretResolver;
-use crate::schema::Stack;
+use crate::schema::v1::{ApprovalMode, Permissions};
+use crate::schema::{Server, Stack};
+
+pub(super) fn apply_permissions(stack: &Stack, definitions: &mut BTreeMap<String, toml::Table>) {
+    let Stack::V1(stack) = stack;
+    for (name, server) in &stack.servers {
+        let Server::Portable {
+            permissions: Some(policy),
+            ..
+        } = server
+        else {
+            continue;
+        };
+        let Some(definition) = definitions.get_mut(name) else {
+            continue;
+        };
+        match &**policy {
+            Permissions::Codex {
+                default_mode,
+                tools,
+            } => {
+                if let Some(mode) = default_mode {
+                    definition.insert(
+                        "default_tools_approval_mode".into(),
+                        toml::Value::String(mode_text(*mode).into()),
+                    );
+                }
+                if !tools.is_empty() {
+                    let table = tools
+                        .iter()
+                        .map(|(tool, mode)| {
+                            (
+                                tool.clone(),
+                                toml::Value::Table(toml::Table::from_iter([(
+                                    "approval_mode".into(),
+                                    toml::Value::String(mode_text(*mode).into()),
+                                )])),
+                            )
+                        })
+                        .collect();
+                    definition.insert("tools".into(), toml::Value::Table(table));
+                }
+            }
+            Permissions::Claude { allow, ask, deny } => {
+                let prefix = format!("mcp__{name}");
+                let wildcard = format!("{prefix}__*");
+                let mut disabled = Vec::new();
+                let mut unsafe_deny = false;
+                for rule in deny {
+                    match rule.strip_prefix(&format!("{prefix}__")) {
+                        Some(tool) if !tool.is_empty() && !tool.contains('*') => {
+                            disabled.push(tool.to_owned())
+                        }
+                        _ => {
+                            unsafe_deny = true;
+                            tracing::warn!(
+                                "Skipping Claude deny rule {rule:?}: Codex cannot represent its scope exactly."
+                            );
+                        }
+                    }
+                }
+                if !disabled.is_empty() {
+                    definition.insert(
+                        "disabled_tools".into(),
+                        toml::Value::Array(disabled.into_iter().map(toml::Value::String).collect()),
+                    );
+                }
+                if unsafe_deny {
+                    tracing::warn!(
+                        "Skipping allow and ask rules for {name:?} because an unmatched deny rule could take precedence."
+                    );
+                    continue;
+                }
+                let default = if ask.iter().any(|rule| rule == &prefix || rule == &wildcard) {
+                    Some(ApprovalMode::Prompt)
+                } else if allow
+                    .iter()
+                    .any(|rule| rule == &prefix || rule == &wildcard)
+                {
+                    Some(ApprovalMode::Approve)
+                } else {
+                    None
+                };
+                if let Some(mode) = default {
+                    definition.insert(
+                        "default_tools_approval_mode".into(),
+                        toml::Value::String(mode_text(mode).into()),
+                    );
+                }
+                let mut tools = toml::Table::new();
+                for (bucket, mode) in [(allow, ApprovalMode::Approve), (ask, ApprovalMode::Prompt)]
+                {
+                    for rule in bucket {
+                        let Some(tool) = rule.strip_prefix(&format!("{prefix}__")) else {
+                            continue;
+                        };
+                        if tool == "*" {
+                            continue;
+                        }
+                        if tool.contains('*') || tool.is_empty() {
+                            tracing::warn!(
+                                "Skipping Claude permission rule {rule:?}: Codex requires an exact tool name."
+                            );
+                            continue;
+                        }
+                        let effective = if matches!(default, Some(ApprovalMode::Prompt)) {
+                            if matches!(mode, ApprovalMode::Approve) {
+                                tracing::warn!(
+                                    "Skipping allow override {rule:?}: a Claude ask rule for the whole server takes precedence."
+                                );
+                            }
+                            ApprovalMode::Prompt
+                        } else {
+                            mode
+                        };
+                        tools.insert(
+                            tool.into(),
+                            toml::Value::Table(toml::Table::from_iter([(
+                                "approval_mode".into(),
+                                toml::Value::String(mode_text(effective).into()),
+                            )])),
+                        );
+                    }
+                }
+                if !tools.is_empty() {
+                    definition.insert("tools".into(), toml::Value::Table(tools));
+                }
+            }
+        }
+    }
+}
+
+fn mode_text(mode: ApprovalMode) -> &'static str {
+    match mode {
+        ApprovalMode::Auto => "auto",
+        ApprovalMode::Prompt => "prompt",
+        ApprovalMode::Writes => "writes",
+        ApprovalMode::Approve => "approve",
+    }
+}
 
 pub(crate) async fn run_export(
     config: Option<PathBuf>,
     filter: crate::integrations::reserved::ExportFilter,
+    include_permissions: bool,
     output: &mut impl Write,
     non_interactive: bool,
     expose_secrets: bool,
@@ -62,6 +202,7 @@ pub(crate) async fn run_export(
     let stack = crate::integrations::portable::normalize(
         stack,
         crate::integrations::portable::Source::Codex,
+        include_permissions,
     )
     .map_err(ExportError::Portable)?;
     let yaml = to_yaml(&stack.into()).map_err(|_| ExportError::Stack)?;
@@ -69,9 +210,14 @@ pub(crate) async fn run_export(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "CLI workflow accepts separate command flags"
+)]
 pub(crate) async fn run_import(
     file: PathBuf,
     config: Option<PathBuf>,
+    include_permissions: bool,
     output: &mut impl Write,
     non_interactive: bool,
     colored: bool,
@@ -143,7 +289,10 @@ pub(crate) async fn run_import(
     if resolver.cancelled {
         return Err(AppError::ImportApprovalCancelled);
     }
-    let definitions = prepared?;
+    let mut definitions = prepared?;
+    if include_permissions {
+        apply_permissions(&stack, &mut definitions);
+    }
     let changes = snapshot.preview(&definitions)?;
     let additions: BTreeMap<_, _> = changes
         .iter()
@@ -217,9 +366,14 @@ pub(crate) async fn run_import(
 }
 
 /// Switch the entire server set as one approved, atomic configuration change.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "CLI workflow accepts separate command flags"
+)]
 pub(crate) async fn run_use(
     file: PathBuf,
     config: Option<PathBuf>,
+    include_permissions: bool,
     output: &mut impl Write,
     non_interactive: bool,
     colored: bool,
@@ -248,7 +402,10 @@ pub(crate) async fn run_use(
     if resolver.cancelled {
         return Err(AppError::ImportApprovalCancelled);
     }
-    let definitions = prepared?;
+    let mut definitions = prepared?;
+    if include_permissions {
+        apply_permissions(&stack, &mut definitions);
+    }
     let (changed, _) = snapshot.replacement_proposal(&definitions)?;
     if !changed {
         if !dry_run {

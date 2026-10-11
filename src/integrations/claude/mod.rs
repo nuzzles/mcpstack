@@ -1,4 +1,5 @@
 //! Claude Code user-scope MCP configuration in ~/.claude.json.
+mod permissions;
 use std::collections::BTreeMap;
 use std::io::{IsTerminal, Write, stderr, stdin};
 use std::path::{Path, PathBuf};
@@ -38,6 +39,10 @@ pub enum Error {
     Read,
     #[error("Unable to safely write Claude Code configuration.")]
     Write,
+    #[error(
+        "Permission settings write failed after server configuration changed; restore from the numbered backups if needed."
+    )]
+    PartialWrite,
     #[error("Unable to create a Claude Code configuration backup.")]
     Backup,
     #[error("Secret selection was cancelled; no stack was exported.")]
@@ -54,7 +59,7 @@ impl Error {
             | Self::HeaderConflict(_)
             | Self::HeaderEnvironment(_)
             | Self::Secret => ErrorCode::ImportError,
-            Self::Write => ErrorCode::ConfigWriteError,
+            Self::Write | Self::PartialWrite => ErrorCode::ConfigWriteError,
             Self::Backup => ErrorCode::BackupError,
             Self::Prompt | Self::ExportPortable(_) => ErrorCode::ExportError,
         }
@@ -297,6 +302,7 @@ fn unsupported_fields(stack: &StackV1) -> Vec<String> {
             Server::Portable {
                 transport,
                 settings,
+                ..
             } => {
                 if !settings.enabled {
                     add("settings.enabled");
@@ -356,6 +362,7 @@ fn prepare(
             Server::Portable {
                 transport,
                 settings,
+                ..
             } => {
                 if !settings.enabled
                     || settings.required
@@ -558,6 +565,74 @@ async fn write_config(file: io::Snapshot, config: Value) -> Result<(), AppError>
     file.replace(&bytes).await.map_err(|_| Error::Write)?;
     Ok(())
 }
+
+async fn write_with_permissions(
+    config_path: &Path,
+    file: io::Snapshot,
+    config: Value,
+    config_changed: bool,
+    permission_change: Option<(permissions::Snapshot, Value)>,
+) -> Result<(), AppError> {
+    let permission_change = permission_change.filter(|(snapshot, value)| snapshot.config != *value);
+    if !config_changed && permission_change.is_none() {
+        return Ok(());
+    }
+    file.ensure_write_supported().map_err(|_| Error::Write)?;
+    file.check_unchanged().await.map_err(|_| Error::Write)?;
+    if let Some((snapshot, _)) = &permission_change {
+        snapshot
+            .file
+            .ensure_write_supported()
+            .map_err(|_| Error::Write)?;
+        snapshot
+            .file
+            .check_unchanged()
+            .await
+            .map_err(|_| Error::Write)?;
+    }
+    if config_changed {
+        let backup = file
+            .default_backup_path()
+            .await
+            .map_err(|_| Error::Backup)?;
+        file.create_backup_at(&backup)
+            .await
+            .map_err(|_| Error::Backup)?;
+    }
+    if let Some((snapshot, _)) = &permission_change {
+        let backup = snapshot
+            .file
+            .default_backup_path()
+            .await
+            .map_err(|_| Error::Backup)?;
+        snapshot
+            .file
+            .create_backup_at(&backup)
+            .await
+            .map_err(|_| Error::Backup)?;
+    }
+    let original = file.contents().to_vec();
+    if config_changed {
+        write_config(file, config).await?;
+    }
+    if let Some((snapshot, value)) = permission_change {
+        let mut bytes = serde_json::to_vec_pretty(&value).map_err(|_| Error::Write)?;
+        bytes.push(b'\n');
+        if snapshot.file.replace(&bytes).await.is_err() {
+            if config_changed {
+                let restored = match io::Snapshot::read(config_path).await {
+                    Ok(current) => current.replace(&original).await.is_ok(),
+                    Err(_) => false,
+                };
+                if !restored {
+                    return Err(Error::PartialWrite.into());
+                }
+            }
+            return Err(Error::Write.into());
+        }
+    }
+    Ok(())
+}
 impl ClientAdapter for Claude {
     async fn export(
         &self,
@@ -567,6 +642,15 @@ impl ClientAdapter for Claude {
         expose_secrets: bool,
     ) -> Result<(), AppError> {
         let filter = args.filter();
+        let include_permissions = args.includes_permissions();
+        let permissions_path = if include_permissions {
+            Some(permissions::path(
+                args.permissions_config.clone(),
+                args.config.as_ref(),
+            )?)
+        } else {
+            None
+        };
         let (_, _, config) = snapshot(args.config, true).await?;
         let mut values = servers(&config);
         values.retain(|name, _| !filter.skip(name));
@@ -614,8 +698,18 @@ impl ClientAdapter for Claude {
                     .map_err(|_| Error::Config)?;
             }
         }
-        let stack = super::portable::normalize(stack, super::portable::Source::Claude)
-            .map_err(Error::ExportPortable)?;
+        let mut stack =
+            super::portable::normalize(stack, super::portable::Source::Claude, include_permissions)
+                .map_err(Error::ExportPortable)?;
+        if let Some(path) = permissions_path {
+            let settings = permissions::Snapshot::read(&path).await?;
+            for (name, server) in &mut stack.servers {
+                if let Server::Portable { permissions, .. } = server {
+                    *permissions = settings.for_server(name)?.map(Box::new);
+                }
+            }
+            stack.validate()?;
+        }
         write!(output, "{}", to_yaml(&stack.into())?)?;
         Ok(())
     }
@@ -626,6 +720,14 @@ impl ClientAdapter for Claude {
         non_interactive: bool,
         _colored: bool,
     ) -> Result<(), AppError> {
+        let permission_path = if args.include_permissions {
+            Some(permissions::path(
+                args.permissions_config.clone(),
+                args.config.as_ref(),
+            )?)
+        } else {
+            None
+        };
         let (_, _, config) = snapshot(args.config, false).await?;
         let stack = read_stack(&args.file).await?;
         let incoming = prepared(
@@ -636,7 +738,19 @@ impl ClientAdapter for Claude {
         let mut proposed = servers(&config);
         let before = proposed.clone();
         proposed.extend(incoming);
-        preview(output, before, proposed)
+        preview(output, before, proposed)?;
+        if let Some(path) = permission_path {
+            let settings = permissions::Snapshot::read(&path).await?;
+            let names = stack.servers.keys().cloned().collect();
+            if settings.proposed(&stack, &names)? != settings.config {
+                writeln!(
+                    output,
+                    "Permission rules would change in {}.",
+                    path.display()
+                )?;
+            }
+        }
+        Ok(())
     }
     async fn import(
         &self,
@@ -647,7 +761,15 @@ impl ClientAdapter for Claude {
         dry_run: bool,
         auto_approve: bool,
     ) -> Result<(), AppError> {
-        let (_, file, config) = snapshot(args.config, false).await?;
+        let permission_path = if args.include_permissions {
+            Some(permissions::path(
+                args.permissions_config.clone(),
+                args.config.as_ref(),
+            )?)
+        } else {
+            None
+        };
+        let (config_path, file, config) = snapshot(args.config, false).await?;
         if !dry_run
             && !auto_approve
             && (non_interactive || !stdin().is_terminal() || !stderr().is_terminal())
@@ -665,8 +787,10 @@ impl ClientAdapter for Claude {
         )?;
         let before = servers(&config);
         let mut proposed = before.clone();
+        let mut approved = std::collections::BTreeSet::new();
         for (name, definition) in incoming {
             if proposed.get(&name) == Some(&definition) {
+                approved.insert(name);
                 continue;
             }
             if !auto_approve {
@@ -682,9 +806,20 @@ impl ClientAdapter for Claude {
                     continue;
                 }
             }
+            approved.insert(name.clone());
             proposed.insert(name, definition);
         }
-        if proposed == before {
+        let permission_change = if let Some(path) = permission_path {
+            let settings = permissions::Snapshot::read(&path).await?;
+            let change = settings.proposed(&stack, &approved)?;
+            Some((settings, change))
+        } else {
+            None
+        };
+        let permissions_changed = permission_change
+            .as_ref()
+            .is_some_and(|(settings, change)| settings.config != *change);
+        if proposed == before && !permissions_changed {
             writeln!(
                 output,
                 "No changes; existing identical entries were unchanged."
@@ -692,18 +827,33 @@ impl ClientAdapter for Claude {
             return Ok(());
         }
         if dry_run {
-            preview(output, before, proposed)?;
+            if proposed != before {
+                preview(output, before, proposed)?;
+            }
+            if permissions_changed {
+                writeln!(output, "Permission rules would change.")?;
+            }
             return Ok(());
         }
-        file.ensure_write_supported().map_err(|_| Error::Write)?;
-        let backup = file
-            .default_backup_path()
-            .await
-            .map_err(|_| Error::Backup)?;
-        file.create_backup_at(&backup)
-            .await
-            .map_err(|_| Error::Backup)?;
-        write_config(file, with_servers(config, &proposed)).await?;
+        if permissions_changed
+            && !auto_approve
+            && !Confirm::new()
+                .with_prompt("Apply MCP permission changes in Claude Code settings?")
+                .default(false)
+                .interact()
+                .map_err(|_| AppError::ImportApprovalCancelled)?
+        {
+            writeln!(output, "Permission changes cancelled.")?;
+            return Ok(());
+        }
+        write_with_permissions(
+            &config_path,
+            file,
+            with_servers(config, &proposed),
+            proposed != before,
+            permission_change,
+        )
+        .await?;
         writeln!(output, "Imported MCP servers.")?;
         Ok(())
     }
@@ -716,7 +866,15 @@ impl ClientAdapter for Claude {
         dry_run: bool,
         auto_approve: bool,
     ) -> Result<(), AppError> {
-        let (_, file, config) = snapshot(args.config, false).await?;
+        let permission_path = if args.include_permissions {
+            Some(permissions::path(
+                args.permissions_config.clone(),
+                args.config.as_ref(),
+            )?)
+        } else {
+            None
+        };
+        let (config_path, file, config) = snapshot(args.config, false).await?;
         let stack = read_stack(&args.file).await?;
         let proposed = prepared(
             &stack,
@@ -727,7 +885,18 @@ impl ClientAdapter for Claude {
                 && stderr().is_terminal(),
         )?;
         let before = servers(&config);
-        if proposed == before {
+        let permission_change = if let Some(path) = permission_path {
+            let settings = permissions::Snapshot::read(&path).await?;
+            let names = stack.servers.keys().cloned().collect();
+            let change = settings.proposed(&stack, &names)?;
+            Some((settings, change))
+        } else {
+            None
+        };
+        let permissions_changed = permission_change
+            .as_ref()
+            .is_some_and(|(settings, change)| settings.config != *change);
+        if proposed == before && !permissions_changed {
             file.check_unchanged().await.map_err(|_| Error::Write)?;
             writeln!(
                 output,
@@ -736,7 +905,12 @@ impl ClientAdapter for Claude {
             return Ok(());
         }
         if dry_run {
-            preview(output, before, proposed)?;
+            if proposed != before {
+                preview(output, before, proposed)?;
+            }
+            if permissions_changed {
+                writeln!(output, "Permission rules would change.")?;
+            }
             return Ok(());
         }
         if !auto_approve {
@@ -753,15 +927,14 @@ impl ClientAdapter for Claude {
                 return Ok(());
             }
         }
-        file.ensure_write_supported().map_err(|_| Error::Write)?;
-        let backup = file
-            .default_backup_path()
-            .await
-            .map_err(|_| Error::Backup)?;
-        file.create_backup_at(&backup)
-            .await
-            .map_err(|_| Error::Backup)?;
-        write_config(file, with_servers(config, &proposed)).await?;
+        write_with_permissions(
+            &config_path,
+            file,
+            with_servers(config, &proposed),
+            proposed != before,
+            permission_change,
+        )
+        .await?;
         writeln!(output, "Using stack with {} MCP server(s).", proposed.len())?;
         Ok(())
     }

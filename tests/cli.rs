@@ -448,6 +448,101 @@ fn authorization_header_is_not_misclassified_as_bearer_binding() {
 }
 
 #[test]
+#[cfg(any(unix, windows))]
+fn codex_permissions_opt_in_round_trip_preserves_modes() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.toml");
+    let target = dir.path().join("target.toml");
+    let stack = dir.path().join("stack.yml");
+    std::fs::write(&source, "[mcp_servers.example]\ncommand='tool'\ndefault_tools_approval_mode='writes'\n[mcp_servers.example.tools.read]\napproval_mode='prompt'\n").unwrap();
+    let export = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["--non-interactive", "codex", "export", "--config"])
+        .arg(&source)
+        .arg("--include-permissions")
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(export.status.success(), "{export:?}");
+    let value: Value = yaml_serde::from_slice(&export.stdout).unwrap();
+    assert_eq!(
+        value["servers"]["example"]["permissions"]["default_mode"],
+        "writes"
+    );
+    assert_eq!(
+        value["servers"]["example"]["permissions"]["tools"]["read"],
+        "prompt"
+    );
+    std::fs::write(&stack, export.stdout).unwrap();
+    let run_import = |flags: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["codex", "import", "-y"])
+            .arg(&stack)
+            .arg("--config")
+            .arg(&target)
+            .args(flags)
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let first = run_import(&[]);
+    assert!(first.status.success(), "{first:?}");
+    let config: toml::Value = toml::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+    assert!(
+        config["mcp_servers"]["example"]
+            .get("default_tools_approval_mode")
+            .is_none()
+    );
+    let second = run_import(&["--include-permissions"]);
+    assert!(second.status.success(), "{second:?}");
+    let config: toml::Value = toml::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+    assert_eq!(
+        config["mcp_servers"]["example"]["default_tools_approval_mode"].as_str(),
+        Some("writes")
+    );
+    assert_eq!(
+        config["mcp_servers"]["example"]["tools"]["read"]["approval_mode"].as_str(),
+        Some("prompt")
+    );
+}
+
+#[test]
+fn claude_denied_tool_maps_to_codex_and_unmapped_rule_warns() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    let stack = dir.path().join("stack.yml");
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions:\n      source: claude\n      allow: ['mcp__example__*']\n      deny: ['mcp__example__delete', 'mcp__example__danger*']\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["codex", "use"])
+        .arg(&stack)
+        .arg("--config")
+        .arg(&config)
+        .args(["--include-permissions", "-y"])
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let warning = String::from_utf8_lossy(&output.stderr);
+    assert!(warning.contains("mcp__example__danger*"), "{warning}");
+    let value: toml::Value = toml::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(
+        value["mcp_servers"]["example"]["command"].as_str(),
+        Some("tool")
+    );
+    assert_eq!(
+        value["mcp_servers"]["example"]["disabled_tools"][0].as_str(),
+        Some("delete")
+    );
+    assert!(
+        value["mcp_servers"]["example"]
+            .get("default_tools_approval_mode")
+            .is_none()
+    );
+}
+
+#[test]
 fn codex_export_all_includes_default_skipped_names() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.toml");

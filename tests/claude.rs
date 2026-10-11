@@ -351,7 +351,7 @@ fn codex_and_claude_exports_share_portable_http_bindings() {
 }
 
 #[test]
-fn codex_export_omits_nonportable_approval_with_a_warning() {
+fn codex_export_includes_approval_only_when_requested() {
     let dir = tempfile::tempdir().unwrap();
     let codex = dir.path().join("config.toml");
     std::fs::write(&codex, "[mcp_servers.obsidian]\nurl='https://example.com/mcp'\ndefault_tools_approval_mode='prompt'\n").unwrap();
@@ -366,7 +366,228 @@ fn codex_export_omits_nonportable_approval_with_a_warning() {
     let stack: serde_json::Value = yaml_serde::from_slice(&exported.stdout).unwrap();
     assert_eq!(stack["servers"]["obsidian"]["transport"]["type"], "http");
     assert!(stack["servers"]["obsidian"].get("config").is_none());
-    assert!(String::from_utf8_lossy(&exported.stderr).contains("default_tools_approval_mode"));
+    assert!(stack["servers"]["obsidian"].get("permissions").is_none());
+    for flag in ["--include-permissions", "--all"] {
+        let exported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["--non-interactive", "codex", "export", "--config"])
+            .arg(&codex)
+            .arg(flag)
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(exported.status.success(), "{exported:?}");
+        let stack: serde_json::Value = yaml_serde::from_slice(&exported.stdout).unwrap();
+        assert_eq!(
+            stack["servers"]["obsidian"]["permissions"]["source"],
+            "codex"
+        );
+        assert_eq!(
+            stack["servers"]["obsidian"]["permissions"]["default_mode"],
+            "prompt"
+        );
+    }
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn claude_permission_rules_are_opt_in_and_restore_from_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.json");
+    let source_settings = dir.path().join("source-settings.json");
+    let target = dir.path().join("target.json");
+    let target_settings = dir.path().join("target-settings.json");
+    let stack = dir.path().join("stack.yml");
+    std::fs::write(&source, r#"{"mcpServers":{"obsidian":{"command":"tool"}}}"#).unwrap();
+    std::fs::write(&source_settings, r#"{"theme":"dark","permissions":{"allow":["mcp__obsidian__read","Bash"],"ask":["mcp__obsidian__write"],"deny":["mcp__obsidian__delete"]}}"#).unwrap();
+    std::fs::write(&target, r#"{"mcpServers":{}}"#).unwrap();
+    std::fs::write(
+        &target_settings,
+        r#"{"permissions":{"allow":["Bash","mcp__obsidian__old"]}}"#,
+    )
+    .unwrap();
+    let exported = run(
+        "export",
+        None,
+        &source,
+        &[
+            "--include-permissions",
+            "--permissions-config",
+            source_settings.to_str().unwrap(),
+        ],
+    );
+    assert!(exported.status.success(), "{exported:?}");
+    let value: serde_json::Value = yaml_serde::from_slice(&exported.stdout).unwrap();
+    assert_eq!(
+        value["servers"]["obsidian"]["permissions"]["source"],
+        "claude"
+    );
+    assert_eq!(
+        value["servers"]["obsidian"]["permissions"]["allow"],
+        serde_json::json!(["mcp__obsidian__read"])
+    );
+    std::fs::write(&stack, &exported.stdout).unwrap();
+    let unchanged = run("use", Some(&stack), &target, &["-y"]);
+    assert!(unchanged.status.success(), "{unchanged:?}");
+    let settings: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&target_settings).unwrap()).unwrap();
+    assert_eq!(
+        settings["permissions"]["allow"],
+        serde_json::json!(["Bash", "mcp__obsidian__old"])
+    );
+    let applied = run(
+        "use",
+        Some(&stack),
+        &target,
+        &[
+            "-y",
+            "--include-permissions",
+            "--permissions-config",
+            target_settings.to_str().unwrap(),
+        ],
+    );
+    assert!(applied.status.success(), "{applied:?}");
+    let settings: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&target_settings).unwrap()).unwrap();
+    assert_eq!(
+        settings["permissions"]["allow"],
+        serde_json::json!(["Bash", "mcp__obsidian__read"])
+    );
+    assert_eq!(
+        settings["permissions"]["ask"],
+        serde_json::json!(["mcp__obsidian__write"])
+    );
+    assert_eq!(
+        settings["permissions"]["deny"],
+        serde_json::json!(["mcp__obsidian__delete"])
+    );
+    assert!(dir.path().join("target-settings.json.~1~").exists());
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn untranslatable_codex_mode_warns_and_keeps_claude_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let settings = dir.path().join("settings.json");
+    let stack = dir.path().join("stack.yml");
+    std::fs::write(&config, r#"{"mcpServers":{}}"#).unwrap();
+    let original = r#"{"permissions":{"ask":["mcp__example__*"]}}"#;
+    std::fs::write(&settings, original).unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {source: codex, default_mode: writes}\n").unwrap();
+    let output = run(
+        "use",
+        Some(&stack),
+        &config,
+        &[
+            "-y",
+            "--include-permissions",
+            "--permissions-config",
+            settings.to_str().unwrap(),
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot reproduce auto or writes"));
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), original);
+    let value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+    assert_eq!(value["mcpServers"]["example"]["command"], "tool");
+}
+
+#[test]
+fn untranslatable_tool_mode_does_not_block_other_permission_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let settings = dir.path().join("settings.json");
+    let stack = dir.path().join("stack.yml");
+    std::fs::write(&config, r#"{"mcpServers":{}}"#).unwrap();
+    std::fs::write(
+        &settings,
+        r#"{"permissions":{"ask":["mcp__example__write"]}}"#,
+    )
+    .unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions:\n      source: codex\n      default_mode: auto\n      tools: {read: approve, write: writes}\n").unwrap();
+    let result = run(
+        "use",
+        Some(&stack),
+        &config,
+        &[
+            "-y",
+            "--include-permissions",
+            "--permissions-config",
+            settings.to_str().unwrap(),
+        ],
+    );
+    assert!(result.status.success(), "{result:?}");
+    let warnings = String::from_utf8_lossy(&result.stderr);
+    assert!(warnings.contains("write"), "{warnings}");
+    assert!(warnings.contains("default approval mode"), "{warnings}");
+    let value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+    assert_eq!(
+        value["permissions"]["allow"],
+        serde_json::json!(["mcp__example__read"])
+    );
+    assert_eq!(
+        value["permissions"]["ask"],
+        serde_json::json!(["mcp__example__write"])
+    );
+    let servers: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+    assert_eq!(servers["mcpServers"]["example"]["command"], "tool");
+}
+
+#[test]
+fn empty_claude_permission_policy_clears_old_rules_when_included() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.json");
+    let source_settings = dir.path().join("source-settings.json");
+    let target = dir.path().join("target.json");
+    let target_settings = dir.path().join("target-settings.json");
+    let stack = dir.path().join("stack.yml");
+    std::fs::write(&source, r#"{"mcpServers":{"example":{"command":"tool"}}}"#).unwrap();
+    std::fs::write(&source_settings, r#"{"permissions":{"allow":["Bash"]}}"#).unwrap();
+    std::fs::write(&target, r#"{"mcpServers":{}}"#).unwrap();
+    std::fs::write(
+        &target_settings,
+        r#"{"permissions":{"allow":["Bash","mcp__example__*"]}}"#,
+    )
+    .unwrap();
+    let exported = run(
+        "export",
+        None,
+        &source,
+        &[
+            "--include-permissions",
+            "--permissions-config",
+            source_settings.to_str().unwrap(),
+        ],
+    );
+    assert!(exported.status.success(), "{exported:?}");
+    let value: serde_json::Value = yaml_serde::from_slice(&exported.stdout).unwrap();
+    assert_eq!(
+        value["servers"]["example"]["permissions"]["source"],
+        "claude"
+    );
+    std::fs::write(&stack, exported.stdout).unwrap();
+    let result = run(
+        "use",
+        Some(&stack),
+        &target,
+        &[
+            "-y",
+            "--include-permissions",
+            "--permissions-config",
+            target_settings.to_str().unwrap(),
+        ],
+    );
+    assert!(result.status.success(), "{result:?}");
+    let settings: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&target_settings).unwrap()).unwrap();
+    assert_eq!(
+        settings["permissions"]["allow"],
+        serde_json::json!(["Bash"])
+    );
 }
 
 #[test]

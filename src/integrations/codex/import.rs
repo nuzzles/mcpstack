@@ -138,6 +138,7 @@ pub fn prepare(
                 Server::Portable {
                     transport,
                     settings,
+                    ..
                 } => {
                     let mut definition = Definition {
                         enabled: settings.enabled,
@@ -357,6 +358,7 @@ impl Definition {
                 Server::Portable {
                     transport,
                     settings,
+                    permissions: None,
                 },
             )]),
         }

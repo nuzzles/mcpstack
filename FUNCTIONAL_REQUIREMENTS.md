@@ -188,10 +188,19 @@ preserving runtime lookup. Claude Code may suppress
 expansion of its protected credential variables, so those names require a separate
 user-managed environment variable. Duplicate header names fail instead of
 overwriting either value. Claude Code's reserved server names also fail before
-writes. Claude Code cannot apply per-server Codex startup timeouts or tool approval modes.
-Both exporters emit portable `transport` entries. Codex approval mode is omitted
-with a warning because Claude permissions are configured separately; other
-unmappable source fields fail export without emitting a partial stack.
+writes. Claude Code cannot apply per-server Codex startup timeouts.
+Both exporters emit portable `transport` entries. Permission export is opt-in
+with `--include-permissions`; `export --all` also includes permissions. Export
+stores Codex default and per-tool approval modes or Claude's server-scoped
+`allow`, `ask`, and `deny` rules in source-tagged permission metadata. Import,
+use, and diff ignore this metadata unless passed `--include-permissions`.
+Same-client restoration preserves the captured rules. Cross-client restoration
+translates representable rules, warns about each unsupported mode or pattern,
+and continues applying MCP servers. Claude settings are read and written in
+`settings.json` (or the file selected by `--permissions-config`), with backups
+for changed settings. Project, managed, and rules outside the chosen settings
+file are outside this export scope. Other unmappable source fields fail export
+without emitting a partial stack.
 Claude Code permission rules live in `settings.json` under `permissions.allow`,
 `permissions.ask`, and `permissions.deny`; a rule such as `mcp__obsidian__*`
 matches tools from that server. These rules are outside MCP server transport data.
