@@ -138,6 +138,21 @@ async fn arbitrary_bytes_round_trip_and_identical_writes_are_skipped() {
 }
 
 #[tokio::test]
+async fn absent_snapshot_rejects_a_concurrently_created_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("stack.yml");
+    let snapshot = Snapshot::read(&path).await.unwrap();
+    assert!(!snapshot.exists());
+    fs::write(&path, b"").unwrap();
+    assert!(Snapshot::read(&path).await.unwrap().exists());
+    assert_eq!(
+        snapshot.replace(b"exported stack").await,
+        Err(Error::Changed)
+    );
+    assert_eq!(fs::read(&path).unwrap(), b"");
+}
+
+#[tokio::test]
 async fn empty_write_creates_an_absent_file_but_preserves_an_existing_empty_file() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("settings.bin");

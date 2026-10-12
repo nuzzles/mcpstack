@@ -56,7 +56,18 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
         .find(|operation| operation["name"] == "show")
         .unwrap();
     assert!(show["arguments"].as_array().unwrap().is_empty());
-    assert_eq!(show["options"], export["options"]);
+    let export_options = export["options"].as_array().unwrap();
+    assert!(
+        export_options
+            .iter()
+            .any(|option| option["long"] == "--overwrite")
+    );
+    let shared_options: Vec<_> = export_options
+        .iter()
+        .filter(|option| option["long"] != "--overwrite")
+        .cloned()
+        .collect();
+    assert_eq!(show["options"], serde_json::json!(shared_options));
     let use_command = operations
         .iter()
         .find(|command| command["name"] == "use")
@@ -194,7 +205,7 @@ fn show_prints_yaml_and_export_writes_the_same_stack_for_both_clients() {
             let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
             command.args(["--non-interactive", client, operation]);
             if operation == "export" {
-                command.arg(&destination);
+                command.arg(&destination).arg("--overwrite");
             }
             command
                 .arg("--config")
@@ -246,7 +257,7 @@ fn export_does_not_write_a_file_when_generation_fails() {
 
     std::fs::write(&destination, "existing stack").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["--non-interactive", "codex", "export"])
+        .args(["--non-interactive", "codex", "export", "--overwrite"])
         .arg(&destination)
         .arg("--config")
         .arg(&config)

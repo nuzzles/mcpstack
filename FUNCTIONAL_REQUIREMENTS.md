@@ -72,7 +72,7 @@ to its entry in Current status at the bottom.\
 | Done | List server names, transports, commands/endpoints, and available configuration state. [*](#listing-servers) |
 | Done | Select servers by name; reject unknown selections. [*](#server-selection) |
 | Done | Switch between stack files, replacing the complete MCP server set. [*](#switching-stacks) |
-| Unsupported | Produce Git-friendly exports; require explicit overwrite of existing files. |
+| Done | Produce deterministic YAML exports; require confirmation or `--overwrite` for existing files. [*](#codex-export) |
 | Unsupported | Preserve version pins and identify unpinned servers. |
 | Partial [*](#codex-import) | Keep discovery, validation, and planning free of writes and server execution. |
 | Partial [*](#codex-import) | Preview additions, updates, removals, conflicts, and blockers. |
@@ -433,9 +433,15 @@ including when standard input is redirected. `--expose-secrets` on either comman
 preserves literal values, including credentials, without prompting.
 No export mode changes the source file or logs its values. Server names and field
 keys remain visible. `--config <path>` reads an explicit TOML file instead of the default
-config. Relative paths resolve from the current working directory. A successful
-file export atomically replaces an existing destination; invalid destinations and
-attempts to replace the explicit source config are rejected before writing.
+config. Relative paths resolve from the current working directory. Both clients'
+file exports create new destinations without confirmation. An existing destination,
+including an empty file, requires an overwrite prompt (default No) or `--overwrite`.
+`--non-interactive` and redirected input reject existing files unless `--overwrite`
+is supplied. Declining cancels successfully without changing the file. The overwrite
+check runs before credential prompts; `--overwrite` does not change secret masking.
+Writes remain atomic, and a destination created or changed after the initial
+snapshot is rejected. Invalid destinations and attempts to replace the explicit
+source config are rejected even with `--overwrite`.
 
 ### Codex config schema
 
