@@ -63,6 +63,6 @@ impl Selection {
 pub enum Error {
     #[error("Unknown MCP server selection(s): {0}. Names must match exactly.")]
     Unknown(String),
-    #[error("Selected MCP server {0:?} is excluded by default. Add --all or its --allow-* flag.")]
+    #[error("Selected MCP server {0:?} is excluded by default. Add --all or its --include-* flag.")]
     Excluded(String),
 }

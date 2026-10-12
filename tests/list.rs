@@ -130,16 +130,16 @@ fn list_show_and_export_share_default_filters_and_individual_flags() {
         let mut cases = vec![
             (None, None),
             (Some("--all"), None),
-            (Some("--allow-computer-use"), Some("computer-use")),
+            (Some("--include-computer-use"), Some("computer-use")),
         ];
         if client == "codex" {
-            cases.push((Some("--allow-node-repl"), Some("node_repl")));
+            cases.push((Some("--include-node-repl"), Some("node_repl")));
         } else {
             cases.extend([
-                (Some("--allow-workspace"), Some("workspace")),
-                (Some("--allow-claude-in-chrome"), Some("claude-in-chrome")),
-                (Some("--allow-claude-preview"), Some("Claude Preview")),
-                (Some("--allow-claude-browser"), Some("Claude Browser")),
+                (Some("--include-workspace"), Some("workspace")),
+                (Some("--include-claude-in-chrome"), Some("claude-in-chrome")),
+                (Some("--include-claude-preview"), Some("Claude Preview")),
+                (Some("--include-claude-browser"), Some("Claude Browser")),
             ]);
         }
         for (flag, included) in cases {
@@ -201,12 +201,12 @@ fn list_filters_before_validation_and_rejects_other_clients_flags() {
         (
             "codex",
             "mcp_servers.computer-use='fixture-secret'",
-            "--allow-workspace",
+            "--include-workspace",
         ),
         (
             "claude",
             "{\"mcpServers\":{\"computer-use\":\"fixture-secret\"}}",
-            "--allow-node-repl",
+            "--include-node-repl",
         ),
     ] {
         std::fs::write(&config, document).unwrap();
@@ -214,7 +214,7 @@ fn list_filters_before_validation_and_rejects_other_clients_flags() {
             success(&run(client, &config)),
             "No MCP servers configured.\n"
         );
-        for flag in ["--all", "--allow-computer-use"] {
+        for flag in ["--all", "--include-computer-use"] {
             let output = run_with_flags(client, &config, &[flag]);
             assert_eq!(output.status.code(), Some(5));
             assert!(output.stdout.is_empty());

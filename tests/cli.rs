@@ -344,25 +344,25 @@ fn show_and_export_only_advertise_source_specific_options() {
     for operation in ["show", "export"] {
         let codex = String::from_utf8(run(&["codex", operation, "--help"]).stdout).unwrap();
         let claude = String::from_utf8(run(&["claude", operation, "--help"]).stdout).unwrap();
-        for flag in ["--allow-computer-use", "--all", "--include-permissions"] {
+        for flag in ["--include-computer-use", "--all", "--include-permissions"] {
             assert!(codex.contains(flag), "{operation}: {flag}");
             assert!(claude.contains(flag), "{operation}: {flag}");
         }
-        assert!(codex.contains("--allow-node-repl"));
-        assert!(!claude.contains("--allow-node-repl"));
+        assert!(codex.contains("--include-node-repl"));
+        assert!(!claude.contains("--include-node-repl"));
         for flag in [
-            "--allow-workspace",
-            "--allow-claude-in-chrome",
-            "--allow-claude-preview",
-            "--allow-claude-browser",
+            "--include-workspace",
+            "--include-claude-in-chrome",
+            "--include-claude-preview",
+            "--include-claude-browser",
             "--permissions-config",
         ] {
             assert!(claude.contains(flag), "{operation}: {flag}");
             assert!(!codex.contains(flag), "{operation}: {flag}");
         }
         for (client, flag) in [
-            ("codex", "--allow-workspace"),
-            ("claude", "--allow-node-repl"),
+            ("codex", "--include-workspace"),
+            ("claude", "--include-node-repl"),
         ] {
             let output = if operation == "export" {
                 run(&[client, operation, "stack.yml", flag])
@@ -1032,7 +1032,7 @@ fn codex_export_all_includes_default_skipped_names() {
     assert!(default.status.success(), "{default:?}");
     let stack: Value = yaml_serde::from_slice(&default.stdout).unwrap();
     assert!(stack["servers"].as_object().unwrap().is_empty());
-    let one = run_export(&["--allow-node-repl"]);
+    let one = run_export(&["--include-node-repl"]);
     assert!(one.status.success(), "{one:?}");
     let stack: Value = yaml_serde::from_slice(&one.stdout).unwrap();
     assert_eq!(stack["servers"].as_object().unwrap().len(), 1);

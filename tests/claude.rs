@@ -584,15 +584,15 @@ fn export_skips_reserved_server_names_before_validation() {
 }
 
 #[test]
-fn export_allow_flags_include_only_named_servers() {
+fn export_include_flags_include_only_named_servers() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("claude.json");
     let names = [
-        ("workspace", "--allow-workspace"),
-        ("claude-in-chrome", "--allow-claude-in-chrome"),
-        ("computer-use", "--allow-computer-use"),
-        ("Claude Preview", "--allow-claude-preview"),
-        ("Claude Browser", "--allow-claude-browser"),
+        ("workspace", "--include-workspace"),
+        ("claude-in-chrome", "--include-claude-in-chrome"),
+        ("computer-use", "--include-computer-use"),
+        ("Claude Preview", "--include-claude-preview"),
+        ("Claude Browser", "--include-claude-browser"),
     ];
     let mut servers: serde_json::Map<String, serde_json::Value> = names
         .iter()

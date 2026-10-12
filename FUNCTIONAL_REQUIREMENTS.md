@@ -182,7 +182,7 @@ server and field name without printing field values.
 Codex export skips `computer-use` and `node_repl` by default. Claude Code export
 skips its built-in names `workspace`, `claude-in-chrome`, `computer-use`,
 `Claude Preview`, and `Claude Browser` by default. Each client exposes only its
-relevant `--allow-*` flags on `list`, `show`, and `export`; `--all` includes every normally
+relevant `--include-*` flags on `list`, `show`, and `export`; `--all` includes every normally
 skipped name. Claude Code `show` and `export` accept `--permissions-config`;
 `import`, `use`, and `diff` accept it with `--include-permissions`.
 The filter runs before server validation and leaves source configuration unchanged.
@@ -278,7 +278,7 @@ adapters remain future work.
 paths as their adapters, or the file selected by `--config <path>`. They print a
 table sorted by server name with transport, configuration state, and command or
 endpoint. Listing shares the same default exclusions and client-specific
-`--allow-*` flags as show/export; `--all` includes every normally skipped name.
+`--include-*` flags as show/export; `--all` includes every normally skipped name.
 The shared filter runs before server validation. It does not prompt,
 resolve secrets, write files or backups, run helpers, or contact MCP servers.
 
@@ -307,7 +307,7 @@ For example: `mcpstack codex export work.yml --server github --server linear` or
 
 List/show/export select from the source config before validating server fields
 or prompting for credentials. Default exclusions still apply: explicitly selecting
-a skipped name requires its `--allow-*` flag or `--all`. `--all` enables skipped
+a skipped name requires its `--include-*` flag or `--all`. `--all` enables skipped
 names but does not expand an explicit selection.
 
 Import/diff select from the stack before adapter conversion, secret resolution,
