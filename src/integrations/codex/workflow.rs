@@ -218,9 +218,30 @@ fn mode_text(mode: ApprovalMode) -> &'static str {
     }
 }
 
+pub(crate) async fn run_list(
+    config: Option<PathBuf>,
+    filter: crate::integrations::reserved::ServerFilter,
+    output: &mut impl Write,
+    colored: bool,
+) -> Result<(), AppError> {
+    let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
+    let document = fs::read_to_string(path)
+        .await
+        .map_err(AppError::ConfigRead)?;
+    let config: toml::Value = toml::from_str(&document).map_err(|_| AppError::ListConfig)?;
+    let config = serde_json::to_value(config).map_err(|_| AppError::ListConfig)?;
+    crate::integrations::listing::write(
+        output,
+        &config,
+        crate::integrations::listing::Source::Codex,
+        filter,
+        colored,
+    )
+}
+
 pub(crate) async fn run_export(
     config: Option<PathBuf>,
-    filter: crate::integrations::reserved::ExportFilter,
+    filter: crate::integrations::reserved::ServerFilter,
     include_permissions: bool,
     output: &mut impl Write,
     non_interactive: bool,

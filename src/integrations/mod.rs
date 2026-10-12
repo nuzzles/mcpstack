@@ -2,8 +2,9 @@
 mod claude;
 mod codex;
 mod diff_output;
+mod listing;
 mod portable;
-mod reserved;
+pub(crate) mod reserved;
 mod secrets;
 
 use std::collections::BTreeSet;
@@ -17,6 +18,7 @@ use crate::cmd::{
     diff::Diff,
     export::{ClaudeExport, CodexExport},
     import::Import,
+    list::List,
     show::{ClaudeShow, CodexShow},
     r#use::Use,
 };
@@ -58,6 +60,7 @@ pub const EXAMPLES: &[&str] = &[
     "mcpstack --help",
     "mcpstack validate --help",
     "mcpstack codex --help",
+    "mcpstack codex list --help",
     "mcpstack codex use --help",
     "mcpstack codex use work.yml --dry-run",
     "mcpstack codex show --help",
@@ -65,6 +68,7 @@ pub const EXAMPLES: &[&str] = &[
     "mcpstack codex import --help",
     "mcpstack codex diff --help",
     "mcpstack claude --help",
+    "mcpstack claude list --help",
     "mcpstack claude show --help",
     "mcpstack claude export --help",
 ];
@@ -78,68 +82,21 @@ pub struct ExportArgs {
     #[arg(long)]
     include_permissions: bool,
     #[arg(skip)]
-    permissions_config: Option<PathBuf>,
-    /// Include every server normally skipped by the export filter.
-    #[arg(long)]
-    all: bool,
+    pub(crate) permissions_config: Option<PathBuf>,
     #[arg(skip)]
-    allow_workspace: bool,
-    #[arg(skip)]
-    allow_claude_in_chrome: bool,
-    #[arg(skip)]
-    allow_computer_use: bool,
-    #[arg(skip)]
-    allow_claude_preview: bool,
-    #[arg(skip)]
-    allow_claude_browser: bool,
-    #[arg(skip)]
-    allow_node_repl: bool,
+    pub(crate) server_filter: reserved::ServerFilter,
 }
 
 impl ExportArgs {
-    pub(crate) fn for_codex(&mut self, computer_use: bool, node_repl: bool) {
-        self.allow_workspace = true;
-        self.allow_claude_in_chrome = true;
-        self.allow_computer_use = computer_use;
-        self.allow_claude_preview = true;
-        self.allow_claude_browser = true;
-        self.allow_node_repl = node_repl;
-    }
-
-    pub(crate) fn for_claude(
-        &mut self,
-        permissions_config: Option<PathBuf>,
-        workspace: bool,
-        claude_in_chrome: bool,
-        computer_use: bool,
-        claude_preview: bool,
-        claude_browser: bool,
-    ) {
-        self.permissions_config = permissions_config;
-        self.allow_workspace = workspace;
-        self.allow_claude_in_chrome = claude_in_chrome;
-        self.allow_computer_use = computer_use;
-        self.allow_claude_preview = claude_preview;
-        self.allow_claude_browser = claude_browser;
-        self.allow_node_repl = true;
-    }
-
     pub(crate) fn config_path(&self) -> Option<&Path> {
         self.config.as_deref()
     }
 
     fn includes_permissions(&self) -> bool {
-        self.all || self.include_permissions
+        self.server_filter.all || self.include_permissions
     }
-    fn filter(&self) -> reserved::ExportFilter {
-        reserved::ExportFilter {
-            workspace: self.all || self.allow_workspace,
-            claude_in_chrome: self.all || self.allow_claude_in_chrome,
-            computer_use: self.all || self.allow_computer_use,
-            claude_preview: self.all || self.allow_claude_preview,
-            claude_browser: self.all || self.allow_claude_browser,
-            node_repl: self.all || self.allow_node_repl,
-        }
+    fn filter(&self) -> reserved::ServerFilter {
+        self.server_filter
     }
 }
 
@@ -176,6 +133,7 @@ pub struct CodexCommands {
 
 #[derive(Subcommand)]
 enum CodexOperation {
+    List(List<reserved::CodexFilterArgs>),
     Use(Use),
     Import(Import),
     Show(CodexShow),
@@ -192,6 +150,7 @@ pub struct ClaudeCommands {
 
 #[derive(Subcommand)]
 enum ClaudeOperation {
+    List(List<reserved::ClaudeFilterArgs>),
     Use(Use),
     Import(Import),
     Show(ClaudeShow),
@@ -208,6 +167,7 @@ impl Client {
     ) -> Result<(), AppError> {
         match self {
             Self::Codex(commands) => match commands.operation {
+                CodexOperation::List(args) => args.run(&Codex, output, colored).await,
                 CodexOperation::Use(args) => {
                     args.run(&Codex, output, non_interactive, colored).await
                 }
@@ -221,6 +181,7 @@ impl Client {
                 }
             },
             Self::Claude(commands) => match commands.operation {
+                ClaudeOperation::List(args) => args.run(&Claude, output, colored).await,
                 ClaudeOperation::Use(args) => {
                     args.run(&Claude, output, non_interactive, colored).await
                 }
@@ -238,6 +199,14 @@ impl Client {
 }
 
 pub trait ClientAdapter {
+    async fn list(
+        &self,
+        config: Option<PathBuf>,
+        filter: reserved::ServerFilter,
+        output: &mut impl Write,
+        colored: bool,
+    ) -> Result<(), AppError>;
+
     async fn show(
         &self,
         args: ExportArgs,
@@ -287,6 +256,16 @@ pub struct Codex;
 pub struct Claude;
 
 impl ClientAdapter for Codex {
+    async fn list(
+        &self,
+        config: Option<PathBuf>,
+        filter: reserved::ServerFilter,
+        output: &mut impl Write,
+        colored: bool,
+    ) -> Result<(), AppError> {
+        codex::workflow::run_list(config, filter, output, colored).await
+    }
+
     async fn export(
         &self,
         args: ExportArgs,

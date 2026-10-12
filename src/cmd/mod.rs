@@ -3,6 +3,7 @@
 pub mod diff;
 pub mod export;
 pub mod import;
+pub mod list;
 pub mod schema;
 pub mod show;
 pub mod r#use;

@@ -31,7 +31,7 @@ pub fn export(document: &str, expose_secrets: bool) -> Result<StackV1, ExportErr
 pub fn export_filtered(
     document: &str,
     expose_secrets: bool,
-    filter: crate::integrations::reserved::ExportFilter,
+    filter: crate::integrations::reserved::ServerFilter,
 ) -> Result<StackV1, ExportError> {
     export_with_filter(document, filter, |_, _, _| Ok(expose_secrets))
 }
@@ -48,7 +48,7 @@ pub fn export_with_decisions(
 
 pub fn export_with_filter(
     document: &str,
-    filter: crate::integrations::reserved::ExportFilter,
+    filter: crate::integrations::reserved::ServerFilter,
     mut expose: impl FnMut(&str, usize, usize) -> Result<bool, ExportError>,
 ) -> Result<StackV1, ExportError> {
     let config: toml::Value = toml::from_str(document).map_err(|_| ExportError::Config)?;
@@ -462,7 +462,7 @@ command = "example"
             export_filtered(
                 config,
                 false,
-                crate::integrations::reserved::ExportFilter {
+                crate::integrations::reserved::ServerFilter {
                     node_repl: true,
                     ..Default::default()
                 }
@@ -474,7 +474,7 @@ command = "example"
             export_filtered(
                 config,
                 false,
-                crate::integrations::reserved::ExportFilter {
+                crate::integrations::reserved::ServerFilter {
                     node_repl: true,
                     ..Default::default()
                 }
