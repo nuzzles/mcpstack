@@ -1,6 +1,6 @@
 # Compatibility
 
-mcpstack **0.1.0** supports:
+mcpstack supports:
 
 | Harness | Scope | Transports |
 | --- | --- | --- |

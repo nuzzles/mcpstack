@@ -8,6 +8,6 @@ mcpstack claude diff work.yaml
 mcpstack claude import work.yaml
 ```
 
-Version **0.1.0**. Manages configuration; does not install or run servers.
+Manages configuration; does not install or run servers.
 
 [Installation](getting-started.md) · [Commands](cli-reference.md) · [For agents](agents.md)

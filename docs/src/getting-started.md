@@ -9,4 +9,4 @@ Keep Cargo's binary directory on your `PATH`, then check your version:
 mcpstack --version
 ```
 
-These docs cover **0.1.0**. Next: [try a stack](workflows.md#try-it).
+Next: [try a stack](workflows.md#try-it).
