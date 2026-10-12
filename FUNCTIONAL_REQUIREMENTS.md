@@ -25,7 +25,7 @@ to its entry in Current status at the bottom.\
 | --- | --- |
 | Done | Send compact tracing logs to stderr; keep YAML shown on stdout and CLI schema JSON clean. |
 | Done | Support `-v`/`-vv`, `--quiet`, and `--log`/`RUST_LOG` filtering. |
-| Done | Support `--color auto/always/never` and `MCPSTACK_COLOR`; auto checks stderr for logs and stdout for diffs. |
+| Done | Support `--color auto/always/never` and `MCPSTACK_COLOR` for help, diagnostics, logs, and diffs; auto checks the destination terminal. |
 | Done | Honor `--no-color` and nonempty `NO_COLOR`; enable ANSI support on Windows. |
 | Done | Keep configuration values out of logs; retain typed error codes and exit statuses. |
 
@@ -288,6 +288,15 @@ Help, version, `--schema`, `validate <file>`, `codex show`, `codex export <file>
 `codex diff <file>`, `codex import <file>`, `codex use <file>`, and runnable examples are implemented.
 CLI integration tests verify help/version output, the generated argument schema,
 runnable examples, and rejection of invalid arguments.
+
+Usage errors use Clap's detailed diagnostics, including missing arguments,
+subcommands, conflicting options, valid choices, and spelling suggestions.
+When color is enabled, errors are red, invalid names are yellow, and options
+and suggestions are cyan. Diagnostics go
+to stderr with exit 2 and no error-code footer; help and version go
+to stdout with exit 0. Command and option names remain visible. Supplied
+values, unexpected positional arguments, and inline assignment values are
+redacted; help names environment variables without printing their contents.
 
 ### Exit statuses and error codes
 

@@ -321,7 +321,7 @@ fn client_namespace_is_required_before_reads_or_writes_including_dry_runs() {
             .unwrap();
         assert_eq!(output.status.code(), Some(2), "{output:?}");
         assert!(output.stdout.is_empty());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("INVALID_ARGUMENT"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }

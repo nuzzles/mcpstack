@@ -18,10 +18,10 @@ pub struct Logging {
     #[arg(short, long, global = true, conflicts_with = "verbose")]
     quiet: bool,
     /// Override the tracing filter (also read from RUST_LOG).
-    #[arg(long, global = true, env = "RUST_LOG", conflicts_with_all = ["verbose", "quiet"])]
+    #[arg(long, global = true, env = "RUST_LOG", hide_env_values = true, conflicts_with_all = ["verbose", "quiet"])]
     log: Option<String>,
-    /// ANSI color mode for logs and diffs.
-    #[arg(long, global = true, env = "MCPSTACK_COLOR", value_enum, default_value_t = ColorMode::Auto)]
+    /// ANSI color mode for help, diagnostics, logs, and diffs.
+    #[arg(long, global = true, env = "MCPSTACK_COLOR", hide_env_values = true, value_enum, default_value_t = ColorMode::Auto)]
     color: ColorMode,
     /// Disable ANSI colors; also honors nonempty NO_COLOR.
     #[arg(long, global = true)]
@@ -53,14 +53,21 @@ impl Logging {
         colored
     }
 
-    pub fn init(&self) -> Result<(), AppError> {
+    pub(crate) fn conflicting_arguments(&self) -> Option<(&'static str, &'static str)> {
         // Clap checks conflicts within each command level, but global options
         // can be supplied on opposite sides of a subcommand.
-        if (self.verbose != 0 && self.quiet)
-            || (self.log.is_some() && (self.verbose != 0 || self.quiet))
-        {
-            return Err(AppError::Arguments);
+        if self.verbose != 0 && self.quiet {
+            Some(("--verbose", "--quiet"))
+        } else if self.log.is_some() && self.verbose != 0 {
+            Some(("--log <LOG>", "--verbose"))
+        } else if self.log.is_some() && self.quiet {
+            Some(("--log <LOG>", "--quiet"))
+        } else {
+            None
         }
+    }
+
+    pub fn init(&self) -> Result<(), AppError> {
         let directives = self
             .log
             .as_deref()

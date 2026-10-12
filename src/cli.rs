@@ -1,3 +1,4 @@
+mod diagnostics;
 pub(crate) mod schema;
 
 use crate::cmd::schema::Schema;
@@ -15,6 +16,7 @@ pub use crate::integrations::EXAMPLES;
 #[command(
     name = "mcpstack",
     version,
+    styles = diagnostics::styles(),
     about = env!("CARGO_PKG_DESCRIPTION"),
     after_help = format!("Examples:\n  {}", EXAMPLES.join("\n  "))
 )]
