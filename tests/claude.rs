@@ -876,6 +876,52 @@ fn claude_prepares_both_files_before_writes_and_repeats_without_backups() {
 
 #[test]
 #[cfg(any(unix, windows))]
+fn claude_server_changes_do_not_require_an_unchanged_settings_directory() {
+    for operation in ["import", "use"] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("claude.json");
+        let settings = dir.path().join("missing/nested/settings.json");
+        let stack = dir.path().join("stack.yml");
+        let original = "{\"theme\":\"dark\",\"mcpServers\":{}}\n";
+        std::fs::write(&config, original).unwrap();
+        std::fs::write(
+            &stack,
+            "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n",
+        )
+        .unwrap();
+        let flags = [
+            "-y",
+            "--include-permissions",
+            "--permissions-config",
+            settings.to_str().unwrap(),
+        ];
+        let mut preview_flags = flags.to_vec();
+        preview_flags.push("--dry-run");
+        let preview = run(operation, Some(&stack), &config, &preview_flags);
+        assert!(preview.status.success(), "{preview:?}");
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+
+        let applied = run(operation, Some(&stack), &config, &flags);
+        assert!(applied.status.success(), "{applied:?}");
+        let written = std::fs::read(&config).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&written).unwrap();
+        assert_eq!(value["mcpServers"]["example"]["command"], "tool");
+        assert_eq!(value["theme"], "dark");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("claude.json.~1~")).unwrap(),
+            original
+        );
+        let repeated = run(operation, Some(&stack), &config, &flags);
+        assert!(repeated.status.success(), "{repeated:?}");
+        assert_eq!(std::fs::read(&config).unwrap(), written);
+        assert!(!dir.path().join("missing").exists());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+    }
+}
+
+#[test]
+#[cfg(any(unix, windows))]
 fn claude_rejects_aliasing_targets_and_backup_failure_before_config_writes() {
     for operation in ["import", "use"] {
         let dir = tempfile::tempdir().unwrap();

@@ -30,14 +30,24 @@ async fn replace_all_with(
 ) -> Result<(), TransactionError> {
     #[cfg(any(unix, windows))]
     let mut targets: Vec<std::path::PathBuf> = Vec::new();
-    for (file, _) in &writes {
+    for (file, _bytes) in &writes {
         file.ensure_write_supported()?;
         file.check_unchanged().await?;
         #[cfg(any(unix, windows))]
         {
-            let target = super::file_identity(&file.path)
-                .await
-                .map_err(|_| Error::Read)?;
+            let target = match super::file_identity(&file.path).await {
+                Ok(target) => target,
+                Err(error)
+                    if _bytes.is_none()
+                        && !file.exists()
+                        && error.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    // An absent guard needs no parent directory. Its absence is
+                    // still checked before committing and at its turn below.
+                    continue;
+                }
+                Err(_) => return Err(Error::Read.into()),
+            };
             if targets.iter().any(|path| super::same_path(path, &target)) {
                 return Err(TransactionError::DuplicateTarget);
             }
@@ -296,10 +306,38 @@ mod tests {
     #[tokio::test]
     async fn absent_guards_do_not_create_files() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("absent");
-        replace_all(vec![(Snapshot::read(&path).await.unwrap(), None)])
-            .await
-            .unwrap();
+        for name in ["absent", "missing/nested/absent"] {
+            let path = dir.path().join(name);
+            replace_all(vec![(Snapshot::read(&path).await.unwrap(), None)])
+                .await
+                .unwrap();
+        }
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn absent_guard_detects_creation_and_restores_earlier_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("missing/nested/b");
+        fs::write(&a, b"original").unwrap();
+        let result = replace_all_with(
+            vec![
+                change(&a, b"new").await,
+                (Snapshot::read(&b).await.unwrap(), None),
+            ],
+            |index| {
+                if index == 1 {
+                    assert_eq!(fs::read(&a).unwrap(), b"new");
+                    fs::create_dir_all(b.parent().unwrap()).unwrap();
+                    fs::write(&b, b"external").unwrap();
+                }
+                Ok(())
+            },
+        )
+        .await;
+        assert_eq!(result, Err(TransactionError::Apply(Error::Changed)));
+        assert_eq!(fs::read(&a).unwrap(), b"original");
+        assert_eq!(fs::read(&b).unwrap(), b"external");
     }
 }
