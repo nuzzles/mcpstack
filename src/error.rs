@@ -31,6 +31,8 @@ pub enum ErrorCode {
     BackupError = 11,
     #[error("Unable to safely write client configuration.")]
     ConfigWriteError = 13,
+    #[error("Unable to write the exported stack file. Check its path and permissions.")]
+    StackWriteError = 14,
 }
 
 impl ErrorCode {
@@ -54,12 +56,18 @@ impl Serialize for ErrorCode {
 pub enum AppError {
     #[error("{code}", code = ErrorCode::InvalidArgument)]
     Arguments,
+    #[error("Export destination must end in .yml or .yaml.")]
+    ExportPath,
+    #[error("Export destination must differ from the client configuration file.")]
+    ExportSource,
     #[error("{code}", code = ErrorCode::LoggingError)]
     Logging,
     #[error("{code}", code = ErrorCode::OutputError)]
     Output(#[from] io::Error),
     #[error("{code}", code = ErrorCode::StackReadError)]
     StackRead(#[source] io::Error),
+    #[error("{code}", code = ErrorCode::StackWriteError)]
+    StackWrite(#[source] crate::io::Error),
     #[error("{0}")]
     Stack(#[from] ValidationError),
     #[error("{code}", code = ErrorCode::ConfigReadError)]
@@ -85,8 +93,10 @@ impl AppError {
         match self {
             Self::Logging => ErrorCode::LoggingError,
             Self::Arguments => ErrorCode::InvalidArgument,
+            Self::ExportPath | Self::ExportSource => ErrorCode::InvalidArgument,
             Self::Output(_) => ErrorCode::OutputError,
             Self::StackRead(_) => ErrorCode::StackReadError,
+            Self::StackWrite(_) => ErrorCode::StackWriteError,
             Self::Stack(_) => ErrorCode::InvalidStack,
             Self::ConfigRead(_) => ErrorCode::ConfigReadError,
             Self::ImportApprovalRequired

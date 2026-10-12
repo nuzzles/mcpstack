@@ -41,10 +41,22 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
         .find(|command| command["name"] == "codex")
         .unwrap();
     let operations = codex["commands"].as_array().unwrap();
-    for name in ["use", "import", "export", "diff"] {
+    for name in ["use", "import", "show", "export", "diff"] {
         assert!(operations.iter().any(|operation| operation["name"] == name));
         assert!(!commands.iter().any(|command| command["name"] == name));
     }
+    let export = operations
+        .iter()
+        .find(|operation| operation["name"] == "export")
+        .unwrap();
+    assert_eq!(export["arguments"][0]["name"], "file");
+    assert_eq!(export["arguments"][0]["required"], true);
+    let show = operations
+        .iter()
+        .find(|operation| operation["name"] == "show")
+        .unwrap();
+    assert!(show["arguments"].as_array().unwrap().is_empty());
+    assert_eq!(show["options"], export["options"]);
     let use_command = operations
         .iter()
         .find(|command| command["name"] == "use")
@@ -123,18 +135,21 @@ fn client_commands_require_an_operation_and_reject_legacy_syntax() {
         vec!["codex", "use"],
         vec!["codex", "import"],
         vec!["codex", "diff"],
+        vec!["codex", "export"],
+        vec!["claude", "export"],
         vec!["export", "codex"],
+        vec!["show", "codex"],
         vec!["import", "codex", "stack.yml"],
         vec!["diff", "codex", "stack.yml"],
         vec!["use", "stack.yml", "--client", "codex"],
         vec!["codex", "use", "stack.yml", "--client", "codex"],
-        vec!["--schema", "codex", "export"],
+        vec!["--schema", "codex", "show"],
     ] {
         let output = run(&args);
         assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
         assert!(output.stdout.is_empty(), "{args:?}");
     }
-    for operation in ["use", "import", "export", "diff"] {
+    for operation in ["use", "import", "show", "export", "diff"] {
         let output = run(&["codex", operation, "--help"]);
         assert!(output.status.success());
         let help = String::from_utf8(output.stdout).unwrap();
@@ -160,6 +175,143 @@ fn help_and_version_use_text_output() {
         assert!(String::from_utf8_lossy(&output.stdout).contains("mcpstack"));
         assert!(serde_json::from_slice::<Value>(&output.stdout).is_err());
     }
+}
+
+#[test]
+fn show_prints_yaml_and_export_writes_the_same_stack_for_both_clients() {
+    for (client, config_name, source) in [
+        (
+            "codex",
+            "config.toml",
+            "[mcp_servers.api]\ncommand='tool'\n",
+        ),
+        (
+            "claude",
+            "claude.json",
+            r#"{"mcpServers":{"api":{"command":"tool"}}}"#,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(config_name);
+        let destination = dir.path().join("stack.yml");
+        std::fs::write(&config, source).unwrap();
+        let invoke = |operation: &str| {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
+            command.args(["--non-interactive", client, operation]);
+            if operation == "export" {
+                command.arg(&destination);
+            }
+            command
+                .arg("--config")
+                .arg(&config)
+                .env_remove("RUST_LOG")
+                .stdin(Stdio::null())
+                .output()
+                .unwrap()
+        };
+        let shown = invoke("show");
+        assert!(shown.status.success(), "{shown:?}");
+        assert!(!destination.exists());
+        let yaml: Value = yaml_serde::from_slice(&shown.stdout).unwrap();
+        assert_eq!(yaml["servers"]["api"]["transport"]["command"], "tool");
+        let exported = invoke("export");
+        assert!(exported.status.success(), "{exported:?}");
+        assert_eq!(std::fs::read(&destination).unwrap(), shown.stdout);
+        assert!(!exported.stdout.starts_with(b"schema_version:"));
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), source);
+
+        std::fs::write(&destination, "old stack").unwrap();
+        assert!(invoke("export").status.success());
+        assert_eq!(std::fs::read(&destination).unwrap(), shown.stdout);
+    }
+}
+
+#[test]
+fn export_does_not_write_a_file_when_generation_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    let destination = dir.path().join("stack.yml");
+    std::fs::write(
+        &config,
+        "[mcp_servers.api]\ncommand='tool'\nfuture_field=true\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["--non-interactive", "codex", "export"])
+        .arg(&destination)
+        .arg("--config")
+        .arg(&config)
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(6), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(!destination.exists());
+
+    std::fs::write(&destination, "existing stack").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["--non-interactive", "codex", "export"])
+        .arg(&destination)
+        .arg("--config")
+        .arg(&config)
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(6), "{output:?}");
+    assert_eq!(
+        std::fs::read_to_string(&destination).unwrap(),
+        "existing stack"
+    );
+
+    std::fs::write(&config, "[mcp_servers.api]\ncommand='tool'\n").unwrap();
+    let invalid_name = dir.path().join("stack.txt");
+    let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["--non-interactive", "codex", "export"])
+        .arg(&invalid_name)
+        .arg("--config")
+        .arg(&config)
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(!invalid_name.exists());
+    assert!(String::from_utf8_lossy(&output.stderr).contains(".yml or .yaml"));
+
+    let source_named_yaml = dir.path().join("config.yaml");
+    std::fs::write(&source_named_yaml, "[mcp_servers.api]\ncommand='tool'\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["--non-interactive", "codex", "export"])
+        .arg(&source_named_yaml)
+        .arg("--config")
+        .arg(&source_named_yaml)
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert_eq!(
+        std::fs::read_to_string(&source_named_yaml).unwrap(),
+        "[mcp_servers.api]\ncommand='tool'\n"
+    );
+
+    let directory_destination = dir.path().join("directory.yml");
+    std::fs::create_dir(&directory_destination).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["--non-interactive", "codex", "export"])
+        .arg(&directory_destination)
+        .arg("--config")
+        .arg(&config)
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(14), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("STACK_WRITE_ERROR"));
 }
 
 #[test]
@@ -374,12 +526,12 @@ fn export_exposes_secrets_only_when_explicitly_requested() {
     let config = fixture.directory.path().join("config.toml");
     std::fs::write(&config, document).unwrap();
     for args in [
-        vec!["codex", "export"],
-        vec!["--non-interactive", "codex", "export"],
-        vec!["codex", "--non-interactive", "export"],
-        vec!["codex", "export", "--non-interactive"],
-        vec!["codex", "export", "--expose-secrets"],
-        vec!["--non-interactive", "codex", "export", "--expose-secrets"],
+        vec!["codex", "show"],
+        vec!["--non-interactive", "codex", "show"],
+        vec!["codex", "--non-interactive", "show"],
+        vec!["codex", "show", "--non-interactive"],
+        vec!["codex", "show", "--expose-secrets"],
+        vec!["--non-interactive", "codex", "show", "--expose-secrets"],
     ] {
         let exposed = args.contains(&"--expose-secrets");
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
@@ -422,7 +574,7 @@ fn authorization_header_is_not_misclassified_as_bearer_binding() {
     for (flag, exposed) in [(None, false), (Some("--expose-secrets"), true)] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
         command
-            .args(["--non-interactive", "codex", "export", "--config"])
+            .args(["--non-interactive", "codex", "show", "--config"])
             .arg(&config);
         if let Some(flag) = flag {
             command.arg(flag);
@@ -456,7 +608,7 @@ fn codex_permissions_opt_in_round_trip_preserves_modes() {
     let stack = dir.path().join("stack.yml");
     std::fs::write(&source, "[mcp_servers.example]\ncommand='tool'\ndefault_tools_approval_mode='writes'\n[mcp_servers.example.tools.read]\napproval_mode='prompt'\n").unwrap();
     let export = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["--non-interactive", "codex", "export", "--config"])
+        .args(["--non-interactive", "codex", "show", "--config"])
         .arg(&source)
         .arg("--include-permissions")
         .env_remove("RUST_LOG")
@@ -515,7 +667,7 @@ fn codex_export_all_use_round_trip_has_no_diff_with_matching_credentials() {
     let original = "[mcp_servers.notion]\nurl='https://example.com/mcp'\nsandbox_mode='workspace-write'\napproval_policy='on-request'\n[mcp_servers.obsidian]\nurl='https://example.com/obsidian'\ndefault_tools_approval_mode='approve'\nhttp_headers={ Authorization='Bearer fixture-secret' }\n";
     std::fs::write(&config, original).unwrap();
     let exported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["--non-interactive", "codex", "export", "--all", "--config"])
+        .args(["--non-interactive", "codex", "show", "--all", "--config"])
         .arg(&config)
         .env_remove("RUST_LOG")
         .stdin(Stdio::null())
@@ -621,7 +773,7 @@ fn codex_export_all_includes_default_skipped_names() {
     .unwrap();
     let run_export = |flags: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["--non-interactive", "codex", "export", "--config"])
+            .args(["--non-interactive", "codex", "show", "--config"])
             .arg(&config)
             .args(flags)
             .env_remove("RUST_LOG")
@@ -652,7 +804,7 @@ fn codex_export_prints_a_stack_without_changing_values_or_files() {
     std::fs::write(&config, document).unwrap();
     let execute = || {
         Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["codex", "export"])
+            .args(["codex", "show"])
             .env("CODEX_HOME", fixture.directory.path())
             .env("PATH", "")
             .stdin(Stdio::null())
@@ -692,7 +844,7 @@ fn codex_export_prints_a_stack_without_changing_values_or_files() {
         std::fs::create_dir_all(home.join(".codex")).unwrap();
         std::fs::write(home.join(".codex/config.toml"), document).unwrap();
         let fallback = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["codex", "export"])
+            .args(["codex", "show"])
             .env_remove("CODEX_HOME")
             .env("HOME", home)
             .env("PATH", "")
@@ -733,7 +885,7 @@ fn export_reads_config_without_finding_or_running_codex() {
     .unwrap();
     for path in [root.to_path_buf(), root.join("missing-bin")] {
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["--non-interactive", "codex", "export"])
+            .args(["--non-interactive", "codex", "show"])
             .env("CODEX_HOME", root)
             .env("PATH", path)
             .env("MCPSTACK_TEST_MARKER", &marker)
@@ -758,7 +910,7 @@ fn export_rejects_obsolete_and_unknown_fields_without_echoing_secrets() {
         let config = format!("[mcp_servers.remote]\nurl='https://example.com/mcp'\n{field}\n");
         std::fs::write(fixture.directory.path().join("config.toml"), &config).unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["codex", "export"])
+            .args(["codex", "show"])
             .env("CODEX_HOME", fixture.directory.path())
             .env("PATH", "")
             .env_remove("RUST_LOG")
@@ -784,9 +936,9 @@ fn logging_conflicts_are_rejected_across_subcommand_levels() {
         vec!["-v", "validate", "/missing", "--log", "off"],
         vec!["--log", "off", "validate", "/missing", "-q"],
         vec!["-q", "validate", "/missing", "--log", "off"],
-        vec!["-v", "codex", "export", "-q"],
-        vec!["codex", "--log", "off", "export", "-v"],
-        vec!["-q", "codex", "export", "--log", "off"],
+        vec!["-v", "codex", "show", "-q"],
+        vec!["codex", "--log", "off", "show", "-v"],
+        vec!["-q", "codex", "show", "--log", "off"],
     ] {
         let output = run(&args);
         assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
@@ -870,28 +1022,22 @@ fn export_logs_respect_verbosity_filters_and_color() {
     .unwrap();
     for (args, filter, debug, warning, ansi) in [
         (
-            vec!["-v", "--color", "always", "codex", "export"],
+            vec!["-v", "--color", "always", "codex", "show"],
             None,
             true,
             false,
             true,
         ),
+        (vec!["codex", "show", "--quiet"], None, false, false, false),
         (
-            vec!["codex", "export", "--quiet"],
+            vec!["--log", "error", "codex", "show"],
             None,
             false,
             false,
             false,
         ),
         (
-            vec!["--log", "error", "codex", "export"],
-            None,
-            false,
-            false,
-            false,
-        ),
-        (
-            vec!["codex", "export"],
+            vec!["codex", "show"],
             Some("mcpstack=debug"),
             true,
             false,
@@ -948,7 +1094,7 @@ fn export_reads_explicit_config_and_preserves_inputs() {
             std::path::PathBuf::from("alternate config.toml"),
         ] {
             let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-                .args(["--non-interactive", "codex", "export", "--config"])
+                .args(["--non-interactive", "codex", "show", "--config"])
                 .arg(path)
                 .current_dir(root)
                 .env("CODEX_HOME", root)
@@ -1138,7 +1284,7 @@ fn codex_export_import_round_trip_preserves_supported_fields() {
     let original = "# source settings are not shared\nmodel='private'\n[mcp_servers.process]\ncommand='tool'\nargs=['--token=fixture-roundtrip-secret']\ncwd='/tmp'\nenv_vars=['FORWARDED']\nenabled=false\nrequired=true\nstartup_timeout_sec=10\ntool_timeout_sec=20\nenabled_tools=['read']\ndisabled_tools=['write']\n[mcp_servers.process.env]\nAPI_KEY='fixture-roundtrip-secret'\n[mcp_servers.remote]\nurl='https://example.com/mcp'\nbearer_token_env_var='CODEX_TOKEN'\n[mcp_servers.remote.http_headers]\nX-Secret='fixture-roundtrip-secret'\n[mcp_servers.remote.env_http_headers]\nX-Auth='OTHER_TOKEN'\n";
     std::fs::write(&source, original).unwrap();
     let exported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["--non-interactive", "codex", "export", "--config"])
+        .args(["--non-interactive", "codex", "show", "--config"])
         .arg(&source)
         .env("PATH", "")
         .env_remove("RUST_LOG")

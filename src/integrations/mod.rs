@@ -8,12 +8,12 @@ mod secrets;
 
 use std::collections::BTreeSet;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
 use thiserror::Error;
 
-use crate::cmd::{diff::Diff, export::Export, import::Import, r#use::Use};
+use crate::cmd::{diff::Diff, export::Export, import::Import, show::Show, r#use::Use};
 use crate::error::{AppError, ErrorCode};
 
 fn write_change_summary(
@@ -54,10 +54,12 @@ pub const EXAMPLES: &[&str] = &[
     "mcpstack codex --help",
     "mcpstack codex use --help",
     "mcpstack codex use work.yml --dry-run",
+    "mcpstack codex show --help",
     "mcpstack codex export --help",
     "mcpstack codex import --help",
     "mcpstack codex diff --help",
     "mcpstack claude --help",
+    "mcpstack claude show --help",
     "mcpstack claude export --help",
 ];
 
@@ -96,6 +98,10 @@ pub struct ExportArgs {
 }
 
 impl ExportArgs {
+    pub(crate) fn config_path(&self) -> Option<&Path> {
+        self.config.as_deref()
+    }
+
     fn includes_permissions(&self) -> bool {
         self.all || self.include_permissions
     }
@@ -145,6 +151,7 @@ pub struct ClientCommands {
 enum Operation {
     Use(Use),
     Import(Import),
+    Show(Show),
     Export(Export),
     Diff(Diff),
 }
@@ -177,12 +184,24 @@ async fn run_commands(
     match commands.operation {
         Operation::Use(args) => args.run(adapter, output, non_interactive, colored).await,
         Operation::Import(args) => args.run(adapter, output, non_interactive, colored).await,
+        Operation::Show(args) => args.run(adapter, output, non_interactive).await,
         Operation::Export(args) => args.run(adapter, output, non_interactive).await,
         Operation::Diff(args) => args.run(adapter, output, non_interactive, colored).await,
     }
 }
 
 pub trait ClientAdapter {
+    async fn show(
+        &self,
+        args: ExportArgs,
+        output: &mut impl Write,
+        non_interactive: bool,
+        expose_secrets: bool,
+    ) -> Result<(), AppError> {
+        self.export(args, output, non_interactive, expose_secrets)
+            .await
+    }
+
     async fn export(
         &self,
         args: ExportArgs,

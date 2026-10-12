@@ -23,7 +23,7 @@ to its entry in Current status at the bottom.\
 
 | Implementation | Brief description |
 | --- | --- |
-| Done | Send compact tracing logs to stderr; keep YAML exports and CLI schema JSON clean on stdout. |
+| Done | Send compact tracing logs to stderr; keep YAML shown on stdout and CLI schema JSON clean. |
 | Done | Support `-v`/`-vv`, `--quiet`, and `--log`/`RUST_LOG` filtering. |
 | Done | Support `--color auto/always/never` and `MCPSTACK_COLOR`; auto checks stderr for logs and stdout for diffs. |
 | Done | Honor `--no-color` and nonempty `NO_COLOR`; enable ANSI support on Windows. |
@@ -41,7 +41,7 @@ to its entry in Current status at the bottom.\
 | Done | Human-readable operation results; diagnostics on stderr. [*](#output-formats) |
 | Done | Define a versioned, client-independent stack format. |
 | Done | Validate schema versions, server definitions, names, and secret references. |
-| Done | Export Codex server entries as a YAML stack to stdout with safe defaults. [*](#codex-export) |
+| Done | Show Codex server entries as YAML on stdout or export them to a named stack file with safe defaults. [*](#codex-export) |
 | Done | Replace recognized credentials with secret references by default; allow interactive selections or `--expose-secrets` to include values. |
 | Done | Import/merge a stack into Codex without losing supported fields. [*](#phase-1-boundaries) |
 | Done | Resolve masked literals from environment variables or hidden prompts; preserve runtime bindings. [*](#secrets) |
@@ -63,7 +63,7 @@ to its entry in Current status at the bottom.\
 
 | Implementation | Brief description |
 | --- | --- |
-| Partial [*](#claude-support) | Claude Code user-scope JSON import, export, diff, and stack switching. |
+| Partial [*](#claude-support) | Claude Code user-scope JSON import, show, export, diff, and stack switching. |
 
 ### CLI
 
@@ -277,12 +277,12 @@ scope. Publishing and release/deployment automation require explicit authorizati
 ### Commands and help
 
 Client operations are grouped under `mcpstack <client> <operation>`. Codex exposes
-`use`, `import`, `export`, and `diff`; `validate` and `--schema` stay at the top
-level. Claude Code exposes the same four operations under `claude`. The parent
+`use`, `import`, `show`, `export`, and `diff`; `validate` and `--schema` stay at the top
+level. Claude Code exposes the same five operations under `claude`. The parent
 command selects the target, so there is no `--client` option.
 The previous operation-first syntax is no longer accepted.
 
-Help, version, `--schema`, `validate <file>`, `codex export`,
+Help, version, `--schema`, `validate <file>`, `codex show`, `codex export <file>`,
 `codex diff <file>`, `codex import <file>`, `codex use <file>`, and runnable examples are implemented.
 CLI integration tests verify help/version output, the generated argument schema,
 runnable examples, and rejection of invalid arguments.
@@ -296,7 +296,8 @@ Config read failures use 5 (`CONFIG_READ_ERROR`); export failures use 6
 (`EXPORT_ERROR`). Logging initialization/filter failures use exit 9
 (`LOGGING_ERROR`). Removed statuses 7, 8, and 12 are not reused.
 Import failures use 10 (`IMPORT_ERROR`), backup failures use 11 (`BACKUP_ERROR`),
-and config merge/write failures use 13 (`CONFIG_WRITE_ERROR`).
+config merge/write failures use 13 (`CONFIG_WRITE_ERROR`), and exported stack
+file write failures use 14 (`STACK_WRITE_ERROR`).
 The CLI schema advertises these statuses and actionable descriptions from the
 typed error definitions. Tests check code/status uniqueness and process failures
 for invalid arguments, output failures, invalid or unreadable stacks, config read
@@ -305,12 +306,12 @@ failures, export failures, and import failures.
 ### Deterministic output
 
 The CLI schema is generated deterministically from command definitions. Stack v1
-uses ordered maps and passes serialization round-trip tests. Codex export emits
-deterministic client-independent YAML stacks. `diff` and import `--dry-run` emit
-deterministic redacted configuration previews for the same stack, target config, resolved
-secrets, approvals, and color settings. Server processing uses ordered maps;
-previews retain the target file's layout and line numbers. Installation plans
-remain Phase 2 work.
+uses ordered maps and passes serialization round-trip tests. Codex show and export emit
+deterministic client-independent YAML stacks. `diff` emits deterministic redacted
+configuration previews for the same stack, target config, resolved secrets, and
+color settings. Use and import dry-runs summarize server changes. Server
+processing uses ordered maps; diff previews retain the target file's layout
+and line numbers. Installation plans remain Phase 2 work.
 Claude writes replace only the top-level `mcpServers` value in the JSON text,
 preserving unrelated settings and their formatting. Previews compute hunk
 positions from that exact proposed write. Preview placeholders redact credentials
@@ -319,8 +320,9 @@ and unrelated settings, so the displayed patch is not independently applicable.
 ### Output formats
 
 Help, version, and validation results use text output;
-`--schema` emits JSON; `codex export` emits YAML; `diff` and import dry-run
-emit redacted unified diffs.
+`--schema` emits JSON; `codex show` emits YAML on stdout, while `codex export <file>`
+writes the same YAML to the named file. `diff` emits a redacted unified diff;
+import and use dry-runs summarize added, modified, and deleted servers.
 Diagnostics go to stderr without echoing argument values. Automation uses the
 noninteractive commands and stable exit statuses; structured JSON operation
 results are not required.
@@ -349,8 +351,9 @@ Other platforms reject import safely.
 
 ### Codex export
 
-`codex export` reads the default Codex TOML config and prints client-independent server
-entries as portable YAML `transport` definitions on stdout. In noninteractive use,
+`codex show` reads the default Codex TOML config and prints client-independent server
+entries as portable YAML `transport` definitions on stdout. `codex export <file>`
+writes the same YAML to a required `.yml` or `.yaml` destination path. In noninteractive use,
 credential values become `{value_env: MCPSTACK_SERVER_FIELD}` references. Recognition uses credential field names
 (token, secret, password, API/access/private key), authorization/cookie headers,
 and named token arguments (`--token VALUE` or `--token=VALUE`). Nested credential
@@ -365,15 +368,17 @@ numeric suffixes. Existing references are preserved and their names reserved.
 Export never reads or sets environment variables. For an inline credential argument,
 the referenced environment value must contain the complete `--token=VALUE` argument.
 
-In an interactive terminal, `codex export` asks whether to mask or include each
+In an interactive terminal, `codex show` and `codex export` ask whether to mask or include each
 detected credential, showing progress such as `Secret 1/12`. Masking is selected
 by default; Yes/No to all applies the chosen action to the current and remaining
 credentials. `--non-interactive` masks all detected credentials without prompting,
-including when standard input is redirected. `codex export --expose-secrets`
+including when standard input is redirected. `--expose-secrets` on either command
 preserves literal values, including credentials, without prompting.
 No export mode changes the source file or logs its values. Server names and field
-keys remain visible. `codex export --config <path>` reads an explicit TOML file instead of the default
-config. Relative paths resolve from the current working directory.
+keys remain visible. `--config <path>` reads an explicit TOML file instead of the default
+config. Relative paths resolve from the current working directory. A successful
+file export atomically replaces an existing destination; invalid destinations and
+attempts to replace the explicit source config are rejected before writing.
 
 ### Codex config schema
 
