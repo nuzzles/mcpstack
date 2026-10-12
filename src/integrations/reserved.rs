@@ -9,8 +9,9 @@ pub(crate) fn is_reserved(name: &str) -> bool {
     .skip(name)
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub struct ServerFilter {
+    pub selection: super::selection::Selection,
     pub all: bool,
     pub workspace: bool,
     pub claude_in_chrome: bool,
@@ -21,7 +22,25 @@ pub struct ServerFilter {
 }
 
 impl ServerFilter {
-    pub fn skip(self, name: &str) -> bool {
+    pub fn validate<'a>(
+        &self,
+        names: impl Iterator<Item = &'a str>,
+    ) -> Result<(), super::selection::Error> {
+        let names: Vec<_> = names.collect();
+        self.selection.validate(names.iter().copied())?;
+        for name in names {
+            if !self.selection.is_empty() && self.selection.includes(name) && self.excluded(name) {
+                return Err(super::selection::Error::Excluded(name.to_owned()));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn skip(&self, name: &str) -> bool {
+        !self.selection.includes(name) || self.excluded(name)
+    }
+
+    fn excluded(&self, name: &str) -> bool {
         if self.all {
             return false;
         }
@@ -44,6 +63,8 @@ pub trait FilterArgs {
 
 #[derive(Args)]
 struct CommonFilterArgs {
+    #[command(flatten)]
+    selection: super::selection::Selection,
     /// Include every normally skipped server.
     #[arg(long)]
     all: bool,
@@ -64,6 +85,7 @@ pub struct CodexFilterArgs {
 impl FilterArgs for CodexFilterArgs {
     fn filter(&self) -> ServerFilter {
         ServerFilter {
+            selection: self.common.selection.clone(),
             all: self.common.all,
             computer_use: self.common.allow_computer_use,
             node_repl: self.allow_node_repl,
@@ -96,6 +118,7 @@ pub struct ClaudeFilterArgs {
 impl FilterArgs for ClaudeFilterArgs {
     fn filter(&self) -> ServerFilter {
         ServerFilter {
+            selection: self.common.selection.clone(),
             all: self.common.all,
             computer_use: self.common.allow_computer_use,
             workspace: self.allow_workspace,

@@ -33,6 +33,7 @@ pub(super) fn write(
             .iter()
             .collect(),
     };
+    filter.validate(definitions.keys().map(|name| name.as_str()))?;
     // Prepare every row before writing, so invalid entries produce no partial list.
     let rows = definitions
         .into_iter()

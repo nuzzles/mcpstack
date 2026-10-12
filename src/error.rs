@@ -54,6 +54,8 @@ impl Serialize for ErrorCode {
 /// Execution errors preserve typed causes but expose only safe diagnostics.
 #[derive(Debug, Error)]
 pub enum AppError {
+    #[error(transparent)]
+    Selection(#[from] crate::integrations::selection::Error),
     #[error("{code}", code = ErrorCode::InvalidArgument)]
     Arguments,
     #[error("Export destination must end in .yml or .yaml.")]
@@ -96,7 +98,7 @@ impl AppError {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Logging => ErrorCode::LoggingError,
-            Self::Arguments => ErrorCode::InvalidArgument,
+            Self::Arguments | Self::Selection(_) => ErrorCode::InvalidArgument,
             Self::ExportPath | Self::ExportSource => ErrorCode::InvalidArgument,
             Self::Output(_) => ErrorCode::OutputError,
             Self::StackRead(_) => ErrorCode::StackReadError,

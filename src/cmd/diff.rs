@@ -7,17 +7,20 @@ use std::io::Write;
 #[derive(Args)]
 pub struct Diff {
     #[command(flatten)]
+    selection: crate::integrations::selection::Selection,
+    #[command(flatten)]
     stack: StackArgs,
 }
 
 impl Diff {
     pub async fn run(
-        self,
+        mut self,
         target: &impl ClientAdapter,
         output: &mut impl Write,
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {
+        self.stack.selection = self.selection;
         target
             .diff(self.stack, output, non_interactive, colored)
             .await

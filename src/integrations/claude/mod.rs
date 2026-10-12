@@ -15,7 +15,7 @@ use crate::integrations::secrets::SecretResolver;
 use crate::integrations::{Claude, ClientAdapter, ExportArgs, StackArgs};
 use crate::io;
 use crate::schema::v1::{ConfigValue, Transport, ValueSource};
-use crate::schema::{SCHEMA_VERSION, Server, Stack, StackV1};
+use crate::schema::{SCHEMA_VERSION, Server, StackV1};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -76,7 +76,7 @@ fn path(config: Option<PathBuf>) -> Result<PathBuf, Error> {
         .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".claude.json")))
         .ok_or(Error::Path)
 }
-fn parse(bytes: &[u8], exporting: bool) -> Result<Value, Error> {
+fn parse(bytes: &[u8]) -> Result<Value, Error> {
     let value = if bytes.is_empty() {
         Value::Object(Map::new())
     } else {
@@ -87,12 +87,7 @@ fn parse(bytes: &[u8], exporting: bool) -> Result<Value, Error> {
     };
     let object = value.as_object().ok_or(Error::Config)?;
     if let Some(servers) = object.get("mcpServers") {
-        let servers = servers.as_object().ok_or(Error::Config)?;
-        for (name, definition) in servers {
-            if !exporting || !crate::integrations::reserved::is_reserved(name) {
-                validate(definition)?;
-            }
-        }
+        servers.as_object().ok_or(Error::Config)?;
     }
     Ok(value)
 }
@@ -962,20 +957,22 @@ fn summarize_changes(
     super::write_change_summary(output, &added, &modified, &deleted, colored)?;
     Ok(())
 }
-async fn read_stack(file: &Path) -> Result<StackV1, AppError> {
-    let text = fs::read_to_string(file)
-        .await
-        .map_err(AppError::StackRead)?;
-    let Stack::V1(stack) = Stack::from_yaml(&text)?;
-    Ok(stack)
-}
 async fn snapshot(
     config: Option<PathBuf>,
-    exporting: bool,
+    filter: Option<&super::reserved::ServerFilter>,
 ) -> Result<(PathBuf, io::Snapshot, Value), AppError> {
     let path = path(config)?;
     let file = io::Snapshot::read(&path).await.map_err(|_| Error::Read)?;
-    let parsed = parse(file.contents(), exporting)?;
+    let parsed = parse(file.contents())?;
+    let definitions = servers(&parsed);
+    if let Some(filter) = filter {
+        filter.validate(definitions.keys().map(String::as_str))?;
+    }
+    for (name, definition) in &definitions {
+        if filter.is_none_or(|filter| !filter.skip(name)) {
+            validate(definition)?;
+        }
+    }
     Ok((path, file, parsed))
 }
 async fn write_config(file: io::Snapshot, config: Value) -> Result<(), AppError> {
@@ -1100,7 +1097,7 @@ impl ClientAdapter for Claude {
         } else {
             None
         };
-        let (_, _, config) = snapshot(args.config, true).await?;
+        let (_, _, config) = snapshot(args.config, Some(&filter)).await?;
         let mut values = servers(&config);
         values.retain(|name, _| !filter.skip(name));
         let mut stack = as_stack(values)?;
@@ -1177,8 +1174,8 @@ impl ClientAdapter for Claude {
         } else {
             None
         };
-        let (config_path, file, config) = snapshot(args.config, false).await?;
-        let stack = read_stack(&args.file).await?;
+        let (config_path, file, config) = snapshot(args.config, None).await?;
+        let stack = args.selection.read_stack(&args.file).await?;
         let before = servers(&config);
         let (preview_values, missing) = prepared_preview(&stack)?;
         if missing {
@@ -1240,8 +1237,8 @@ impl ClientAdapter for Claude {
         } else {
             None
         };
-        let (config_path, file, config) = snapshot(args.config, false).await?;
-        let stack = read_stack(&args.file).await?;
+        let (config_path, file, config) = snapshot(args.config, None).await?;
+        let stack = args.selection.read_stack(&args.file).await?;
         let before = servers(&config);
         let (preview_values, missing) = prepared_preview(&stack)?;
         if missing {
@@ -1380,8 +1377,8 @@ impl ClientAdapter for Claude {
         } else {
             None
         };
-        let (config_path, file, config) = snapshot(args.config, false).await?;
-        let stack = read_stack(&args.file).await?;
+        let (config_path, file, config) = snapshot(args.config, None).await?;
+        let stack = args.selection.read_stack(&args.file).await?;
         let before = servers(&config);
         let (mut preliminary, missing) = prepared_preview(&stack)?;
         if missing {

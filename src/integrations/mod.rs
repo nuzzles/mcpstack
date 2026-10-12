@@ -6,6 +6,7 @@ mod listing;
 mod portable;
 pub(crate) mod reserved;
 mod secrets;
+pub(crate) mod selection;
 
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -96,12 +97,14 @@ impl ExportArgs {
         self.server_filter.all || self.include_permissions
     }
     fn filter(&self) -> reserved::ServerFilter {
-        self.server_filter
+        self.server_filter.clone()
     }
 }
 
 #[derive(Args)]
 pub struct StackArgs {
+    #[arg(skip)]
+    pub(crate) selection: selection::Selection,
     /// Stack file to compare, import, or use.
     #[arg(value_name = "FILE")]
     file: PathBuf,
@@ -298,6 +301,7 @@ impl ClientAdapter for Codex {
         codex::workflow::run_import(
             args.file,
             args.config,
+            args.selection,
             args.include_permissions,
             output,
             non_interactive,
@@ -340,6 +344,7 @@ impl ClientAdapter for Codex {
         codex::diff::run(
             args.file,
             args.config,
+            args.selection,
             args.include_permissions,
             output,
             non_interactive,

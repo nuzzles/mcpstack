@@ -37,6 +37,7 @@ impl Error {
     pub(super) fn code(&self) -> ErrorCode {
         match self {
             Self::ConfigPath => ErrorCode::ConfigReadError,
+            Self::Export(export::ExportError::Selection(_)) => ErrorCode::InvalidArgument,
             Self::Export(_) => ErrorCode::ExportError,
             Self::Import(_) => ErrorCode::ImportError,
             Self::File(config::FileError::Backup) => ErrorCode::BackupError,

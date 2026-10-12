@@ -6,6 +6,8 @@ use std::io::Write;
 /// Approve and apply server additions and replacements.
 #[derive(Args)]
 pub struct Import {
+    #[command(flatten)]
+    selection: crate::integrations::selection::Selection,
     /// Run import prompts, then show the diff for approved changes without writing files.
     #[arg(long)]
     dry_run: bool,
@@ -18,12 +20,13 @@ pub struct Import {
 
 impl Import {
     pub async fn run(
-        self,
+        mut self,
         target: &impl ClientAdapter,
         output: &mut impl Write,
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {
+        self.stack.selection = self.selection;
         target
             .import(
                 self.stack,

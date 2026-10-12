@@ -302,6 +302,7 @@ pub(crate) async fn run_export(
 pub(crate) async fn run_import(
     file: PathBuf,
     config: Option<PathBuf>,
+    selection: crate::integrations::selection::Selection,
     include_permissions: bool,
     output: &mut impl Write,
     non_interactive: bool,
@@ -314,6 +315,12 @@ pub(crate) async fn run_import(
     }
     let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
     let snapshot = Snapshot::read(&path).await?;
+    // Explicit selections must be checked before prompts or backup creation.
+    let selected_stack = if selection.is_empty() {
+        None
+    } else {
+        Some(selection.read_stack(&file).await?)
+    };
     let interactive = !non_interactive && stdin().is_terminal() && stderr().is_terminal();
     if !auto_approve && !interactive {
         return Err(AppError::ImportApprovalRequired);
@@ -323,10 +330,11 @@ pub(crate) async fn run_import(
         let backup = snapshot.default_backup_path().await?;
         snapshot.create_backup_at(&backup).await?;
     }
-    let document = fs::read_to_string(file)
-        .await
-        .map_err(AppError::StackRead)?;
-    let stack = Stack::from_yaml(&document)?;
+    let stack: Stack = match selected_stack {
+        Some(stack) => stack,
+        None => selection.read_stack(&file).await?,
+    }
+    .into();
     let (preliminary, _, missing) =
         preliminary_definitions(&snapshot, &stack, include_permissions)?;
     if missing {
