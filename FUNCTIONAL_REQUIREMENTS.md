@@ -87,8 +87,14 @@ to its entry in Current status at the bottom.\
 | Done | Mask recognized credentials in shared exports by default, expose them only on explicit request, and redact them from previews and diagnostics. [*](#secrets) |
 | Done | Test secret redaction and configuration preservation on success and failure for supported workflows. [*](#stack-workflow-tests) |
 | Done | Document human and AI workflows, failure handling, switching, and repeat imports. [*](#documentation-site) |
-| Unsupported | Detect newer mcpstack releases, notify users when the installed CLI is out of date, and automatically update to the latest release. |
 | Unsupported | Import and export WebSocket MCP server definitions for harnesses that support them. |
+
+## Initial release
+
+| Implementation | Brief description |
+| --- | --- |
+| Unsupported | Claude Desktop MCP server list, import, show, export, diff, and stack switching. |
+| Unsupported | Detect newer mcpstack releases, notify users when the installed CLI is out of date, and automatically update to the latest release. |
 
 ## Notes
 
