@@ -1,8 +1,8 @@
 # Getting started
 
-## Build from source
+## Install from source
 
-mcpstack is unpublished. Install [Rust](https://www.rust-lang.org/tools/install)
+Install [Rust](https://www.rust-lang.org/tools/install)
 at or above the version declared in the repository's
 [Cargo.toml](https://github.com/nuzzles/mcpstack/blob/main/Cargo.toml), then run:
 
@@ -12,6 +12,9 @@ cd mcpstack
 cargo install --path . --locked
 mcpstack --version
 ```
+
+This guide covers version **0.1.0**. Check that `mcpstack --version` prints
+`mcpstack 0.1.0` before following the examples.
 
 Make sure Cargo's binary directory is on your `PATH`. From a checkout, you can also
 replace `mcpstack` with `cargo run --locked --` in the commands below.

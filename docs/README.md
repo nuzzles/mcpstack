@@ -30,12 +30,14 @@ The build stages files in `target/docs-source`, generates the CLI reference and
 JSON schema from the executable, and produces `target/docs-site`. Do not edit or
 commit generated artifacts. Each chapter is also published as Markdown, and the
 same content produces `llms.txt` and `llms-full.txt` for agents.
+The CLI reference and agent indexes include the version reported by the executable.
+Keep the guide's version labels in sync with `Cargo.toml` when preparing a release.
 
 ## Publishing
 
 The documentation workflow builds and checks PRs. Only pushes to `main` or a manual
 run on `main` can deploy, using GitHub Actions as the Pages source. The `github-pages`
-environment controls deployment. No CLI package is released or published.
+environment controls documentation deployment.
 
 To bootstrap a fork, enable **Settings → Pages → Build and deployment → GitHub
 Actions**, and update the repository URLs in `docs/book.toml` and `docs/build.py`.

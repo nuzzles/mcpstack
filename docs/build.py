@@ -124,10 +124,11 @@ def main():
     shutil.copytree(SOURCE / "theme", STAGING / "theme")
     shutil.copyfile(SOURCE / "book.toml", STAGING / "book.toml")
     schema = json.loads(run(str(binary), "--schema", env=env, capture_output=True).stdout)
+    cli_version = schema["cli_version"]
     revision = run("git", "rev-parse", "HEAD", cwd=ROOT, capture_output=True).stdout.strip()
     reference = [
         "# CLI reference\n",
-        "Generated from the executable at site build time. Your installed version's "
+        f"Generated from mcpstack **{cli_version}** at site build time. Your installed version's "
         "`--help` and `--schema` are authoritative for that version.\n",
         "Download the [CLI schema](cli-schema.json) for structured command metadata.\n",
     ]
@@ -151,15 +152,15 @@ def main():
     run(args.mdbook, "build", str(STAGING), "--dest-dir", str(SITE))
 
     index = [
-        "# mcpstack\n",
+        f"# mcpstack {cli_version}\n",
         "> Manage, share, and switch MCP server configurations across Codex and Claude Code.\n",
-        "Early-development documentation following main. Permissions are opt-in; "
+        f"Documentation for mcpstack {cli_version}. Permissions are opt-in; "
         "use replaces the entire server set. For unattended import previews, "
         "use --non-interactive -y.\n",
         f"Source revision: https://github.com/nuzzles/mcpstack/commit/{revision}\n",
         "## Documentation\n",
     ]
-    full = ["# mcpstack documentation\n", f"Source revision: {revision}\n"]
+    full = [f"# mcpstack {cli_version} documentation\n", f"Source revision: {revision}\n"]
     for name, page in zip(names, pages):
         markdown = page.read_text(encoding="utf-8")
         title = markdown.splitlines()[0].removeprefix("# ")

@@ -1,6 +1,6 @@
 # Your MCP setup, in a file.
 
-**mcpstack** saves MCP server configurations as portable YAML stacks. Review changes,
+**mcpstack 0.1.0** saves MCP server configurations as portable YAML stacks. Review changes,
 merge a few servers, or switch your complete setup between work and personal projects.
 Use the same commands with **Codex** and **Claude Code**.
 
@@ -10,14 +10,14 @@ mcpstack claude diff work.yaml
 mcpstack claude import work.yaml
 ```
 
-> **Early development.** mcpstack is currently built from source. It manages client
-> configuration; it does not install, launch, or check the health of MCP servers.
+mcpstack manages client configuration. Server installation and execution are
+handled by your MCP client and the server's own setup instructions.
 
 ## Start with your workflow
 
 | You want to… | Start here |
 | --- | --- |
-| Build the tool and try it without touching your configuration | [Getting started](getting-started.md) |
+| Install the tool and try it without touching your configuration | [Getting started](getting-started.md) |
 | Export, share, import, or switch setups | [Everyday workflows](workflows.md) |
 | Keep credentials local and choose whether to copy permissions | [Secrets and permissions](secrets-and-permissions.md) |
 | Understand a failure or restore a backup | [Failures and recovery](recovery.md) |
@@ -47,5 +47,5 @@ Use the sidebar or search to browse. Every chapter has a **Read Markdown** link.
 Agents can begin with [llms.txt](llms.txt), read the [complete Markdown guide](llms-full.txt),
 or inspect the generated [CLI schema](cli-schema.json).
 
-These docs follow the repository's `main` branch. Your installed binary's `--help`
-and `--schema` describe the version you actually have.
+This guide covers mcpstack **0.1.0**. Run `mcpstack --version` to check your version;
+your binary's `--help` and `--schema` describe its available commands.

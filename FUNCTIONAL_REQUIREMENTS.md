@@ -120,8 +120,8 @@ represent the fields before writing; removing the label does not make every
 client-specific option universally supported. Codex and Claude Code have
 adapters. Transport definitions provide the explicit shared transport form.
 
-This changes the unpublished v1 format: remove `client: codex` (or another client
-label) from existing items and retain their `config` data. Legacy client labels
+To migrate legacy stacks, remove `client: codex` (or another client label) from
+existing items and retain their `config` data. Legacy client labels
 are rejected rather than silently ignored.
 
 ### Phase 1 boundaries
@@ -256,8 +256,8 @@ servers. Rename one server before handling those permissions.
 No unsupported decision is silently discarded or weakened. Existing
 transport/settings compatibility checks still apply.
 
-This changes the unpublished v1 permission format. Legacy `source: claude` and
-`source: codex` policies, and native-qualified permission rules, are rejected.
+Legacy `source: claude` and `source: codex` policies, and native-qualified
+permission rules, are rejected.
 Re-export native configurations with `--include-permissions` to migrate them.
 
 ### Switching stacks
@@ -427,12 +427,13 @@ Documentation publishing to GitHub Pages is supported.
 ### Documentation site
 
 The mdBook site at `https://nuzzles.github.io/mcpstack/` is built from
-[`docs/src`](docs/src/SUMMARY.md) and follows `main`. It covers source installation,
+[`docs/src`](docs/src/SUMMARY.md) and documents mcpstack 0.1.0. It covers source installation,
 scratch-config examples, export/import/switch workflows, secrets, permission
 opt-in, compatibility, failures, recovery, and repeat operations. Each chapter
 also has a Markdown download. `llms.txt` indexes the agent-readable pages and
 `llms-full.txt` combines them. The CLI reference and `cli-schema.json` are generated
-from the executable during the same build.
+from the executable during the same build. The generated reference and agent
+indexes identify the executable's version.
 
 PRs build and validate the site, YAML examples, scratch workflows, local links,
 and anchors. Merged changes deploy through GitHub Pages; PRs cannot deploy.
