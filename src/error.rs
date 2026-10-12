@@ -33,6 +33,14 @@ pub enum ErrorCode {
     ConfigWriteError = 13,
     #[error("Unable to write the exported stack file. Check its path and permissions.")]
     StackWriteError = 14,
+    #[error(
+        "Unable to check for updates. Check your network connection and try mcpstack update --check again."
+    )]
+    UpdateCheckError = 15,
+    #[error(
+        "Unable to update mcpstack. Check Cargo, the Rust toolchain, and installation permissions."
+    )]
+    UpdateError = 16,
 }
 
 impl ErrorCode {
@@ -54,6 +62,8 @@ impl Serialize for ErrorCode {
 /// Execution errors preserve typed causes but expose only safe diagnostics.
 #[derive(Debug, Error)]
 pub enum AppError {
+    #[error(transparent)]
+    Update(#[from] crate::update::Error),
     #[error(transparent)]
     Selection(#[from] crate::integrations::selection::Error),
     #[error("{code}", code = ErrorCode::InvalidArgument)]
@@ -109,6 +119,7 @@ pub enum AppError {
 impl AppError {
     pub fn code(&self) -> ErrorCode {
         match self {
+            Self::Update(error) => error.code(),
             Self::Logging => ErrorCode::LoggingError,
             Self::Arguments | Self::Selection(_) => ErrorCode::InvalidArgument,
             Self::ExportPath | Self::ExportSource | Self::ExportOverwriteRequired => {

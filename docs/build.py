@@ -141,7 +141,8 @@ def main():
     reference = [
         "# Commands\n",
         "Use `mcpstack <harness> <command>`, with `codex` or `claude`. "
-        "`--config <PATH>` overrides the target configuration.\n",
+        "`--config <PATH>` overrides the target configuration. "
+        "`validate` and `update` run at the top level.\n",
         "`--non-interactive` disables prompts; `-y` approves changes. "
         "Permissions always require `--include-permissions`.\n",
         "## Operations\n\n| Command | Purpose |\n| --- | --- |",
@@ -177,7 +178,7 @@ def main():
             describe(child, [*prefix, child["name"]])
 
     describe(schema["command"], [])
-    order = ["list", "show", "export", "diff", "import", "use", "validate"]
+    order = ["list", "show", "export", "diff", "import", "use", "validate", "update"]
     navigation = []
     for operation in sorted(command_pages, key=lambda name: (order.index(name) if name in order else len(order), name)):
         filename = f"command-{operation}.md"

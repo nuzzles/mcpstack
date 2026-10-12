@@ -94,7 +94,7 @@ to its entry in Current status at the bottom.\
 | Implementation | Brief description |
 | --- | --- |
 | Unsupported | Claude Desktop MCP server list, import, show, export, diff, and stack switching. |
-| Unsupported | Detect newer mcpstack releases, notify users when the installed CLI is out of date, and automatically update to the latest release. |
+| Done | Detect newer stable releases, notify users when the CLI is out of date, and install updates with `mcpstack update` after approval. [*](#updates) |
 
 ## Notes
 
@@ -433,6 +433,33 @@ Documentation publishing to GitHub Pages is supported.
 
 ## Current status
 
+### Updates
+
+Interactive `export`, `import`, and `use` check crates.io for the latest non-yanked
+stable release after success. Results, including unavailable releases and network
+failures, are cached for 24 hours in the user's cache directory at
+`mcpstack/update.json`. Network checks are bounded to 750 ms; failures are silent
+and do not change command results. Notices go to stderr. Read-only commands,
+dry runs, help/schema/version, redirected streams, `--non-interactive`, and
+`--quiet` skip automatic checks. `--skip-version-check` or
+`MCPSTACK_SKIP_VERSION_CHECK=true` disables them.
+
+`mcpstack update --check` explicitly queries crates.io without cache writes or
+installation. `mcpstack update` requires confirmation; `-y` approves installation
+for unattended use. Neither ordinary commands nor update checks install updates.
+Updates use Cargo with `--locked`, the exact selected version, and the existing
+install root; Cargo manages its installation metadata. Development binaries and
+untracked/package-manager installations are rejected. Cargo and a working Rust
+toolchain are required. Concurrent mcpstack updates are rejected, and success is
+reported only after checking the installed binary's version. Windows relocates
+the running image while retaining a runnable copy before Cargo replaces it.
+
+Tests cover version ordering, yanked/prerelease filtering, bounded HTTP responses,
+cache expiry/corruption/clock changes, offline failures, approval and opt-out flags,
+custom roots, replacing a running executable, installer failures, and stdout/stderr
+separation. CLI publishing remains disabled; installing a real newer release
+requires a published crate. No release automation is added.
+
 ### Documentation site
 
 The mdBook site at `https://nuzzles.github.io/mcpstack/` is built from
@@ -460,7 +487,7 @@ Contributor build instructions are in [`docs/README.md`](docs/README.md).
 ### Commands and help
 
 Client operations are grouped under `mcpstack <client> <operation>`. Codex exposes
-`list`, `use`, `import`, `show`, `export`, and `diff`; `validate` and `--schema` stay at the top
+`list`, `use`, `import`, `show`, `export`, and `diff`; `validate`, `update`, and `--schema` stay at the top
 level. Claude Code exposes the same six operations under `claude`. The parent
 command selects the target, so there is no `--client` option.
 The previous operation-first syntax is no longer accepted.
@@ -489,7 +516,8 @@ Config read failures use 5 (`CONFIG_READ_ERROR`); export failures use 6
 (`LOGGING_ERROR`). Removed statuses 7, 8, and 12 are not reused.
 Import failures use 10 (`IMPORT_ERROR`), backup failures use 11 (`BACKUP_ERROR`),
 config merge/write failures use 13 (`CONFIG_WRITE_ERROR`), and exported stack
-file write failures use 14 (`STACK_WRITE_ERROR`).
+file write failures use 14 (`STACK_WRITE_ERROR`). Update checks use 15
+(`UPDATE_CHECK_ERROR`); installation failures use 16 (`UPDATE_ERROR`).
 The CLI schema advertises these statuses and actionable descriptions from the
 typed error definitions. Tests check code/status uniqueness and process failures
 for invalid arguments, output failures, invalid or unreadable stacks, config read

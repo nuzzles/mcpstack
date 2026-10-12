@@ -6,5 +6,6 @@ pub mod import;
 pub mod list;
 pub mod schema;
 pub mod show;
+pub mod update;
 pub mod r#use;
 pub mod validate;
