@@ -85,6 +85,7 @@ fn row(name: &str, definition: &Value, source: Source) -> Result<[String; 4], Ap
         Source::Claude => match text(fields.get("type"))? {
             None | Some("stdio") if command.is_some() && url.is_none() => "stdio",
             Some(kind @ ("http" | "sse")) if url.is_some() && command.is_none() => kind,
+            Some("ws") if url.is_some() && command.is_none() => "websocket",
             _ => return Err(AppError::ListConfig),
         },
     };
@@ -99,7 +100,7 @@ fn row(name: &str, definition: &Value, source: Source) -> Result<[String; 4], Ap
     };
     let endpoint = match (command, url) {
         (Some(command), None) => command.to_owned(),
-        (None, Some(value)) => safe_url(value)?,
+        (None, Some(value)) => safe_url(value, transport)?,
         _ => return Err(AppError::ListConfig),
     };
     Ok([
@@ -121,9 +122,13 @@ fn text(value: Option<&Value>) -> Result<Option<&str>, AppError> {
         .transpose()
 }
 
-fn safe_url(value: &str) -> Result<String, AppError> {
+fn safe_url(value: &str, transport: &str) -> Result<String, AppError> {
     let mut url = url::Url::parse(value).map_err(|_| AppError::ListConfig)?;
-    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+    let valid_scheme = match transport {
+        "websocket" => matches!(url.scheme(), "ws" | "wss"),
+        _ => matches!(url.scheme(), "http" | "https"),
+    };
+    if !valid_scheme || url.host_str().is_none() {
         return Err(AppError::ListConfig);
     }
     // Credentials can occur in URL user info, query values, or fragments.

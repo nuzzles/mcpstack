@@ -318,7 +318,7 @@ fn claude_transport(fields: &mut Map<String, Value>, name: &str) -> Result<Trans
             env_vars: Vec::new(),
             cwd: None,
         }),
-        (None, Some(url), Some("http") | Some("sse")) => {
+        (None, Some(url), Some("http") | Some("sse") | Some("ws")) => {
             let mut headers = take_map(fields, "headers", name, true)?;
             if let Some(key) = headers
                 .keys()
@@ -342,10 +342,10 @@ fn claude_transport(fields: &mut Map<String, Value>, name: &str) -> Result<Trans
                     );
                 }
             }
-            Ok(if kind.as_deref() == Some("sse") {
-                Transport::Sse { url, headers }
-            } else {
-                Transport::Http { url, headers }
+            Ok(match kind.as_deref() {
+                Some("ws") => Transport::Websocket { url, headers },
+                Some("sse") => Transport::Sse { url, headers },
+                _ => Transport::Http { url, headers },
             })
         }
         _ => Err(format!("{name:?}: unsupported Claude transport")),

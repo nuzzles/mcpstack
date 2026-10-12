@@ -138,7 +138,7 @@ fn validate(definition: &Value) -> Result<(), Error> {
                 return Err(Error::Config);
             }
         }
-        "http" | "sse" => {
+        "http" | "sse" | "ws" => {
             if object
                 .get("url")
                 .and_then(Value::as_str)
@@ -154,6 +154,14 @@ fn validate(definition: &Value) -> Result<(), Error> {
                     .is_none_or(|m| m.values().any(|v| !v.is_string()))
             }) {
                 return Err(Error::Config);
+            }
+            if kind == "ws" {
+                // Apply the shared WebSocket URL/header rules to native entries
+                // as well, including after resolving masked header values.
+                let stack = as_stack(BTreeMap::from([("server".into(), definition.clone())]))
+                    .map_err(|_| Error::Config)?;
+                super::portable::normalize(stack, super::portable::Source::Claude, false)
+                    .map_err(|_| Error::Config)?;
             }
         }
         _ => return Err(Error::Unsupported),
@@ -368,8 +376,9 @@ fn unsupported_fields(stack: &StackV1) -> Vec<String> {
                             add("transport.cwd");
                         }
                     }
-                    Transport::Http { .. } | Transport::Sse { .. } => {}
-                    Transport::Websocket { .. } => add("transport.websocket"),
+                    Transport::Http { .. }
+                    | Transport::Sse { .. }
+                    | Transport::Websocket { .. } => {}
                 }
             }
         }
@@ -446,11 +455,14 @@ fn prepare(
                         }
                         definition
                     }
-                    Transport::Http { url, headers } | Transport::Sse { url, headers } => {
-                        let kind = if matches!(transport, Transport::Http { .. }) {
-                            "http"
-                        } else {
-                            "sse"
+                    Transport::Http { url, headers }
+                    | Transport::Sse { url, headers }
+                    | Transport::Websocket { url, headers } => {
+                        let kind = match transport {
+                            Transport::Http { .. } => "http",
+                            Transport::Sse { .. } => "sse",
+                            Transport::Websocket { .. } => "ws",
+                            Transport::Stdio { .. } => unreachable!(),
                         };
                         let mut mapped_headers = Map::new();
                         for (header, value) in headers {
@@ -479,7 +491,6 @@ fn prepare(
                         }
                         definition
                     }
-                    _ => return Err(Error::Unsupported),
                 }
             }
         };
