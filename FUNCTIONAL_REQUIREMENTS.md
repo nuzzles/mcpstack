@@ -73,7 +73,6 @@ to its entry in Current status at the bottom.\
 | Done | Select servers by name; reject unknown selections. [*](#server-selection) |
 | Done | Switch between stack files, replacing the complete MCP server set. [*](#switching-stacks) |
 | Done | Produce deterministic YAML exports; require confirmation or `--overwrite` for existing files. [*](#codex-export) |
-| Unsupported | Preserve version pins and identify unpinned servers. |
 | Partial [*](#codex-import) | Keep discovery, validation, and planning free of writes and server execution. |
 | Partial [*](#codex-import) | Preview additions, updates, removals, conflicts, and blockers. |
 | Partial [*](#codex-import) | Show planned configuration writes with secrets redacted. |
