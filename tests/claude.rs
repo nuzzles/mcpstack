@@ -591,12 +591,12 @@ fn export_allow_flags_include_only_named_servers() {
         ("computer-use", "--allow-computer-use"),
         ("Claude Preview", "--allow-claude-preview"),
         ("Claude Browser", "--allow-claude-browser"),
-        ("node_repl", "--allow-node-repl"),
     ];
-    let servers: serde_json::Map<String, serde_json::Value> = names
+    let mut servers: serde_json::Map<String, serde_json::Value> = names
         .iter()
         .map(|(name, _)| ((*name).into(), serde_json::json!({"command":"tool"})))
         .collect();
+    servers.insert("node_repl".into(), serde_json::json!({"command":"tool"}));
     std::fs::write(
         &config,
         serde_json::json!({"mcpServers":servers}).to_string(),
@@ -605,19 +605,21 @@ fn export_allow_flags_include_only_named_servers() {
     let default = run("show", None, &config, &[]);
     assert!(default.status.success(), "{default:?}");
     let stack: serde_json::Value = yaml_serde::from_slice(&default.stdout).unwrap();
-    assert!(stack["servers"].as_object().unwrap().is_empty());
+    assert!(stack["servers"].get("node_repl").is_some());
+    assert_eq!(stack["servers"].as_object().unwrap().len(), 1);
     for (name, flag) in names {
         let result = run("show", None, &config, &[flag]);
         assert!(result.status.success(), "{result:?}");
         let stack: serde_json::Value = yaml_serde::from_slice(&result.stdout).unwrap();
         let exported = stack["servers"].as_object().unwrap();
-        assert_eq!(exported.len(), 1);
+        assert_eq!(exported.len(), 2);
         assert!(exported.contains_key(name));
+        assert!(exported.contains_key("node_repl"));
     }
     let all = run("show", None, &config, &["--all"]);
     assert!(all.status.success(), "{all:?}");
     let stack: serde_json::Value = yaml_serde::from_slice(&all.stdout).unwrap();
-    assert_eq!(stack["servers"].as_object().unwrap().len(), names.len());
+    assert_eq!(stack["servers"].as_object().unwrap().len(), names.len() + 1);
 }
 
 #[test]

@@ -182,10 +182,12 @@ and use create numbered backups before atomic replacement. Claude Desktop, proje
 follow-up work.
 For unsupported stack fields, Claude Code operations report every affected
 server and field name without printing field values.
-Both client exporters omit MCP servers whose names Claude Code reserves for its
-built-in servers, plus the app-managed `node_repl` server. Individual `--allow-*`
-flags include one name; `--all` includes every normally skipped name. The filter
-runs before server validation and leaves source configuration unchanged.
+Codex export skips `computer-use` and `node_repl` by default. Claude Code export
+skips its built-in names `workspace`, `claude-in-chrome`, `computer-use`,
+`Claude Preview`, and `Claude Browser` by default. Each client exposes only its
+relevant `--allow-*` flags on `show` and `export`; `--all` includes every normally
+skipped name. `--permissions-config` is available only for Claude Code export.
+The filter runs before server validation and leaves source configuration unchanged.
 Codex `http_headers` map to portable `headers`. `bearer_token_env_var` maps to
 `headers.Authorization: {env: VAR, prefix: "Bearer "}`; `env_http_headers` maps
 to `{env: VAR}` header references. Claude Code emits these as `${VAR}` strings,
