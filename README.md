@@ -1,4 +1,4 @@
-# mcpstack
+# <img src="docs/theme/favicon.svg" width="32" height="32" alt=""> mcpstack
 
 A Rust CLI for humans and agents to install multiple MCP servers, version-control
 and switch stacks, and share setups across teams.
