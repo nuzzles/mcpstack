@@ -57,6 +57,8 @@ pub enum ValidationError {
         "HTTP header names must be valid tokens and literal values must contain no control characters."
     )]
     InvalidHeader,
+    #[error("Header helpers must be nonempty commands without NUL bytes, or value_env references.")]
+    InvalidHeaderHelper,
     #[error("Timeouts must be positive, finite numbers of seconds.")]
     InvalidTimeout,
     #[error(

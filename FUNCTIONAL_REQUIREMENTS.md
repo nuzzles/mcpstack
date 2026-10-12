@@ -88,6 +88,7 @@ to its entry in Current status at the bottom.\
 | Done | Test secret redaction and configuration preservation on success and failure for supported workflows. [*](#stack-workflow-tests) |
 | Done | Document human and AI workflows, failure handling, switching, and repeat imports. [*](#documentation-site) |
 | Done | Import and export Claude Code WebSocket MCP server definitions. [*](#websocket-support) |
+| Done | Preserve dynamic header helpers for Claude Code and Codex, using each harness's native authentication precedence. [*](#header-helpers) |
 
 ## Initial release
 
@@ -185,7 +186,7 @@ their portable stack equivalents. Unsupported fields and
 transports fail before writes. Diff and export mask recognized credentials; import
 and use create numbered backups of changed existing files before transactional
 file replacement. Supported server fields are `type`, `command`, `args`, `env`,
-`url`, and `headers`.
+`url`, `headers`, and `headersHelper`.
 Claude Desktop and project/local scopes are outside this user-scope integration.
 For unsupported stack fields, Claude Code operations report every affected
 server and field name without printing field values.
@@ -442,11 +443,30 @@ Invalid endpoints and headers fail before writes; previews, numbered backups,
 configuration preservation, and no-op round trips follow the existing workflows.
 
 [Claude Code's WebSocket transport](https://code.claude.com/docs/en/mcp#option-4-add-a-remote-websocket-server)
-uses header authentication, without OAuth. Dynamic `headersHelper` commands and
+uses header authentication, without OAuth. Header helpers are supported;
 other unsupported native settings are rejected. [Codex documents STDIO and Streamable HTTP](https://developers.openai.com/codex/mcp)
 as its supported MCP transports, so its adapter continues rejecting WebSocket
 stacks before writes. Integration tests cover both schemes, all six Claude
 commands, redaction, permissions, repeats, invalid definitions, and Codex rejection.
+
+### Header helpers
+
+`transport.headers_helper` maps to Claude's `headersHelper` and Codex's
+`http_headers_helper`. It supports HTTP in both harnesses and SSE/WebSocket in
+Claude. Helpers must be nonempty shell commands without NUL bytes. Shell syntax
+and paths are preserved verbatim; mcpstack never runs a helper or captures its output.
+The harness owns execution, working directory, header precedence, and refresh.
+Static headers and runtime bearer bindings may coexist with a helper. Claude's
+helper headers override static headers; Codex's explicit bearer tokens and stored
+OAuth credentials take precedence over helper Authorization headers.
+
+Recognized credential flags, assignments, and JSON/header names inside commands
+cause the whole command to be masked as a `value_env` reference on export and in
+previews. Ordinary script paths and commands stay literal. Detection is heuristic;
+arbitrary embedded secrets still require review. Native masked helpers use `$env`.
+Invalid definitions and unsupported STDIO/remote-execution helpers fail before
+writes. Round-trip tests cover preservation, native precedence inputs, redaction,
+no execution, backups, and repeat imports.
 
 ### Updates
 

@@ -17,7 +17,7 @@ use crate::integrations::{
     write_dry_run, write_import_result, write_no_changes, write_switch_plan, write_switch_result,
 };
 use crate::io;
-use crate::schema::v1::{ConfigValue, Transport, ValueSource};
+use crate::schema::v1::{ConfigValue, HeaderHelper, Transport, ValueSource};
 use crate::schema::{SCHEMA_VERSION, Server, StackV1};
 
 #[derive(Debug, Error)]
@@ -106,11 +106,12 @@ fn validate(definition: &Value) -> Result<(), Error> {
     if object.keys().any(|key| {
         !matches!(
             key.as_str(),
-            "type" | "command" | "args" | "env" | "url" | "headers"
+            "type" | "command" | "args" | "env" | "url" | "headers" | "headersHelper"
         )
     }) {
         return Err(Error::Unsupported);
     }
+    super::header_helpers::validate_native(definition).map_err(|_| Error::Config)?;
     let kind = match object.get("type") {
         Some(Value::String(kind)) => kind.as_str(),
         Some(_) => return Err(Error::Config),
@@ -278,6 +279,11 @@ fn add_header(
 }
 fn map_native_server(server: &str, mut definition: Value) -> Result<Value, Error> {
     let fields = definition.as_object_mut().ok_or(Error::Config)?;
+    if let Some(helper) = fields.remove("http_headers_helper")
+        && fields.insert("headersHelper".into(), helper).is_some()
+    {
+        return Err(Error::Config);
+    }
     let direct = fields.remove("http_headers");
     let environment = fields.remove("env_http_headers");
     let bearer = fields.remove("bearer_token_env_var");
@@ -336,6 +342,8 @@ fn unsupported_fields(stack: &StackV1) -> Vec<String> {
                             | "env"
                             | "url"
                             | "headers"
+                            | "headersHelper"
+                            | "http_headers_helper"
                             | "http_headers"
                             | "env_http_headers"
                             | "bearer_token_env_var"
@@ -455,9 +463,21 @@ fn prepare(
                         }
                         definition
                     }
-                    Transport::Http { url, headers }
-                    | Transport::Sse { url, headers }
-                    | Transport::Websocket { url, headers } => {
+                    Transport::Http {
+                        url,
+                        headers,
+                        headers_helper,
+                    }
+                    | Transport::Sse {
+                        url,
+                        headers,
+                        headers_helper,
+                    }
+                    | Transport::Websocket {
+                        url,
+                        headers,
+                        headers_helper,
+                    } => {
                         let kind = match transport {
                             Transport::Http { .. } => "http",
                             Transport::Sse { .. } => "sse",
@@ -483,6 +503,18 @@ fn prepare(
                             add_header(&mut mapped_headers, header, Value::String(text), name)?;
                         }
                         let mut definition = serde_json::json!({"type":kind,"url":url});
+                        if let Some(helper) = headers_helper {
+                            let command = match helper {
+                                HeaderHelper::Literal(command) => command.clone(),
+                                HeaderHelper::ResolvedEnvironment(reference) => resolver
+                                    .resolve(&reference.value_env)
+                                    .ok_or(Error::Secret)?,
+                            };
+                            definition
+                                .as_object_mut()
+                                .ok_or(Error::Config)?
+                                .insert("headersHelper".into(), Value::String(command));
+                        }
                         if !mapped_headers.is_empty() {
                             definition
                                 .as_object_mut()

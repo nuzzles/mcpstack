@@ -94,6 +94,10 @@ pub fn export_with_filter(
     if !servers.values().all(super::schema::supports) {
         return Err(ExportError::Schema);
     }
+    for definition in servers.values() {
+        crate::integrations::header_helpers::validate_native(definition)
+            .map_err(|_| ExportError::Schema)?;
+    }
     let definitions: BTreeMap<_, _> = servers
         .into_iter()
         .map(|(name, config)| (name, serde_json::json!({"config":config})))
@@ -149,11 +153,14 @@ pub(crate) fn visit_credentials(
                 if key == "env_http_headers" {
                     continue;
                 }
+                let sensitive = secret_key(key)
+                    || (matches!(key.as_str(), "headersHelper" | "http_headers_helper")
+                        && matches!(value, ConfigValue::String(command) if helper_has_credentials(command)));
                 protect(
                     value,
                     &format!("{server_name}_{key}"),
                     &format!("{server_name}.{key}"),
-                    secret_key(key),
+                    sensitive,
                     key == "args",
                     names,
                     expose,
@@ -262,6 +269,31 @@ fn secret_key(key: &str) -> bool {
                     )
                 })
         }
+}
+
+// Recognize the same named credentials in opaque shell commands: --token,
+// TOKEN=..., and JSON/header forms such as "Authorization": ... . Mask the
+// whole command rather than attempting to rewrite shell syntax. Script paths
+// and ordinary commands (including get-token) are not themselves credentials.
+fn helper_has_credentials(command: &str) -> bool {
+    let mut start = None;
+    for (end, character) in command
+        .char_indices()
+        .chain(std::iter::once((command.len(), '\0')))
+    {
+        if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+            start.get_or_insert(end);
+        } else if let Some(begin) = start.take() {
+            let word = &command[begin..end];
+            let after = command[end..].trim_start_matches([' ', '\t', '\r', '\n', '\'', '"', '\\']);
+            if secret_key(word.trim_start_matches('-'))
+                && (word.starts_with('-') || matches!(after.chars().next(), Some(':' | '=')))
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn protect(

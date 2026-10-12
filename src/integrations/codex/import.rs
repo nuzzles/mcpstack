@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::schema::v1::{
-    ConfigValue, PrefixedEnvironmentReference, Settings, Transport, ValueSource,
+    ConfigValue, HeaderHelper, PrefixedEnvironmentReference, Settings, Transport, ValueSource,
 };
 use crate::schema::{Server, StackV1};
 
@@ -47,6 +47,8 @@ struct Definition {
     url: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     http_headers: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    http_headers_helper: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     env_http_headers: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -185,8 +187,21 @@ pub fn prepare(
                                 .collect();
                             definition.cwd = cwd.clone();
                         }
-                        Transport::Http { url, headers } => {
+                        Transport::Http {
+                            url,
+                            headers,
+                            headers_helper,
+                        } => {
                             definition.url = Some(url.clone());
+                            definition.http_headers_helper = headers_helper
+                                .as_ref()
+                                .map(|helper| match helper {
+                                    HeaderHelper::Literal(command) => Ok(command.clone()),
+                                    HeaderHelper::ResolvedEnvironment(reference) => {
+                                        secret(&reference.value_env, &mut lookup)
+                                    }
+                                })
+                                .transpose()?;
                             for (key, value) in headers {
                                 match value {
                                     ValueSource::Literal(value) => {
@@ -239,6 +254,8 @@ pub fn prepare(
 }
 
 fn validate_transport_fields(definition: &serde_json::Value) -> Result<(), ImportError> {
+    crate::integrations::header_helpers::validate_native(definition)
+        .map_err(|_| ImportError::Definition)?;
     let incompatible: &[&str] = if definition.get("command").is_some() {
         &[
             "url",
@@ -358,6 +375,10 @@ impl Definition {
                 Transport::Http {
                     url: url.clone(),
                     headers,
+                    headers_helper: self
+                        .http_headers_helper
+                        .as_ref()
+                        .map(|command| HeaderHelper::Literal(command.clone())),
                 }
             }
             _ => return Err(ImportError::Definition),

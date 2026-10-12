@@ -201,7 +201,7 @@ fn invalid_websocket_definitions_fail_without_partial_writes_or_exports() {
         json!({"type":"ws","url":"wss://example.com/events","headers":{"Bad Header":"private-fixture"}}),
         json!({"type":"ws","url":"wss://example.com/events","headers":{"Authorization":"private-fixture\r\ninjected"}}),
         json!({"type":"ws","url":"wss://example.com/events","headers":{"Authorization":"private-fixture","authorization":"duplicate"}}),
-        json!({"type":"ws","url":"wss://example.com/events","headersHelper":"private-fixture"}),
+        json!({"type":"ws","url":"wss://example.com/events","headersHelper":{"invalid":"private-fixture"}}),
     ] {
         fs::write(&config, original).unwrap();
         fs::write(
