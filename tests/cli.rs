@@ -323,7 +323,7 @@ fn invalid_arguments_use_stderr_without_echoing_values() {
         assert_eq!(output.status.code(), Some(2));
         assert!(output.stdout.is_empty());
         let diagnostic = String::from_utf8_lossy(&output.stderr);
-        assert!(diagnostic.contains("INVALID_ARGUMENT"));
+        assert!(!diagnostic.contains("INVALID_ARGUMENT"));
         assert!(!diagnostic.contains("fixture-secret"));
     }
 }
@@ -388,7 +388,7 @@ fn missing_export_file_uses_clap_diagnostic_without_echoing_other_values() {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     let diagnostic = String::from_utf8(output.stderr).unwrap();
-    assert!(diagnostic.contains("INVALID_ARGUMENT"));
+    assert!(!diagnostic.contains("INVALID_ARGUMENT"));
     assert!(diagnostic.contains("error:"));
     assert!(diagnostic.contains("<FILE>"));
     assert!(diagnostic.contains("--help"));
@@ -450,7 +450,13 @@ fn usage_errors_explain_the_problem_and_suggest_repairs() {
         let diagnostic = String::from_utf8(output.stderr).unwrap();
         assert!(diagnostic.starts_with("error:"), "{diagnostic}");
         assert!(diagnostic.contains("--help"), "{diagnostic}");
-        assert!(diagnostic.contains("INVALID_ARGUMENT"));
+        assert!(!diagnostic.contains("INVALID_ARGUMENT"));
+        assert!(
+            diagnostic
+                .trim_end()
+                .ends_with("For more information, try '--help'."),
+            "{diagnostic}"
+        );
         for text in expected {
             assert!(
                 diagnostic.contains(text),
@@ -591,7 +597,7 @@ fn advertised_error_codes_match_process_failures() {
         invalid["status"].as_u64().unwrap()
     );
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains(invalid["error_code"].as_str().unwrap())
+        !String::from_utf8_lossy(&output.stderr).contains(invalid["error_code"].as_str().unwrap())
     );
     let output_error = statuses
         .iter()
@@ -1189,7 +1195,7 @@ fn logging_conflicts_are_rejected_across_subcommand_levels() {
         let diagnostic = String::from_utf8_lossy(&output.stderr);
         assert!(diagnostic.starts_with("error:"), "{diagnostic}");
         assert!(diagnostic.contains("cannot be used with"), "{diagnostic}");
-        assert!(diagnostic.contains("INVALID_ARGUMENT"));
+        assert!(!diagnostic.contains("INVALID_ARGUMENT"));
     }
 }
 

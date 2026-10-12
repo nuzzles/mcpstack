@@ -293,7 +293,7 @@ Usage errors use Clap's detailed diagnostics, including missing arguments,
 subcommands, conflicting options, valid choices, and spelling suggestions.
 When color is enabled, errors are red, invalid names are yellow, and options
 and suggestions are cyan, following the Cargo/rustup palette. Diagnostics go
-to stderr with exit 2 and `Error code: INVALID_ARGUMENT`; help and version go
+to stderr with exit 2 and no error-code footer; help and version go
 to stdout with exit 0. Command and option names remain visible. Supplied
 values, unexpected positional arguments, and inline assignment values are
 redacted; help names environment variables without printing their contents.

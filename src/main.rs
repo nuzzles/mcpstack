@@ -27,7 +27,6 @@ async fn run() -> Result<ExitCode, AppError> {
                 return Ok(ExitCode::SUCCESS);
             }
             error.print()?;
-            writeln!(std::io::stderr().lock(), "Error code: INVALID_ARGUMENT")?;
             return Ok(ErrorCode::InvalidArgument.as_exit_code());
         }
     };
