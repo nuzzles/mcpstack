@@ -21,6 +21,10 @@ pub struct Import {
 }
 
 impl Import {
+    pub fn is_dry_run(&self) -> bool {
+        self.dry_run
+    }
+
     pub async fn run(
         mut self,
         target: &impl ClientAdapter,

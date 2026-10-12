@@ -17,6 +17,10 @@ pub struct Use {
 }
 
 impl Use {
+    pub fn is_dry_run(&self) -> bool {
+        self.dry_run
+    }
+
     pub async fn run(
         self,
         target: &impl ClientAdapter,

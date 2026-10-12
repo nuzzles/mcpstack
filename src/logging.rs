@@ -37,6 +37,10 @@ enum ColorMode {
 }
 
 impl Logging {
+    pub fn quiet(&self) -> bool {
+        self.quiet
+    }
+
     /// Output follows stdout's terminal state independently of stderr logging.
     pub fn output_ansi(&self) -> bool {
         self.ansi_for(stdout().is_terminal())

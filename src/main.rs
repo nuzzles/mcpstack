@@ -7,6 +7,7 @@ mod integrations;
 mod io;
 mod logging;
 mod schema;
+mod update;
 
 use std::io::Write;
 use std::process::ExitCode;

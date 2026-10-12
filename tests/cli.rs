@@ -29,7 +29,7 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
     assert_eq!(schema["cli_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(schema["command"]["name"], "mcpstack");
     let commands = schema["command"]["commands"].as_array().unwrap();
-    assert_eq!(commands.len(), 4); // validate, codex, claude, and generated help
+    assert_eq!(commands.len(), 5); // validate, update, codex, claude, and generated help
     let validate = commands
         .iter()
         .find(|command| command["name"] == "validate")
@@ -85,7 +85,7 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
     let help = run(&["--help"]);
     let help = String::from_utf8(help.stdout).unwrap();
     let options = schema["command"]["options"].as_array().unwrap();
-    assert_eq!(options.len(), 9);
+    assert_eq!(options.len(), 10);
     let non_interactive = options
         .iter()
         .find(|option| option["name"] == "non_interactive")

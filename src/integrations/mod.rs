@@ -246,6 +246,24 @@ enum ClaudeOperation {
 }
 
 impl Client {
+    // Read-only discovery and previews must not create even an update cache.
+    pub fn allows_update_check(&self) -> bool {
+        match self {
+            Self::Codex(commands) => match &commands.operation {
+                CodexOperation::Export(_) => true,
+                CodexOperation::Import(args) => !args.is_dry_run(),
+                CodexOperation::Use(args) => !args.is_dry_run(),
+                _ => false,
+            },
+            Self::Claude(commands) => match &commands.operation {
+                ClaudeOperation::Export(_) => true,
+                ClaudeOperation::Import(args) => !args.is_dry_run(),
+                ClaudeOperation::Use(args) => !args.is_dry_run(),
+                _ => false,
+            },
+        }
+    }
+
     pub async fn run(
         self,
         output: &mut impl Write,
