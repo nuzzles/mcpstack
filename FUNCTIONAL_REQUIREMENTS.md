@@ -73,17 +73,16 @@ to its entry in Current status at the bottom.\
 | Done | Select servers by name; reject unknown selections. [*](#server-selection) |
 | Done | Switch between stack files, replacing the complete MCP server set. [*](#switching-stacks) |
 | Done | Produce deterministic YAML exports; require confirmation or `--overwrite` for existing files. [*](#codex-export) |
-| Partial [*](#codex-import) | Keep discovery, validation, and planning free of writes and server execution. |
+| Done | Keep discovery, validation, and planning free of file writes and server execution. [*](#codex-import) |
 | Done | Preview server additions, updates, and removals; require approval for replacements and report configuration validation errors before applying changes. [*](#codex-import) |
-| Partial [*](#codex-import) | Show planned configuration writes with secrets redacted. |
+| Partial [*](#output-formats) | Show planned configuration writes with secrets redacted. |
 | Done | Resolve literal relative executable and working-directory paths from the stack location; identify the target config. [*](#stack-relative-paths) |
 | Done | Apply approved file/stack changes as one transaction, the only supported apply mode. [*](#transactions) |
-| Partial [*](#codex-import) | Require explicit conflict resolution and validate configuration before writes. |
-| Partial [*](#codex-import) | Private recovery copies and stale-plan detection. |
-| Partial [*](#codex-import) | Repeat imports and stack switches without duplicates or unnecessary side effects. |
-| Partial [*](#secrets) | Keep secrets out of output, shared files, CLI arguments, and logs. |
-| Partial [*](#stack-workflow-tests) | Test secret redaction and configuration preservation on success and failure. |
-| Unsupported | Test sharing a stack between users with different credentials end to end. |
+| Done | Require explicit conflict resolution and validate configuration before writes. [*](#codex-import) |
+| Done | Create numbered recovery copies using the documented platform permissions, and reject detected changes since the configuration was read. [*](#codex-import) |
+| Done | Repeat imports and stack switches without duplicates or unnecessary side effects when the stack, resolved values, and target configuration are unchanged. [*](#codex-import) |
+| Done | Mask recognized credentials in shared exports by default, expose them only on explicit request, and redact them from previews and diagnostics. [*](#secrets) |
+| Done | Test secret redaction and configuration preservation on success and failure for supported workflows. [*](#stack-workflow-tests) |
 | Unsupported | Document human and AI workflows, failure handling, switching, and repeat imports. |
 
 ## Notes
@@ -345,6 +344,9 @@ fields into runtime bindings. `{env: VARIABLE}` remains a runtime binding in por
 headers; `{value_env: VARIABLE}` restores a masked literal during import. Export
 recognition and exposure are described under
 [Codex export](#codex-export).
+Credential recognition uses field and argument names; it does not identify every
+secret embedded in an arbitrary URL or unnamed argument. Imported client configs
+and recovery backups can contain literal credentials, including server arguments.
 
 ## Open decisions
 
@@ -422,6 +424,10 @@ import and use dry-runs summarize added, modified, and deleted servers.
 Diagnostics go to stderr without echoing argument values. Automation uses the
 noninteractive commands and stable exit statuses; structured JSON operation
 results are not required.
+
+Detailed server configuration diffs are implemented for both clients. Claude
+permission settings currently report only that rules would change; showing the
+specific allow, ask, and deny rule edits remains unfinished.
 
 ### Cross-platform integration tests
 
