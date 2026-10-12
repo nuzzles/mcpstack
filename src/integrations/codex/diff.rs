@@ -9,8 +9,9 @@ use toml_edit::{Item, Value};
 
 use super::config::{FileError, Snapshot};
 use super::import::prepare;
-use super::workflow::{SecretResolver, warn_runtime_bindings};
+use super::workflow::warn_runtime_bindings;
 use crate::error::AppError;
+use crate::integrations::secrets::SecretResolver;
 use crate::schema::Stack;
 
 use super::{Error, default_config};
@@ -18,6 +19,7 @@ use super::{Error, default_config};
 pub(crate) async fn run(
     file: PathBuf,
     config: Option<PathBuf>,
+    include_permissions: bool,
     output: &mut impl Write,
     non_interactive: bool,
     colored: bool,
@@ -28,9 +30,47 @@ pub(crate) async fn run(
         .await
         .map_err(AppError::StackRead)?;
     let stack = Stack::from_yaml(&document)?;
+    let (preliminary, preliminary_secrets, missing) =
+        super::workflow::preliminary_definitions(&snapshot, &stack, include_permissions)?;
+    if missing {
+        let changes = snapshot.preview(&preliminary)?;
+        if !changes.is_empty() {
+            writeln!(
+                output,
+                "Preliminary preview; missing secrets will be requested for an exact comparison."
+            )?;
+            let added = changes
+                .iter()
+                .filter(|(_, (before, _))| before.is_none())
+                .map(|(name, _)| name.clone())
+                .collect();
+            let modified = changes
+                .iter()
+                .filter(|(_, (before, _))| before.is_some())
+                .map(|(name, _)| name.clone())
+                .collect();
+            show_diff(
+                &snapshot,
+                &path,
+                &preliminary,
+                &preliminary_secrets,
+                output,
+                colored,
+            )?;
+            super::super::write_change_summary(
+                output,
+                &added,
+                &modified,
+                &Default::default(),
+                colored,
+            )?;
+        }
+    }
     let mut resolver = SecretResolver {
         dry_run: true,
         interactive: !non_interactive && stdin().is_terminal() && stderr().is_terminal(),
+        preview_missing: false,
+        missing_used: false,
         values: BTreeMap::new(),
         cancelled: false,
     };
@@ -40,7 +80,16 @@ pub(crate) async fn run(
     if resolver.cancelled {
         return Err(AppError::ImportApprovalCancelled);
     }
-    let definitions = prepared?;
+    let mut definitions = prepared?;
+    super::workflow::retain_target_policy(
+        &snapshot,
+        &stack,
+        &mut definitions,
+        include_permissions,
+    )?;
+    if include_permissions {
+        super::workflow::apply_permissions(&stack, &mut definitions);
+    }
     let changes = snapshot.preview(&definitions)?;
     if changes.is_empty() {
         writeln!(
@@ -54,8 +103,20 @@ pub(crate) async fn run(
         .map(|(name, (_, value))| (name.clone(), value.clone()))
         .collect();
     warn_runtime_bindings(&incoming);
+    let added = changes
+        .iter()
+        .filter(|(_, (before, _))| before.is_none())
+        .map(|(name, _)| name.clone())
+        .collect();
+    let modified = changes
+        .iter()
+        .filter(|(_, (before, _))| before.is_some())
+        .map(|(name, _)| name.clone())
+        .collect();
     let secrets: Vec<_> = resolver.values.into_values().flatten().collect();
-    show_diff(&snapshot, &path, &incoming, &secrets, output, colored)
+    show_diff(&snapshot, &path, &incoming, &secrets, output, colored)?;
+    super::super::write_change_summary(output, &added, &modified, &Default::default(), colored)?;
+    Ok(())
 }
 
 pub(super) fn show_diff(
@@ -85,37 +146,6 @@ pub(super) fn show_diff(
     render_diff(path, original, &before, &after, output, colored)
 }
 
-pub(super) fn show_replacement_diff(
-    snapshot: &Snapshot,
-    path: &Path,
-    definitions: &BTreeMap<String, toml::Table>,
-    secrets: &[String],
-    output: &mut impl Write,
-    colored: bool,
-) -> Result<(), AppError> {
-    let existing = snapshot.servers()?;
-    let mut before_masks = BTreeMap::new();
-    let mut after_masks = BTreeMap::new();
-    for (name, definition) in definitions {
-        after_masks.insert(
-            name.clone(),
-            masked_server(name, definition, existing.get(name), secrets)?,
-        );
-    }
-    for (name, definition) in &existing {
-        let mut mask = masked_server(name, definition, None, secrets)?;
-        if let Some(after) = after_masks.get(name) {
-            redact_matching_fields(&mut mask, after);
-        }
-        before_masks.insert(name.clone(), mask);
-    }
-    let original = snapshot.original_text()?;
-    let (_, proposed) = snapshot.replacement_proposal(definitions)?;
-    let before = redact_document(original, &before_masks)?;
-    let after = redact_document(&proposed, &after_masks)?;
-    render_diff(path, original, &before, &after, output, colored)
-}
-
 fn render_diff(
     path: &Path,
     original: &str,
@@ -137,7 +167,7 @@ fn render_diff(
             &label,
         )
         .to_string();
-    write_diff(output, &patch, colored)?;
+    super::super::diff_output::write_diff(output, &patch, colored)?;
     Ok(())
 }
 
@@ -150,6 +180,19 @@ fn redact_matching_fields(before: &mut Json, after: &Json) {
     }
     match (before, after) {
         (Json::Object(before), Json::Object(after)) => {
+            if let (Some(Json::Object(old_headers)), Some(Json::Object(new_bindings))) = (
+                before.get_mut("http_headers"),
+                after.get("env_http_headers"),
+            ) {
+                for (name, value) in old_headers {
+                    if new_bindings
+                        .keys()
+                        .any(|key| key.eq_ignore_ascii_case(name))
+                    {
+                        *value = "<redacted>".into();
+                    }
+                }
+            }
             for (key, value) in before {
                 if let Some(after) = after.get(key) {
                     redact_matching_fields(value, after);
@@ -332,30 +375,6 @@ fn strip_comments(gap: &str, output: &mut String) {
         }
     }
 }
-fn write_diff(output: &mut impl Write, diff: &str, colored: bool) -> std::io::Result<()> {
-    if !colored {
-        return write!(output, "{diff}");
-    }
-    for line in diff.lines() {
-        let color =
-            if line.starts_with("--- ") || line.starts_with("+++ ") || line.starts_with("@@ ") {
-                Some(36) // cyan headers
-            } else if line.starts_with('+') {
-                Some(32) // green additions
-            } else if line.starts_with('-') {
-                Some(31) // red removals
-            } else {
-                None
-            };
-        if let Some(color) = color {
-            writeln!(output, "\x1b[{color}m{line}\x1b[0m")?;
-        } else {
-            writeln!(output, "{line}")?;
-        }
-    }
-    Ok(())
-}
-
 /// Mark known hidden value changes without exposing the value, length, or hash.
 fn annotate_preview(
     masked: &mut serde_json::Value,

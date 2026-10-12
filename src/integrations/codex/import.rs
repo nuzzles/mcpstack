@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::schema::v1::{ConfigValue, Settings, Transport, ValueSource};
+use crate::schema::v1::{
+    ConfigValue, PrefixedEnvironmentReference, Settings, Transport, ValueSource,
+};
 use crate::schema::{Server, StackV1};
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -45,9 +47,9 @@ struct Definition {
     env_http_headers: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     bearer_token_env_var: Option<String>,
-    #[serde(default = "enabled_default")]
+    #[serde(default = "enabled_default", skip_serializing_if = "is_enabled")]
     enabled: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     startup_timeout_sec: Option<f64>,
@@ -60,6 +62,12 @@ struct Definition {
 }
 fn enabled_default() -> bool {
     true
+}
+fn is_enabled(value: &bool) -> bool {
+    *value
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn secret(
@@ -77,6 +85,12 @@ fn source(
     match value {
         ValueSource::Literal(value) => Ok(value.clone()),
         ValueSource::Environment(reference) => secret(&reference.env, lookup),
+        ValueSource::ResolvedEnvironment(reference) => secret(&reference.value_env, lookup),
+        ValueSource::PrefixedEnvironment(reference) => Ok(format!(
+            "{}{}",
+            reference.prefix,
+            secret(&reference.env, lookup)?
+        )),
     }
 }
 fn native(
@@ -131,6 +145,7 @@ pub fn prepare(
                 Server::Portable {
                     transport,
                     settings,
+                    ..
                 } => {
                     let mut definition = Definition {
                         enabled: settings.enabled,
@@ -165,19 +180,36 @@ pub fn prepare(
                                 .collect();
                             definition.cwd = cwd.clone();
                         }
-                        Transport::Http {
-                            url,
-                            bearer_token,
-                            headers,
-                        } => {
+                        Transport::Http { url, headers } => {
                             definition.url = Some(url.clone());
-                            if let Some(reference) = bearer_token {
-                                definition.bearer_token_env_var = Some(reference.env.clone());
+                            for (key, value) in headers {
+                                match value {
+                                    ValueSource::Literal(value) => {
+                                        definition.http_headers.insert(key.clone(), value.clone());
+                                    }
+                                    ValueSource::Environment(reference) => {
+                                        definition
+                                            .env_http_headers
+                                            .insert(key.clone(), reference.env.clone());
+                                    }
+                                    ValueSource::ResolvedEnvironment(reference) => {
+                                        definition.http_headers.insert(
+                                            key.clone(),
+                                            secret(&reference.value_env, &mut lookup)?,
+                                        );
+                                    }
+                                    ValueSource::PrefixedEnvironment(reference)
+                                        if key.eq_ignore_ascii_case("Authorization")
+                                            && reference.prefix == "Bearer " =>
+                                    {
+                                        definition.bearer_token_env_var =
+                                            Some(reference.env.clone());
+                                    }
+                                    ValueSource::PrefixedEnvironment(_) => {
+                                        return Err(ImportError::Unsupported);
+                                    }
+                                }
                             }
-                            definition.http_headers = headers
-                                .iter()
-                                .map(|(key, value)| Ok((key.clone(), source(value, &mut lookup)?)))
-                                .collect::<Result<_, ImportError>>()?;
                         }
                         _ => return Err(ImportError::Unsupported),
                     }
@@ -282,7 +314,7 @@ impl Definition {
             {
                 // Validate forwarded header variable names without resolving them:
                 // Codex itself owns these environment bindings.
-                let headers = self
+                let mut headers: BTreeMap<_, _> = self
                     .http_headers
                     .iter()
                     .map(|(k, v)| (k.clone(), ValueSource::Literal(v.clone())))
@@ -295,6 +327,21 @@ impl Definition {
                         )
                     }))
                     .collect();
+                if let Some(env) = &self.bearer_token_env_var {
+                    if headers
+                        .keys()
+                        .any(|key: &String| key.eq_ignore_ascii_case("Authorization"))
+                    {
+                        return Err(ImportError::Definition);
+                    }
+                    headers.insert(
+                        "Authorization".into(),
+                        ValueSource::PrefixedEnvironment(PrefixedEnvironmentReference {
+                            env: env.clone(),
+                            prefix: "Bearer ".into(),
+                        }),
+                    );
+                }
                 if self.http_headers.keys().any(|key| {
                     self.env_http_headers
                         .keys()
@@ -305,10 +352,6 @@ impl Definition {
                 Transport::Http {
                     url: url.clone(),
                     headers,
-                    bearer_token: self
-                        .bearer_token_env_var
-                        .as_ref()
-                        .map(|env| crate::schema::v1::EnvironmentReference { env: env.clone() }),
                 }
             }
             _ => return Err(ImportError::Definition),
@@ -328,6 +371,7 @@ impl Definition {
                 Server::Portable {
                     transport,
                     settings,
+                    permissions: None,
                 },
             )]),
         }
@@ -342,7 +386,7 @@ mod tests {
     use super::*;
     #[test]
     fn portable_bearer_binding_does_not_read_the_secret() {
-        let stack = StackV1::from_yaml("schema_version: 1\nservers:\n  remote:\n    transport: {type: http, url: https://example.com/mcp, bearer_token: {env: RUNTIME_TOKEN}}\n").unwrap();
+        let stack = StackV1::from_yaml("schema_version: 1\nservers:\n  remote:\n    transport: {type: http, url: https://example.com/mcp, headers: {Authorization: {env: RUNTIME_TOKEN, prefix: 'Bearer '}}}\n").unwrap();
         let definitions = prepare(&stack, |_| {
             panic!("runtime bindings must not resolve values")
         })
@@ -362,8 +406,8 @@ mod tests {
             Some("fixture-secret")
         );
         assert_eq!(
-            result["portable"]["http_headers"]["Authorization"].as_str(),
-            Some("fixture-secret")
+            result["portable"]["env_http_headers"]["Authorization"].as_str(),
+            Some("TOKEN")
         );
         for value in [None, Some(String::new()), Some("bad\0value".into())] {
             let error = prepare(&stack, |_| value.clone()).unwrap_err();

@@ -63,7 +63,7 @@ to its entry in Current status at the bottom.\
 
 | Implementation | Brief description |
 | --- | --- |
-| Unsupported | Claude support across the full workflow. [*](#claude-support) |
+| Partial [*](#claude-support) | Claude Code user-scope JSON import, export, diff, and stack switching. |
 
 ### CLI
 
@@ -126,8 +126,8 @@ servers:
 Configuration data preserves fields and nested secret references without binding
 an item to its source client. Each target adapter must validate that it can
 represent the fields before writing; removing the label does not make every
-client-specific option universally supported. Codex is currently the implemented
-adapter. Transport definitions provide the explicit shared transport form.
+client-specific option universally supported. Codex and Claude Code have
+adapters. Transport definitions provide the explicit shared transport form.
 
 This changes the unpublished v1 format: remove `client: codex` (or another client
 label) from existing items and retain their `config` data. Legacy client labels
@@ -140,8 +140,8 @@ starting server software. Validate and resolve the stack before changing config.
 Preserve unrelated settings, skip identical servers, and apply only approved
 additions or replacements. Backups and file writes are described under
 [Codex import](#codex-import).
-Phase 1 previews are redacted configuration diffs from `diff` and import
-`--dry-run`. Installation plans covering downloads, commands, and
+Phase 1 previews are redacted configuration diffs from `diff`, `import`, and
+`use`, including before interactive approval. Installation plans covering downloads, commands, and
 prerequisite verification remain Phase 2 work. Configuration-only stack switching
 is implemented by `use`.
 
@@ -161,15 +161,56 @@ input disables prompts. Export defaults to masking credentials; `--expose-secret
 includes them without prompting.
 
 Import defaults to skipping each addition or replacement, with per-server and
-bulk choices. `-y` / `--auto-approve` approves all changes. Dry-run retains these
-prompts and shows only approved changes; unattended dry-run requires `-y`.
+bulk choices. A redacted diff appears before approval prompts, followed by a
+named change summary directly above the prompt. Added, modified, and deleted
+entries use green `+`, yellow `~`, and red `-` when color is enabled; plain
+output keeps the markers. `-y` / `--auto-approve` approves all changes. Dry-run
+retains these prompts; unattended dry-run requires `-y`.
 `diff` shows all proposed changes without server approval prompts. Both preview
-modes can ask for missing masked values and never write files.
+modes can ask for missing masked values and never write files. A preliminary
+redacted preview appears before a missing-secret prompt; the exact plan is
+recomputed after the value is supplied and before an approval prompt.
 
 ### Claude support
 
-[*] Choose Claude Code, Claude Desktop, or both before implementation. Each
-supported client must preserve unrelated configuration.
+[*] Claude Code is the selected first target. `mcpstack claude` reads and writes
+user-scope `~/.claude.json` (or `--config <path>`) and preserves unrelated JSON
+settings. It supports native stdio, HTTP, and SSE server definitions plus portable
+stdio/HTTP/SSE definitions representable in Claude Code. Unsupported fields and
+transports fail before writes. Diff and export mask recognized credentials; import
+and use create numbered backups before atomic replacement. Claude Desktop, project/local scopes, and additional Claude Code MCP fields remain
+follow-up work.
+For unsupported stack fields, Claude Code operations report every affected
+server and field name without printing field values.
+Both client exporters omit MCP servers whose names Claude Code reserves for its
+built-in servers, plus the app-managed `node_repl` server. Individual `--allow-*`
+flags include one name; `--all` includes every normally skipped name. The filter
+runs before server validation and leaves source configuration unchanged.
+Codex `http_headers` map to portable `headers`. `bearer_token_env_var` maps to
+`headers.Authorization: {env: VAR, prefix: "Bearer "}`; `env_http_headers` maps
+to `{env: VAR}` header references. Claude Code emits these as `${VAR}` strings,
+preserving runtime lookup. Claude Code may suppress
+expansion of its protected credential variables, so those names require a separate
+user-managed environment variable. Duplicate header names fail instead of
+overwriting either value. Claude Code's reserved server names also fail before
+writes. Claude Code cannot apply per-server Codex startup timeouts.
+Both exporters emit portable `transport` entries. Permission export is opt-in
+with `--include-permissions`; `export --all` also includes permissions. Export
+stores Codex default and per-tool approval modes or Claude's server-scoped
+`allow`, `ask`, and `deny` rules in source-tagged permission metadata. Import,
+use, and diff ignore this metadata unless passed `--include-permissions`.
+Same-client restoration preserves the captured rules. Cross-client restoration
+translates representable rules, warns about each unsupported mode or pattern,
+and continues applying MCP servers. Claude settings are read and written in
+`settings.json` (or the file selected by `--permissions-config`), with backups
+for changed settings. Project, managed, and rules outside the chosen settings
+file are outside this export scope. Other unmappable source fields fail export
+without emitting a partial stack.
+Claude Code permission rules live in `settings.json` under `permissions.allow`,
+`permissions.ask`, and `permissions.deny`; a rule such as `mcp__obsidian__*`
+matches tools from that server. These rules are outside MCP server transport data.
+Older v1 stacks with `bearer_token` are accepted and normalized to an
+Authorization header when read. New exports write only `headers`.
 
 ### Switching stacks
 
@@ -179,8 +220,7 @@ the file are removed, including servers added outside mcpstack; unrelated client
 settings are preserved. Resolve the new stack's secrets locally.
 
 `codex use` selects the client explicitly for both writes and dry runs. Codex is
-currently the only supported target; `--config <path>` overrides its default
-config path. It validates the entire stack and
+uses `--config <path>` to override its default config path. It validates the entire stack and
 resolves secrets before any backup or write. Interactive use asks once to replace
 ALL servers (default No), then reports the result without printing a diff. `-y` approves the whole
 switch; unattended writes require it. `--dry-run` shows the whole proposed set,
@@ -209,7 +249,7 @@ Transactional mode must not silently commit a partially installed stack.
 ### Secrets
 
 [*] Masked literal fields use `{"$env":"VARIABLE"}` in configuration definitions or
-`{env: VARIABLE}` in portable secret fields. Resolve them from the shell or hidden
+`{value_env: VARIABLE}` in portable secret fields. Resolve them from the shell or hidden
 interactive input, caching repeated references. Missing values fail when prompting
 is unavailable, including actual imports with `-y`. Both preview modes can prompt
 for missing values and always compare real values.
@@ -217,7 +257,9 @@ for missing values and always compare real values.
 Native `env_vars`, `bearer_token_env_var`, and `env_http_headers` retain their runtime
 bindings without embedding values. Missing local runtime variables warn; remote
 bindings are not checked against the local shell. Masking does not convert literal
-fields into runtime bindings. Export recognition and exposure are described under
+fields into runtime bindings. `{env: VARIABLE}` remains a runtime binding in portable
+headers; `{value_env: VARIABLE}` restores a masked literal during import. Export
+recognition and exposure are described under
 [Codex export](#codex-export). Additional secret providers remain Phase 2 work.
 
 ## Open decisions
@@ -236,7 +278,8 @@ scope. Publishing and release/deployment automation require explicit authorizati
 
 Client operations are grouped under `mcpstack <client> <operation>`. Codex exposes
 `use`, `import`, `export`, and `diff`; `validate` and `--schema` stay at the top
-level. The parent command selects the target, so there is no `--client` option.
+level. Claude Code exposes the same four operations under `claude`. The parent
+command selects the target, so there is no `--client` option.
 The previous operation-first syntax is no longer accepted.
 
 Help, version, `--schema`, `validate <file>`, `codex export`,
@@ -268,6 +311,10 @@ deterministic redacted configuration previews for the same stack, target config,
 secrets, approvals, and color settings. Server processing uses ordered maps;
 previews retain the target file's layout and line numbers. Installation plans
 remain Phase 2 work.
+Claude writes replace only the top-level `mcpServers` value in the JSON text,
+preserving unrelated settings and their formatting. Previews compute hunk
+positions from that exact proposed write. Preview placeholders redact credentials
+and unrelated settings, so the displayed patch is not independently applicable.
 
 ### Output formats
 
@@ -303,13 +350,13 @@ Other platforms reject import safely.
 ### Codex export
 
 `codex export` reads the default Codex TOML config and prints client-independent server
-entries as a YAML stack to stdout. In noninteractive use, credential values become
-`{"$env":"MCPSTACK_SERVER_FIELD"}`. Recognition uses credential field names
+entries as portable YAML `transport` definitions on stdout. In noninteractive use,
+credential values become `{value_env: MCPSTACK_SERVER_FIELD}` references. Recognition uses credential field names
 (token, secret, password, API/access/private key), authorization/cookie headers,
 and named token arguments (`--token VALUE` or `--token=VALUE`). Nested credential
 fields and matching environment variable names are covered. Commands, URLs,
-ordinary arguments, timeouts, booleans, and existing environment-name settings
-remain unchanged. This is name-based detection, not a guarantee that arbitrary
+ordinary arguments and existing environment-name settings retain their meaning.
+This is name-based detection, not a guarantee that arbitrary
 unnamed values or credentials embedded in URLs will be recognized.
 
 Nested fields and array indices contribute to reference names. Names are uppercase
@@ -332,11 +379,18 @@ config. Relative paths resolve from the current working directory.
 
 Import conversion and export validate MCP entries against
 `src/integrations/codex/mcp.schema.json`, extracted from the current official Codex config
-schema. Validation is offline and does not require Codex to be installed. Configuration
-definitions preserve supported fields; obsolete inline `bearer_token` and unknown
+schema. Validation is offline and does not require Codex to be installed. Native
+config definitions preserve supported fields on import; exported portable
+definitions preserve supported transport and settings. Obsolete inline `bearer_token` and unknown
 fields are rejected without exposing values. Refresh the snapshot deliberately
 when adding support for schema changes. Portable conversion supports STDIO/HTTP;
 filesystem writes support Unix and Windows.
+
+Export omits `sandbox_mode` and `approval_policy` when they appear directly in an
+MCP server definition. These policy fields are not part of the exported server
+stack; Codex import/use preserve their existing values for servers with the same
+name. Permission fields also remain in the target unless `--include-permissions`
+requests restoration. Other unsupported server fields still fail validation.
 
 ### Codex import
 
@@ -348,15 +402,15 @@ without running Codex or servers.
 | Command | Behavior |
 | --- | --- |
 | `codex diff stack.yml` | Show all proposed changes; prompt only for missing masked values. |
-| `codex import stack.yml` | Offer backup, approve additions/replacements, and apply without printing a diff. |
+| `codex import stack.yml` | Show proposed additions/replacements and a redacted diff, approve servers, offer backup, then apply. |
 | `codex import stack.yml -y` | Create a default backup and approve all changes automatically. |
-| `codex import stack.yml --dry-run` | Follow secret and server prompts, then show only approved changes without writes. |
+| `codex import stack.yml --dry-run` | Show proposed changes before server prompts, then report the approved count without writes. |
 
 Backups default to numbered sibling files (`config.toml.~1~`, `config.toml.~2~`,
 etc.) beyond the highest existing generation. The prompt allows another path or
-skipping backup. Requested backups must succeed before stack reads or secret
-prompts, never overwrite existing files, and remain after later failures,
-cancellation, or no-op imports.
+skipping backup. Automatically approved imports create the backup before stack
+reads; interactive imports offer it after the change preview and server choices.
+Backups never overwrite existing files and remain after later failures.
 
 Replacements update the complete server definition. Unrelated settings, comments,
 and servers are preserved; identical entries do not rewrite the config. Shared

@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::integrations::{ExportArgs, Target};
+use crate::integrations::{ClientAdapter, ExportArgs};
 use clap::Args;
 use std::io::Write;
 
@@ -16,7 +16,7 @@ pub struct Export {
 impl Export {
     pub async fn run(
         self,
-        target: Target,
+        target: &impl ClientAdapter,
         output: &mut impl Write,
         non_interactive: bool,
     ) -> Result<(), AppError> {
