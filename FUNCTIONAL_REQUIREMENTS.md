@@ -155,8 +155,10 @@ per-server approval; Codex also offers bulk choices. A named change summary
 appears before approval prompts. Added, modified, and deleted entries use green
 `+`, yellow `~`, and red `-` when color is enabled; plain output keeps the markers.
 `-y` / `--auto-approve` approves all changes. `import --dry-run` retains server
-approval prompts; use `-y` for unattended import previews. `use --dry-run` has no
-approval prompt and does not require `-y`.
+approval prompts; use `--non-interactive -y` for unattended import previews.
+`-y` alone skips approval prompts but can still prompt for missing secrets during
+previews. With `--non-interactive`, missing secrets fail without prompting.
+`use --dry-run` has no approval prompt and does not require `-y`.
 
 `diff` shows detailed redacted changes without server approval prompts. `diff`,
 `import --dry-run`, and `use --dry-run` can ask for missing masked values when
