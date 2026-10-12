@@ -6,7 +6,7 @@ use clap::{ColorChoice, Command, CommandFactory, FromArgMatches};
 
 use super::Cli;
 
-// Match the Cargo/rustup palette using Clap's existing styling support.
+// Share diagnostic and help colors through Clap's styling support.
 pub(super) fn styles() -> Styles {
     Styles::styled()
         .header(AnsiColor::BrightGreen.on_default().bold())
