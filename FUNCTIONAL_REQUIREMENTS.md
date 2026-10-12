@@ -129,9 +129,9 @@ starting server software. Validate and resolve the stack before changing config.
 Preserve unrelated settings, skip identical servers, and apply only approved
 additions or replacements. Backups and file writes are described under
 [Codex import](#codex-import).
-Phase 1 previews are redacted configuration diffs from `diff`, `import`, and
-`use`, including before interactive approval. Configuration-only stack switching
-is implemented by `use`.
+`diff` previews detailed redacted configuration changes. `import` and `use`,
+including their dry runs, show named server change summaries before any approval
+prompts. Configuration-only stack switching is implemented by `use`.
 
 ---
 
@@ -148,16 +148,21 @@ avoid drift. Schema output is independent of interactive controls.
 input disables prompts. Export defaults to masking credentials; `--expose-secrets`
 includes them without prompting.
 
-Import defaults to skipping each addition or replacement, with per-server and
-bulk choices. A redacted diff appears before approval prompts, followed by a
-named change summary directly above the prompt. Added, modified, and deleted
-entries use green `+`, yellow `~`, and red `-` when color is enabled; plain
-output keeps the markers. `-y` / `--auto-approve` approves all changes. Dry-run
-retains these prompts; unattended dry-run requires `-y`.
-`diff` shows all proposed changes without server approval prompts. Both preview
-modes can ask for missing masked values and never write files. A preliminary
-redacted preview appears before a missing-secret prompt; the exact plan is
-recomputed after the value is supplied and before an approval prompt.
+Import defaults to skipping each addition or replacement. Both clients offer
+per-server approval; Codex also offers bulk choices. A named change summary
+appears before approval prompts. Added, modified, and deleted entries use green
+`+`, yellow `~`, and red `-` when color is enabled; plain output keeps the markers.
+`-y` / `--auto-approve` approves all changes. `import --dry-run` retains server
+approval prompts; use `-y` for unattended import previews. `use --dry-run` has no
+approval prompt and does not require `-y`.
+
+`diff` shows detailed redacted changes without server approval prompts. `diff`,
+`import --dry-run`, and `use --dry-run` can ask for missing masked values when
+interactive and never write files. Before requesting missing secrets, `diff`
+shows a preliminary redacted diff, while import and use show a preliminary
+change summary. The exact plan is recomputed after values are supplied and
+before any approval prompt. Actual imports and switches with `-y` require
+masked values to be available in the environment.
 
 ### Claude support
 
@@ -166,8 +171,9 @@ user-scope `~/.claude.json` (or `--config <path>`) and preserves unrelated JSON
 settings. It supports native stdio, HTTP, and SSE server definitions plus portable
 stdio/HTTP/SSE definitions representable in Claude Code. Unsupported fields and
 transports fail before writes. Diff and export mask recognized credentials; import
-and use create numbered backups before transactional file replacement. Supported
-server fields are `type`, `command`, `args`, `env`, `url`, and `headers`.
+and use create numbered backups of changed existing files before transactional
+file replacement. Supported server fields are `type`, `command`, `args`, `env`,
+`url`, and `headers`.
 Claude Desktop and project/local scopes are outside this user-scope integration.
 For unsupported stack fields, Claude Code operations report every affected
 server and field name without printing field values.
@@ -187,8 +193,8 @@ user-managed environment variable. Duplicate header names fail instead of
 overwriting either value. Claude Code's reserved server names also fail before
 writes. Claude Code cannot apply per-server Codex startup timeouts.
 Both exporters emit portable `transport` entries. Permission export is opt-in
-with `--include-permissions`; `export --all` also includes permissions. Export
-stores Codex default and per-tool approval modes or Claude's server-scoped
+with `--include-permissions`; `show --all` and `export --all` also include
+permissions. Export stores Codex default and per-tool approval modes or Claude's server-scoped
 `allow`, `ask`, and `deny` rules in source-tagged permission metadata. Import,
 use, and diff ignore this metadata unless passed `--include-permissions`.
 Same-client restoration preserves the captured rules. Cross-client restoration
@@ -211,13 +217,14 @@ all MCP servers as the selected stack's complete desired set. Servers absent fro
 the file are removed, including servers added outside mcpstack; unrelated client
 settings are preserved. Resolve the new stack's secrets locally.
 
-`codex use` selects the client explicitly for both writes and dry runs. Codex is
-uses `--config <path>` to override its default config path. It validates the entire stack and
-resolves secrets before any backup or write. Interactive use asks once to replace
-ALL servers (default No), then reports the result without printing a diff. `-y` approves the whole
-switch; unattended writes require it. `--dry-run` shows the whole proposed set,
-including removals, without approval prompts, backups, or writes. Missing masked
-values still fail in unattended mode. Changed switches always create a numbered
+`codex use` selects the client explicitly for both writes and dry runs. Use
+`--config <path>` to override its default config path. It validates the entire
+stack and resolves secrets before any backup or write. Interactive use shows a
+named change summary, asks once to replace ALL servers (default No), then reports
+the result. `-y` approves the whole switch; unattended writes require it.
+`--dry-run` summarizes additions, modifications, and removals without approval
+prompts, backups, or writes. Missing masked values still fail in unattended mode.
+Changed switches always create a numbered
 backup, then atomically replace the config with stale-snapshot checks. Backup or
 write failures abort; identical sets do not rewrite files or create backups. An
 empty stack clears every server. Switching changes configuration only; it does
@@ -334,8 +341,9 @@ check/remove) race; no locking or journal is added.
 [*] Masked literal fields use `{"$env":"VARIABLE"}` in configuration definitions or
 `{value_env: VARIABLE}` in portable secret fields. Resolve them from the shell or hidden
 interactive input, caching repeated references. Missing values fail when prompting
-is unavailable, including actual imports with `-y`. Both preview modes can prompt
-for missing values and always compare real values.
+is unavailable, including actual imports and switches with `-y`. `diff`,
+`import --dry-run`, and `use --dry-run` can prompt for missing values when
+interactive and always compare real values.
 
 Native `env_vars`, `bearer_token_env_var`, and `env_http_headers` retain their runtime
 bindings without embedding values. Missing local runtime variables warn; remote
@@ -418,9 +426,9 @@ and unrelated settings, so the displayed patch is not independently applicable.
 ### Output formats
 
 Help, version, server inventories, and validation results use text output;
-`--schema` emits JSON; `codex show` emits YAML on stdout, while `codex export <file>`
-writes the same YAML to the named file. `diff` emits a redacted unified diff;
-import and use dry-runs summarize added, modified, and deleted servers.
+`--schema` emits JSON; both clients' `show` commands emit YAML on stdout, while
+`export <file>` writes the same YAML to the named file. `diff` emits a redacted
+unified diff; import and use dry-runs summarize added, modified, and deleted servers.
 Diagnostics go to stderr without echoing argument values. Automation uses the
 noninteractive commands and stable exit statuses; structured JSON operation
 results are not required.
@@ -515,8 +523,8 @@ without running Codex or servers.
 | Command | Behavior |
 | --- | --- |
 | `codex diff stack.yml` | Show all proposed changes; prompt only for missing masked values. |
-| `codex import stack.yml` | Show proposed additions/replacements and a redacted diff, approve servers, offer backup, then apply. |
-| `codex import stack.yml -y` | Create a default backup and approve all changes automatically. |
+| `codex import stack.yml` | Summarize proposed additions/replacements, approve servers, offer backup, then apply. |
+| `codex import stack.yml -y` | Approve all changes automatically; after validation, create a default backup and apply if changes are needed. |
 | `codex import stack.yml --dry-run` | Show proposed changes before server prompts, then report the approved count without writes. |
 
 Backups default to numbered sibling files (`config.toml.~1~`, `config.toml.~2~`,
