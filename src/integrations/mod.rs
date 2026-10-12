@@ -168,6 +168,7 @@ pub enum Client {
 }
 
 #[derive(Args)]
+#[command(arg_required_else_help = false)]
 pub struct CodexCommands {
     #[command(subcommand)]
     operation: CodexOperation,
@@ -183,6 +184,7 @@ enum CodexOperation {
 }
 
 #[derive(Args)]
+#[command(arg_required_else_help = false)]
 pub struct ClaudeCommands {
     #[command(subcommand)]
     operation: ClaudeOperation,

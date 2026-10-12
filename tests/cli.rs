@@ -407,6 +407,180 @@ fn missing_export_file_uses_clap_diagnostic_without_echoing_other_values() {
     assert!(!String::from_utf8_lossy(&plain.stderr).contains("\u{1b}["));
 }
 
+#[test]
+fn usage_errors_explain_the_problem_and_suggest_repairs() {
+    for (args, expected) in [
+        (
+            vec!["codex", "exprot"],
+            vec![
+                "unrecognized subcommand 'exprot'",
+                "similar subcommand",
+                "'export'",
+                "Usage: mcpstack codex",
+            ],
+        ),
+        (
+            vec!["claude", "show", "--al"],
+            vec!["unexpected argument '--al'", "similar argument", "'--all'"],
+        ),
+        (
+            vec!["codex", "show", "--config"],
+            vec!["a value is required", "--config <PATH>"],
+        ),
+        (
+            vec!["--color", "alwys"],
+            vec![
+                "invalid value",
+                "--color <COLOR>",
+                "possible values: auto, always, never",
+                "'always'",
+            ],
+        ),
+        (
+            vec!["codex"],
+            vec!["requires a subcommand", "show", "export"],
+        ),
+        (
+            vec!["--schema", "codex", "show"],
+            vec!["--schema", "cannot be used with", "codex"],
+        ),
+        (
+            vec!["--schema", "--schema"],
+            vec!["--schema", "cannot be used multiple times"],
+        ),
+    ] {
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty());
+        let diagnostic = String::from_utf8(output.stderr).unwrap();
+        assert!(diagnostic.starts_with("error:"), "{diagnostic}");
+        assert!(diagnostic.contains("--help"), "{diagnostic}");
+        assert!(diagnostic.contains("INVALID_ARGUMENT"));
+        for text in expected {
+            assert!(
+                diagnostic.contains(text),
+                "{args:?}: missing {text:?} in {diagnostic}"
+            );
+        }
+    }
+}
+
+#[test]
+fn detailed_diagnostics_redact_values_and_do_not_emit_terminal_controls() {
+    for args in [
+        vec!["--synthetic-secret=fixture-secret"],
+        vec!["--schema=fixture-secret"],
+        vec!["--color", "fixture-secret"],
+        vec!["codex", "show", "fixture-secret"],
+        vec!["codex", "show", "--config", "fixture-secret", "--al"],
+        vec!["--log", "fixture-secret", "codex", "show", "-v"],
+        vec!["codex", "show", "https://fixture-secret@example.com"],
+        vec!["codex", "https://fixture-secret@example.com"],
+        vec!["codex", "\u{1b}[31mfixture-secret"],
+        vec!["codex", "show", "--bad\nfixture-secret"],
+    ] {
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty());
+        let diagnostic = String::from_utf8(output.stderr).unwrap();
+        assert!(diagnostic.starts_with("error:"), "{diagnostic}");
+        assert!(!diagnostic.contains("fixture-secret"), "{diagnostic}");
+        assert!(!diagnostic.contains('\u{1b}'), "{diagnostic}");
+        assert!(diagnostic.contains("--help"));
+    }
+}
+
+#[test]
+fn clap_diagnostics_and_help_follow_color_controls() {
+    for (flags, env_color, no_color, colored) in [
+        (vec!["--color", "always"], None, None, true),
+        (vec!["--color=always"], None, None, true),
+        (vec![], Some("always"), None, true),
+        (vec!["--color", "never"], Some("always"), None, false),
+        (vec!["--color", "auto"], Some("always"), None, false),
+        (vec!["--color", "always", "--no-color"], None, None, false),
+        (vec!["--color", "always"], None, Some("1"), false),
+        (vec!["--color", "always"], None, Some(""), true),
+        (vec![], None, None, false),
+    ] {
+        for tail in [
+            vec!["codex", "exprot"],
+            vec!["claude", "export"],
+            vec!["codex", "show", "--help"],
+        ] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
+            command
+                .args(&flags)
+                .args(&tail)
+                .env_remove("RUST_LOG")
+                .env_remove("MCPSTACK_COLOR")
+                .env_remove("NO_COLOR");
+            if let Some(mode) = env_color {
+                command.env("MCPSTACK_COLOR", mode);
+            }
+            if let Some(value) = no_color {
+                command.env("NO_COLOR", value);
+            }
+            let output = command.output().unwrap();
+            let help = tail.contains(&"--help");
+            assert_eq!(output.status.code(), Some(if help { 0 } else { 2 }));
+            let text = String::from_utf8(if help { output.stdout } else { output.stderr }).unwrap();
+            assert_eq!(
+                text.contains('\u{1b}'),
+                colored,
+                "{flags:?} {tail:?}: {text:?}"
+            );
+            if colored && !help {
+                assert!(text.contains("\u{1b}[91merror:"), "{text:?}");
+                assert!(text.contains("\u{1b}[96m--help"), "{text:?}");
+                if tail.contains(&"exprot") {
+                    assert!(text.contains("\u{1b}[33mexprot"), "{text:?}");
+                }
+            }
+        }
+    }
+    // A path value or a token after `--` must not override diagnostic color.
+    for args in [
+        vec![
+            "--color",
+            "always",
+            "codex",
+            "export",
+            "--config=--no-color",
+        ],
+        vec!["--color", "always", "codex", "show", "--", "--no-color"],
+    ] {
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stderr.contains(&0x1b));
+    }
+    let output = run(&[
+        "--color",
+        "always",
+        "codex",
+        "show",
+        "--config",
+        "--no-color",
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!output.stderr.contains(&0x1b));
+}
+
+#[test]
+fn help_does_not_print_environment_values() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["codex", "show", "--help"])
+        .env("RUST_LOG", "fixture-secret")
+        .env("MCPSTACK_COLOR", "fixture-secret")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("RUST_LOG"));
+    assert!(!help.contains("fixture-secret"));
+    assert!(output.stderr.is_empty());
+}
+
 #[cfg(unix)]
 #[test]
 fn advertised_error_codes_match_process_failures() {
@@ -1017,7 +1191,10 @@ fn logging_conflicts_are_rejected_across_subcommand_levels() {
         let output = run(&args);
         assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
         assert!(output.stdout.is_empty(), "{args:?}");
-        assert!(String::from_utf8_lossy(&output.stderr).starts_with("INVALID_ARGUMENT:"));
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(diagnostic.starts_with("error:"), "{diagnostic}");
+        assert!(diagnostic.contains("cannot be used with"), "{diagnostic}");
+        assert!(diagnostic.contains("INVALID_ARGUMENT"));
     }
 }
 
