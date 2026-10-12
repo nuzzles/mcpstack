@@ -63,7 +63,7 @@ to its entry in Current status at the bottom.\
 
 | Implementation | Brief description |
 | --- | --- |
-| Partial [*](#claude-support) | Claude Code user-scope JSON import, show, export, diff, and stack switching. |
+| Done | Claude Code user-scope JSON list, import, show, export, diff, and stack switching. [*](#claude-support) |
 
 ### CLI
 
@@ -76,22 +76,16 @@ to its entry in Current status at the bottom.\
 | Unsupported | Preserve version pins and identify unpinned servers. |
 | Partial [*](#codex-import) | Keep discovery, validation, and planning free of writes and server execution. |
 | Partial [*](#codex-import) | Preview additions, updates, removals, conflicts, and blockers. |
-| Partial [*](#codex-import) | Show planned writes, downloads, and commands with secrets redacted. |
+| Partial [*](#codex-import) | Show planned configuration writes with secrets redacted. |
 | Done | Resolve literal relative executable and working-directory paths from the stack location; identify the target config. [*](#stack-relative-paths) |
-| Partial [*](#transactions) | Apply a whole stack as one transaction. |
-| Unsupported | Optionally continue installing independent servers after failures. [*](#continue-on-failure) |
-| Partial [*](#codex-import) | Require explicit conflict resolution and validate prerequisites before writes. |
+| Done | Apply approved file/stack changes as one transaction, the only supported apply mode. [*](#transactions) |
+| Partial [*](#codex-import) | Require explicit conflict resolution and validate configuration before writes. |
 | Partial [*](#codex-import) | Private recovery copies and stale-plan detection. |
-| Partial [*](#codex-import) | Repeat installs without duplicates or unnecessary side effects. |
-| Unsupported | Define supported installation mechanisms; reject unsupported ones before writes. |
-| Unsupported | Verify servers through MCP connection and initialization. |
-| Unsupported | Bound verification time; report per-server and overall results. |
-| Unsupported | Clean up verification processes/connections without invoking application tools. |
-| Unsupported | Add secret resolution providers beyond environment variables. [*](#secrets) |
-| Partial [*](#secrets) | Keep secrets out of output, shared files, CLI arguments, and child-process logs. |
+| Partial [*](#codex-import) | Repeat imports and stack switches without duplicates or unnecessary side effects. |
+| Partial [*](#secrets) | Keep secrets out of output, shared files, CLI arguments, and logs. |
 | Partial [*](#stack-workflow-tests) | Test secret redaction and configuration preservation on success and failure. |
 | Unsupported | Test sharing a stack between users with different credentials end to end. |
-| Unsupported | Document human and AI workflows, failure handling, switching, and repeat installs. |
+| Unsupported | Document human and AI workflows, failure handling, switching, and repeat imports. |
 
 ## Notes
 
@@ -138,8 +132,7 @@ Preserve unrelated settings, skip identical servers, and apply only approved
 additions or replacements. Backups and file writes are described under
 [Codex import](#codex-import).
 Phase 1 previews are redacted configuration diffs from `diff`, `import`, and
-`use`, including before interactive approval. Installation plans covering downloads, commands, and
-prerequisite verification remain Phase 2 work. Configuration-only stack switching
+`use`, including before interactive approval. Configuration-only stack switching
 is implemented by `use`.
 
 ---
@@ -170,20 +163,22 @@ recomputed after the value is supplied and before an approval prompt.
 
 ### Claude support
 
-[*] Claude Code is the selected first target. `mcpstack claude` reads and writes
+[*] Claude Code user-scope support is complete. `mcpstack claude` reads and writes
 user-scope `~/.claude.json` (or `--config <path>`) and preserves unrelated JSON
 settings. It supports native stdio, HTTP, and SSE server definitions plus portable
 stdio/HTTP/SSE definitions representable in Claude Code. Unsupported fields and
 transports fail before writes. Diff and export mask recognized credentials; import
-and use create numbered backups before atomic replacement. Claude Desktop, project/local scopes, and additional Claude Code MCP fields remain
-follow-up work.
+and use create numbered backups before transactional file replacement. Supported
+server fields are `type`, `command`, `args`, `env`, `url`, and `headers`.
+Claude Desktop and project/local scopes are outside this user-scope integration.
 For unsupported stack fields, Claude Code operations report every affected
 server and field name without printing field values.
 Codex export skips `computer-use` and `node_repl` by default. Claude Code export
 skips its built-in names `workspace`, `claude-in-chrome`, `computer-use`,
 `Claude Preview`, and `Claude Browser` by default. Each client exposes only its
 relevant `--allow-*` flags on `list`, `show`, and `export`; `--all` includes every normally
-skipped name. `--permissions-config` is available only for Claude Code export.
+skipped name. Claude Code `show` and `export` accept `--permissions-config`;
+`import`, `use`, and `diff` accept it with `--include-permissions`.
 The filter runs before server validation and leaves source configuration unchanged.
 Codex `http_headers` map to portable `headers`. `bearer_token_env_var` maps to
 `headers.Authorization: {env: VAR, prefix: "Bearer "}`; `env_http_headers` maps
@@ -228,8 +223,8 @@ values still fail in unattended mode. Changed switches always create a numbered
 backup, then atomically replace the config with stale-snapshot checks. Backup or
 write failures abort; identical sets do not rewrite files or create backups. An
 empty stack clears every server. Switching changes configuration only; it does
-not install or start server software. Stack names/aliases and client adapters
-beyond Codex remain future work.
+not install or start server software. Stack names/aliases and additional client
+adapters remain future work.
 
 ### Listing servers
 
@@ -316,7 +311,8 @@ characters in the displayed path are escaped so filenames cannot alter the termi
 
 ### Transactions
 
-[*] Validate and prepare the whole stack before committing configuration changes.
+[*] Whole-file/stack transactions are the only supported apply mode. Validate and
+prepare all approved configuration changes before committing them.
 Codex uses one atomic config replacement and now creates automatic import backups
 only after validation and approval; invalid inputs and no-op imports create no
 backups. Claude serializes both server config and permission settings before
@@ -333,16 +329,7 @@ Successful backups remain available after failures.
 
 This is a small in-process file transaction, not an atomic multi-file commit or
 crash/interruption recovery. Snapshot checks still have a final check/rename (or
-check/remove) race; no locking or journal is added. Installation transactions
-remain unimplemented. Downloads and external installer effects may not be
-reversible; report those explicitly rather than claiming complete rollback.
-
-### Continue on failure
-
-[*] Provide an explicit alternative to transactional installation: continue with
-independent servers, skip dependents of failed servers, and report installed,
-failed, and skipped results. Return a nonzero exit status if any server fails.
-Transactional mode must not silently commit a partially installed stack.
+check/remove) race; no locking or journal is added.
 
 ### Secrets
 
@@ -358,16 +345,15 @@ bindings are not checked against the local shell. Masking does not convert liter
 fields into runtime bindings. `{env: VARIABLE}` remains a runtime binding in portable
 headers; `{value_env: VARIABLE}` restores a masked literal during import. Export
 recognition and exposure are described under
-[Codex export](#codex-export). Additional secret providers remain Phase 2 work.
+[Codex export](#codex-export).
 
 ## Open decisions
 
 A standalone `doctor` command and general configuration/environment diagnostics
 are outside scope. Commands still validate their inputs and report actionable
-failures; installation prerequisite checks and MCP verification remain in scope.
+failures.
 
-Additional command/flag syntax, client adapter support, additional
-secret providers, installation mechanisms, and backup retention/recovery.
+Additional command/flag syntax, client adapter support, and backup retention/recovery.
 Stack format v1 defines YAML, STDIO/HTTP/SSE/WebSocket, client-independent
 configuration and transport definitions, and environment reference syntax.
 
@@ -422,7 +408,7 @@ deterministic client-independent YAML stacks. `diff` emits deterministic redacte
 configuration previews for the same stack, target config, resolved secrets, and
 color settings. Use and import dry-runs summarize server changes. Server
 processing uses ordered maps; diff previews retain the target file's layout
-and line numbers. Installation plans remain Phase 2 work.
+and line numbers.
 Claude writes replace only the top-level `mcpServers` value in the JSON text,
 preserving unrelated settings and their formatting. Previews compute hunk
 positions from that exact proposed write. Preview placeholders redact credentials
@@ -557,4 +543,3 @@ resolved secrets are redacted; hidden changes display `<redacted: changed>`.
 Comments and unrelated values are omitted from preview context. These previews
 are for review, not patch application. Dry-run logs one initial warning and
 creates no files or backups. Import does not remove servers; `use` replaces the whole server set.
-Installation/download plans and prerequisite verification remain unsupported.
