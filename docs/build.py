@@ -127,26 +127,67 @@ def main():
     cli_version = schema["cli_version"]
     revision = run("git", "rev-parse", "HEAD", cwd=ROOT, capture_output=True).stdout.strip()
     reference = [
-        "# CLI reference\n",
+        "# Commands\n",
         f"Generated from mcpstack **{cli_version}** at site build time. Your installed version's "
         "`--help` and `--schema` are authoritative for that version.\n",
         "Download the [CLI schema](cli-schema.json) for structured command metadata.\n",
+        "Use `mcpstack <harness> <command>` with [Codex](harness-codex.md) or "
+        "[Claude Code](harness-claude.md). Each operation has a subsection with examples "
+        "and both harnesses' exact syntax and options. "
+        "[validate](command-validate.md) checks a stack independently of either harness.\n",
+        "## Discover the interface\n\n```sh\nmcpstack --version\nmcpstack --schema\n"
+        "mcpstack --help\nmcpstack help codex import\n```\n",
     ]
+    generated_sources = {"cli-reference.md": "docs/build.py"}
+    command_pages = {}
 
     def describe(command, prefix):
         help_text = run(str(binary), *prefix, "--help", env=env, capture_output=True).stdout
-        reference.append(f"## mcpstack {' '.join(prefix)}\n\n```text\n{help_text.rstrip()}\n```\n")
-        for child in command["commands"]:
-            if child["name"] != "help":
-                describe(child, [*prefix, child["name"]])
+        children = [child for child in command["commands"] if child["name"] != "help"]
+        if not prefix:
+            reference.append(f"## Global options\n\n```text\n{help_text.rstrip()}\n```\n")
+        elif children:
+            harness = STAGING / "src" / f"harness-{prefix[0]}.md"
+            with harness.open("a", encoding="utf-8") as page:
+                page.write(f"\n## Usage and options\n\nGenerated from mcpstack **{cli_version}**."
+                           f"\n\n```text\n{help_text.rstrip()}\n```\n")
+        else:
+            operation = prefix[-1]
+            filename = f"command-{operation}.md"
+            if operation not in command_pages:
+                page = [f"# {operation}\n"]
+                if len(prefix) > 1:
+                    page.append("Available for **Codex** and **Claude Code**. Examples use "
+                                "`codex`; replace it with `claude` for Claude Code.\n")
+                guide = SOURCE / "command-guides" / f"{operation}.md"
+                page.append(guide.read_text(encoding="utf-8"))
+                generated_sources[filename] = guide.relative_to(ROOT).as_posix()
+                command_pages[operation] = page
+            command_pages[operation].append(
+                f"\n## mcpstack {' '.join(prefix)}\n\n"
+                f"Generated from mcpstack **{cli_version}**.\n\n```text\n{help_text.rstrip()}\n```\n"
+            )
+        for child in children:
+            describe(child, [*prefix, child["name"]])
 
     describe(schema["command"], [])
+    order = ["list", "show", "export", "diff", "import", "use", "validate"]
+    navigation = []
+    for operation in sorted(command_pages, key=lambda name: (order.index(name) if name in order else len(order), name)):
+        filename = f"command-{operation}.md"
+        navigation.append(f"  - [{operation}]({filename})")
+        (STAGING / "src" / filename).write_text("\n".join(command_pages[operation]), encoding="utf-8")
     reference.append("## Exit statuses\n\n| Status | Code | Meaning |\n| --- | --- | --- |")
     for status in schema["exit_statuses"]:
         reference.append(f"| {status['status']} | {status['error_code'] or 'SUCCESS'} | {status['description']} |")
     (STAGING / "src/cli-reference.md").write_text("\n".join(reference) + "\n", encoding="utf-8")
     (STAGING / "src/cli-schema.json").write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
-    names = re.findall(r"\]\(([^)]+\.md)\)", (STAGING / "src/SUMMARY.md").read_text())
+    summary = (STAGING / "src/SUMMARY.md").read_text(encoding="utf-8")
+    if summary.count("<!-- command-pages -->") != 1:
+        raise ValueError("SUMMARY.md must have one command-pages marker")
+    summary = summary.replace("<!-- command-pages -->", "\n".join(navigation))
+    (STAGING / "src/SUMMARY.md").write_text(summary, encoding="utf-8")
+    names = re.findall(r"\]\(([^)]+\.md)\)", summary)
     pages = [STAGING / "src" / name for name in names]
     check_examples(binary, pages, env)
     run(args.mdbook, "build", str(STAGING), "--dest-dir", str(SITE))
@@ -180,9 +221,10 @@ def main():
         if "<main>" not in document:
             raise ValueError(f"Cannot add Markdown link to {rendered}")
         document = document.replace("<main>", f'<main><div class="page-tools"><a href="{raw}">Read Markdown ↗</a></div>', 1)
-        # The generated chapter has no editable source page.
-        if name == "cli-reference.md":
-            document = document.replace("/edit/main/docs/src/cli-reference.md", "/edit/main/docs/build.py")
+        # Generated pages link to their authored guide or the generator.
+        if name in generated_sources:
+            document = document.replace(f"/edit/main/docs/src/{name}",
+                                        f"/edit/main/{generated_sources[name]}")
         rendered.write_text(document, encoding="utf-8")
     index.extend([
         "\n## Machine-readable reference\n",

@@ -435,6 +435,11 @@ also has a Markdown download. `llms.txt` indexes the agent-readable pages and
 from the executable during the same build. The generated reference and agent
 indexes identify the executable's version.
 
+Section 2, Compatibility, has Claude Code and Codex subsections covering supported
+scopes, configuration paths, commands, and compatibility limits. Section 3,
+Commands, includes a subsection for every operation, with shared examples and
+both harnesses' generated help.
+
 PRs build and validate the site, YAML examples, scratch workflows, local links,
 and anchors. Merged changes deploy through GitHub Pages; PRs cannot deploy.
 Contributor build instructions are in [`docs/README.md`](docs/README.md).

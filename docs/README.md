@@ -21,8 +21,14 @@ with `cargo build --locked`.
 
 ## Edit the docs
 
-Edit `docs/src/*.md` and the navigation in `docs/src/SUMMARY.md`. Keep runnable
-examples synthetic and use scratch configuration paths. The build validates
+Edit `docs/src/*.md` and the navigation in `docs/src/SUMMARY.md`. The build expands
+the `command-pages` marker into a subsection for every operation from the CLI
+schema, with both harnesses' help on the same page. Edit shared command examples
+and explanations in `docs/command-guides/*.md`. Usage and options come from each
+command's `--help`. Section 2 is Compatibility, with Claude Code and Codex guides
+in `docs/src/harness-*.md`; section 3 is Commands.
+
+Keep runnable examples synthetic and use scratch configuration paths. The build validates
 YAML snippets, exercises both clients against scratch configs, and checks local
 HTML links and anchors.
 

@@ -1,7 +1,16 @@
-# Client compatibility
+# Compatibility
 
-mcpstack supports Codex configuration and Claude Code **user-scope** configuration.
-It does not manage Claude Desktop, Claude project/local MCP scopes, or other clients.
+mcpstack 0.1.0 supports **Codex** and **Claude Code**. A harness is the application
+that loads and runs your MCP servers. Choose it with `mcpstack codex` or
+`mcpstack claude`; the stack file itself is independent of the harness.
+
+| Harness | Supported scope | Guide |
+| --- | --- | --- |
+| Codex | MCP servers in the selected `config.toml` | [Codex](harness-codex.md) |
+| Claude Code | User-scope MCP servers and opt-in MCP permission rules | [Claude Code](harness-claude.md) |
+
+Claude Desktop, Cursor, Gemini CLI, OpenCode, VS Code/Copilot, and Windsurf are
+not supported. Claude Code project and local MCP scopes are not managed.
 
 ## Configuration locations
 

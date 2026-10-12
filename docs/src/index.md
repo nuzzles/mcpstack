@@ -22,6 +22,8 @@ handled by your MCP client and the server's own setup instructions.
 | Keep credentials local and choose whether to copy permissions | [Secrets and permissions](secrets-and-permissions.md) |
 | Understand a failure or restore a backup | [Failures and recovery](recovery.md) |
 | Run predictable commands from an agent or script | [For agents](agents.md) |
+| Find a command's syntax, flags, and examples | [Command reference](cli-reference.md) |
+| Check supported harnesses and configuration locations | [Supported harnesses](compatibility.md) |
 
 ## Small files. Explicit changes.
 
