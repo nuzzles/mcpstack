@@ -23,7 +23,7 @@ pub use crate::integrations::EXAMPLES;
 pub struct Cli {
     #[command(flatten)]
     pub logging: Logging,
-    /// Disable all prompts; missing masked values fail even during dry-run.
+    /// Disable interactive prompts.
     #[arg(long, global = true)]
     non_interactive: bool,
     /// Print the complete CLI interface as versioned JSON.
