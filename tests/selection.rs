@@ -49,7 +49,7 @@ fn config_selection_is_shared_ordered_and_deduplicated() {
                 ),
                 (vec!["--all", "--server", "alpha"], vec!["alpha"]),
                 (
-                    vec!["--allow-computer-use", "--server", "computer-use"],
+                    vec!["--include-computer-use", "--server", "computer-use"],
                     vec!["computer-use"],
                 ),
             ] {

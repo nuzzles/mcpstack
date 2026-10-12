@@ -42,21 +42,31 @@ fn write_change_summary(
             .escape_debug()
     )?;
     writeln!(output, "MCP server changes:")?;
-    for (marker, label, color, names) in [
-        ("+", "Added", 32, added),
-        ("~", "Modified", 33, modified),
-        ("-", "Deleted", 31, deleted),
-    ] {
-        let entries = if names.is_empty() {
+    let entries = [added, modified, deleted]
+        .map(|names| names.iter().map(|name| format!("{name:?}")).collect());
+    write_change_rows(output, &entries, colored)
+}
+
+fn write_change_rows(
+    output: &mut impl Write,
+    changes: &[Vec<String>; 3],
+    colored: bool,
+) -> std::io::Result<()> {
+    for ((marker, label, color), entries) in [
+        ("+", "Added", 32),
+        ("~", "Modified", 33),
+        ("-", "Deleted", 31),
+    ]
+    .into_iter()
+    .zip(changes)
+    {
+        let changed = !entries.is_empty();
+        let entries = if entries.is_empty() {
             "none".to_owned()
         } else {
-            names
-                .iter()
-                .map(|name| format!("{name:?}"))
-                .collect::<Vec<_>>()
-                .join(", ")
+            entries.join(", ")
         };
-        if colored && !names.is_empty() {
+        if colored && changed {
             writeln!(output, "\x1b[{color}m  {marker} {label}: {entries}\x1b[0m")?;
         } else {
             writeln!(output, "  {marker} {label}: {entries}")?;
@@ -103,7 +113,7 @@ impl ExportArgs {
     }
 
     fn includes_permissions(&self) -> bool {
-        self.server_filter.all || self.include_permissions
+        self.include_permissions
     }
     fn filter(&self) -> reserved::ServerFilter {
         self.server_filter.clone()

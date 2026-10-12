@@ -40,6 +40,7 @@ to its entry in Current status at the bottom.\
 | Done | Deterministic stack files and configuration previews. [*](#deterministic-output) |
 | Done | Human-readable operation results; diagnostics on stderr. [*](#output-formats) |
 | Done | Define a versioned, client-independent stack format. |
+| Done | Store permissions in a shared format without harness ownership; preserve supported permission behavior on round trips and reject lossy conversions. [*](#shared-permissions) |
 | Done | Validate schema versions, server definitions, names, and secret references. |
 | Done | Show Codex server entries as YAML on stdout or export them to a named stack file with safe defaults. [*](#codex-export) |
 | Done | Replace recognized credentials with secret references by default; allow interactive selections or `--expose-secrets` to include values. |
@@ -69,13 +70,14 @@ to its entry in Current status at the bottom.\
 
 | Implementation | Brief description |
 | --- | --- |
+| Partial [*](#human-and-agent-readable-output) | Make all CLI output readable and understandable to both humans and AI agents. |
 | Done | List server names, transports, commands/endpoints, and available configuration state. [*](#listing-servers) |
 | Done | Select servers by name; reject unknown selections. [*](#server-selection) |
 | Done | Switch between stack files, replacing the complete MCP server set. [*](#switching-stacks) |
 | Done | Produce deterministic YAML exports; require confirmation or `--overwrite` for existing files. [*](#codex-export) |
 | Done | Keep discovery, validation, and planning free of file writes and server execution. [*](#codex-import) |
 | Done | Preview server additions, updates, and removals; require approval for replacements and report configuration validation errors before applying changes. [*](#codex-import) |
-| Partial [*](#output-formats) | Show planned configuration writes with secrets redacted. |
+| Done | Show planned configuration writes with secrets redacted. [*](#output-formats) |
 | Done | Resolve literal relative executable and working-directory paths from the stack location; identify the target config. [*](#stack-relative-paths) |
 | Done | Apply approved file/stack changes as one transaction, the only supported apply mode. [*](#transactions) |
 | Done | Require explicit conflict resolution and validate configuration before writes. [*](#codex-import) |
@@ -180,7 +182,7 @@ server and field name without printing field values.
 Codex export skips `computer-use` and `node_repl` by default. Claude Code export
 skips its built-in names `workspace`, `claude-in-chrome`, `computer-use`,
 `Claude Preview`, and `Claude Browser` by default. Each client exposes only its
-relevant `--allow-*` flags on `list`, `show`, and `export`; `--all` includes every normally
+relevant `--include-*` flags on `list`, `show`, and `export`; `--all` includes every normally
 skipped name. Claude Code `show` and `export` accept `--permissions-config`;
 `import`, `use`, and `diff` accept it with `--include-permissions`.
 The filter runs before server validation and leaves source configuration unchanged.
@@ -193,13 +195,14 @@ user-managed environment variable. Duplicate header names fail instead of
 overwriting either value. Claude Code's reserved server names also fail before
 writes. Claude Code cannot apply per-server Codex startup timeouts.
 Both exporters emit portable `transport` entries. Permission export is opt-in
-with `--include-permissions`; `show --all` and `export --all` also include
-permissions. Export stores Codex default and per-tool approval modes or Claude's server-scoped
-`allow`, `ask`, and `deny` rules in source-tagged permission metadata. Import,
-use, and diff ignore this metadata unless passed `--include-permissions`.
-Same-client restoration preserves the captured rules. Cross-client restoration
-translates representable rules, warns about each unsupported mode or pattern,
-and continues applying MCP servers. Claude settings are read and written in
+only with `--include-permissions`; `--all` changes server selection only.
+Both adapters convert native policies to the same
+[shared permission format](#shared-permissions). Import, use, and diff ignore
+permission metadata and tool allow/deny filters unless passed `--include-permissions`.
+Without that flag, existing target permissions and filters are preserved, including
+when using older stacks with filters in `settings` or native `config` entries.
+Conversions that cannot preserve the policy fail before backups or writes.
+Claude settings are read and written in
 `settings.json` (or the file selected by `--permissions-config`), with backups
 for changed settings. Project, managed, and rules outside the chosen settings
 file are outside this export scope. Other unmappable source fields fail export
@@ -209,6 +212,51 @@ Claude Code permission rules live in `settings.json` under `permissions.allow`,
 matches tools from that server. These rules are outside MCP server transport data.
 Older v1 stacks with `bearer_token` are accepted and normalized to an
 Authorization header when read. New exports write only `headers`.
+
+### Shared permissions
+
+Permission metadata belongs to the server, with no `source` or harness tag.
+Rules use local tool names rather than native `mcp__server__tool` spellings:
+
+```yaml
+permissions:
+  allow: [read]
+  ask: [write]
+  deny: [delete]
+```
+
+`allow` approves matching tools, `ask` requires approval, and `deny` blocks them.
+`auto` and `writes` preserve automatic and write-sensitive approval decisions
+for exact tool names.
+Optional `default_mode: allow|ask|auto|writes` is a fallback for tools without an
+explicit approval decision. The `allow`/`ask`/`deny` lists can contain `'*'` for
+all tools or tool patterns;
+within matching rules, deny takes precedence over ask, then allow. A wildcard
+ask rule therefore also constrains tools with an explicit allow rule, unlike an
+ask fallback. Empty `permissions: {}` explicitly clears captured permission
+decisions when included; omitted metadata leaves existing approval policy alone.
+
+Codex translates `allow`/`ask` to `approve`/`prompt`, retains `auto`/`writes`, and
+stores exact denials as `disabled_tools`. Its exporter moves those denials into
+permission metadata when requested. Enabled-tool filters remain in `settings`,
+but are exported and applied only with the same explicit opt-in. Claude adds native
+server prefixes only when writing its `allow`, `ask`, and `deny` arrays. Semantically equivalent native
+spellings, such as a bare server rule and its all-tools wildcard, can normalize.
+Lossless restoration concerns permission decisions, not JSON/TOML layout or spelling.
+
+Both native models can be exported and restored using this shared representation.
+The target must support every decision being restored: Claude rejects `auto`,
+`writes`, and default-ask policies with allow overrides; Codex rejects partial
+tool patterns, wildcard denials, and overlapping approval decisions it cannot
+retain. Claude rejects permission export and application when server names overlap
+at a `__` separator, such as `a` and `a__b`, including existing or unselected
+servers. Rename one server before handling those permissions.
+No unsupported decision is silently discarded or weakened. Existing
+transport/settings compatibility checks still apply.
+
+This changes the unpublished v1 permission format. Legacy `source: claude` and
+`source: codex` policies, and native-qualified permission rules, are rejected.
+Re-export native configurations with `--include-permissions` to migrate them.
 
 ### Switching stacks
 
@@ -237,7 +285,7 @@ adapters remain future work.
 paths as their adapters, or the file selected by `--config <path>`. They print a
 table sorted by server name with transport, configuration state, and command or
 endpoint. Listing shares the same default exclusions and client-specific
-`--allow-*` flags as show/export; `--all` includes every normally skipped name.
+`--include-*` flags as show/export; `--all` includes every normally skipped name.
 The shared filter runs before server validation. It does not prompt,
 resolve secrets, write files or backups, run helpers, or contact MCP servers.
 
@@ -266,7 +314,7 @@ For example: `mcpstack codex export work.yml --server github --server linear` or
 
 List/show/export select from the source config before validating server fields
 or prompting for credentials. Default exclusions still apply: explicitly selecting
-a skipped name requires its `--allow-*` flag or `--all`. `--all` enables skipped
+a skipped name requires its `--include-*` flag or `--all`. `--all` enables skipped
 names but does not expand an explicit selection.
 
 Import/diff select from the stack before adapter conversion, secret resolution,
@@ -433,9 +481,26 @@ Diagnostics go to stderr without echoing argument values. Automation uses the
 noninteractive commands and stable exit statuses; structured JSON operation
 results are not required.
 
-Detailed server configuration diffs are implemented for both clients. Claude
-permission settings currently report only that rules would change; showing the
-specific allow, ask, and deny rule edits remains unfinished.
+Detailed server configuration diffs are implemented for both clients.
+`claude diff --include-permissions` also shows the planned `allow`, `ask`, and
+`deny` edits in a separate settings-file diff, including permission-only changes.
+It uses the same serialization as the settings write, preserving original and
+proposed file line numbers. Unrelated settings and non-MCP rules are omitted
+from the preview. No-op settings produce no diff; previews create no files or
+backups. With `--include-permissions`, import and use show the target settings
+path and added, modified, and deleted MCP rules before approval, including in
+dry runs. Modified rules show their old and new `allow`/`ask`/`deny` memberships.
+Import refreshes the permission summary when server approvals narrow the plan.
+
+### Human and agent readable output
+
+All output, including help, prompts, previews, results, diagnostics, and logs,
+must be understandable to both humans and AI agents. Use clear, consistent labels
+and enough context to identify targets, actions, outcomes, and next steps when
+needed. Preserve meaning in plain text without relying on color or terminal UI.
+
+Existing summaries, diffs, structured exports, CLI schema, and error codes support
+this requirement. A complete output consistency audit remains before marking it Done.
 
 ### Cross-platform integration tests
 
@@ -457,6 +522,15 @@ resolution, backups, atomic writes, and failure preservation are covered on Unix
 and Windows. Windows tests also verify case-insensitive backup names and locked-file
 replacement failures. Long paths cover config creation, custom/numbered backups,
 replacement, and repeat imports.
+Claude permission preview tests cover rule additions, removals and moves,
+redaction in formatted/minified settings, file line numbers against actual writes,
+missing settings files, no-op results, server selection, Codex rule translation,
+color controls, permission summaries before approval, normalization versus no-op
+changes, and malformed inputs without writes.
+Shared permission tests cover all Codex approval modes, Claude patterns and
+overlapping rules, native and cross-client round trips, explicit empty policies,
+strict opt-in (including `--all` and legacy tool filters), ambiguous Claude server
+names, legacy-format rejection, and failures without partial writes.
 Other platforms reject import safely.
 
 ### Codex export

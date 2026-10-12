@@ -344,25 +344,25 @@ fn show_and_export_only_advertise_source_specific_options() {
     for operation in ["show", "export"] {
         let codex = String::from_utf8(run(&["codex", operation, "--help"]).stdout).unwrap();
         let claude = String::from_utf8(run(&["claude", operation, "--help"]).stdout).unwrap();
-        for flag in ["--allow-computer-use", "--all", "--include-permissions"] {
+        for flag in ["--include-computer-use", "--all", "--include-permissions"] {
             assert!(codex.contains(flag), "{operation}: {flag}");
             assert!(claude.contains(flag), "{operation}: {flag}");
         }
-        assert!(codex.contains("--allow-node-repl"));
-        assert!(!claude.contains("--allow-node-repl"));
+        assert!(codex.contains("--include-node-repl"));
+        assert!(!claude.contains("--include-node-repl"));
         for flag in [
-            "--allow-workspace",
-            "--allow-claude-in-chrome",
-            "--allow-claude-preview",
-            "--allow-claude-browser",
+            "--include-workspace",
+            "--include-claude-in-chrome",
+            "--include-claude-preview",
+            "--include-claude-browser",
             "--permissions-config",
         ] {
             assert!(claude.contains(flag), "{operation}: {flag}");
             assert!(!codex.contains(flag), "{operation}: {flag}");
         }
         for (client, flag) in [
-            ("codex", "--allow-workspace"),
-            ("claude", "--allow-node-repl"),
+            ("codex", "--include-workspace"),
+            ("claude", "--include-node-repl"),
         ] {
             let output = if operation == "export" {
                 run(&[client, operation, "stack.yml", flag])
@@ -882,8 +882,8 @@ fn codex_permissions_opt_in_round_trip_preserves_modes() {
         "writes"
     );
     assert_eq!(
-        value["servers"]["example"]["permissions"]["tools"]["read"],
-        "prompt"
+        value["servers"]["example"]["permissions"]["ask"],
+        serde_json::json!(["read"])
     );
     std::fs::write(&stack, export.stdout).unwrap();
     let run_import = |flags: &[&str]| {
@@ -929,6 +929,7 @@ fn codex_export_all_use_round_trip_has_no_diff_with_matching_credentials() {
     let exported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
         .args(["--non-interactive", "codex", "show", "--all", "--config"])
         .arg(&config)
+        .arg("--include-permissions")
         .env_remove("RUST_LOG")
         .stdin(Stdio::null())
         .output()
@@ -941,7 +942,7 @@ fn codex_export_all_use_round_trip_has_no_diff_with_matching_credentials() {
             .unwrap();
     assert_eq!(
         value["servers"]["obsidian"]["permissions"]["default_mode"],
-        "approve"
+        "allow"
     );
     std::fs::write(&stack, exported.stdout).unwrap();
     for flags in [vec![], vec!["--include-permissions"]] {
@@ -988,11 +989,11 @@ fn codex_export_all_use_round_trip_has_no_diff_with_matching_credentials() {
 }
 
 #[test]
-fn claude_denied_tool_maps_to_codex_and_unmapped_rule_warns() {
+fn unsupported_permission_pattern_rejects_codex_without_partial_writes() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.toml");
     let stack = dir.path().join("stack.yml");
-    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions:\n      source: claude\n      allow: ['mcp__example__*']\n      deny: ['mcp__example__delete', 'mcp__example__danger*']\n").unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions:\n      allow: ['*']\n      deny: ['delete', 'danger*']\n").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
         .args(["codex", "use"])
         .arg(&stack)
@@ -1003,23 +1004,10 @@ fn claude_denied_tool_maps_to_codex_and_unmapped_rule_warns() {
         .stdin(Stdio::null())
         .output()
         .unwrap();
-    assert!(output.status.success(), "{output:?}");
-    let warning = String::from_utf8_lossy(&output.stderr);
-    assert!(warning.contains("mcp__example__danger*"), "{warning}");
-    let value: toml::Value = toml::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
-    assert_eq!(
-        value["mcp_servers"]["example"]["command"].as_str(),
-        Some("tool")
-    );
-    assert_eq!(
-        value["mcp_servers"]["example"]["disabled_tools"][0].as_str(),
-        Some("delete")
-    );
-    assert!(
-        value["mcp_servers"]["example"]
-            .get("default_tools_approval_mode")
-            .is_none()
-    );
+    assert!(!output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("without loss"));
+    assert!(!config.exists());
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
 }
 
 #[test]
@@ -1045,7 +1033,7 @@ fn codex_export_all_includes_default_skipped_names() {
     assert!(default.status.success(), "{default:?}");
     let stack: Value = yaml_serde::from_slice(&default.stdout).unwrap();
     assert!(stack["servers"].as_object().unwrap().is_empty());
-    let one = run_export(&["--allow-node-repl"]);
+    let one = run_export(&["--include-node-repl"]);
     assert!(one.status.success(), "{one:?}");
     let stack: Value = yaml_serde::from_slice(&one.stdout).unwrap();
     assert_eq!(stack["servers"].as_object().unwrap().len(), 1);
@@ -1540,6 +1528,7 @@ fn codex_export_import_round_trip_preserves_supported_fields() {
     let exported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
         .args(["--non-interactive", "codex", "show", "--config"])
         .arg(&source)
+        .arg("--include-permissions")
         .env("PATH", "")
         .env_remove("RUST_LOG")
         .stdin(Stdio::null())
@@ -1560,6 +1549,7 @@ fn codex_export_import_round_trip_preserves_supported_fields() {
         .arg(&fixture.file)
         .arg("--config")
         .arg(&target)
+        .arg("--include-permissions")
         .env("PATH", "")
         .env_remove("RUST_LOG")
         .env(argument, "--token=fixture-roundtrip-secret")

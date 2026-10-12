@@ -17,12 +17,16 @@ impl Selection {
     pub async fn read_stack(
         &self,
         file: &std::path::Path,
+        include_permissions: bool,
     ) -> Result<StackV1, crate::error::AppError> {
         let document = tokio::fs::read_to_string(file)
             .await
             .map_err(crate::error::AppError::StackRead)?;
         let crate::schema::Stack::V1(mut stack) = crate::schema::Stack::from_yaml(&document)?;
         self.apply(&mut stack)?;
+        if !include_permissions {
+            stack.exclude_permissions();
+        }
         super::paths::resolve(&mut stack, file).await?;
         Ok(stack)
     }
@@ -63,6 +67,6 @@ impl Selection {
 pub enum Error {
     #[error("Unknown MCP server selection(s): {0}. Names must match exactly.")]
     Unknown(String),
-    #[error("Selected MCP server {0:?} is excluded by default. Add --all or its --allow-* flag.")]
+    #[error("Selected MCP server {0:?} is excluded by default. Add --all or its --include-* flag.")]
     Excluded(String),
 }

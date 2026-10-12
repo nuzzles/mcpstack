@@ -30,32 +30,32 @@ pub enum Server {
     },
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Permissions {
-    Codex {
-        #[serde(default)]
-        default_mode: Option<ApprovalMode>,
-        #[serde(default, deserialize_with = "unique_map")]
-        tools: BTreeMap<String, ApprovalMode>,
-    },
-    Claude {
-        #[serde(default)]
-        allow: Vec<String>,
-        #[serde(default)]
-        ask: Vec<String>,
-        #[serde(default)]
-        deny: Vec<String>,
-    },
+/// Server-local permission decisions. Adapters supply native server prefixes
+/// and must reject policies they cannot represent without loss.
+#[derive(Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Permissions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_mode: Option<ApprovalMode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ask: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deny: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auto: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub writes: Vec<String>,
 }
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalMode {
     Auto,
-    Prompt,
+    Ask,
     Writes,
-    Approve,
+    Allow,
 }
 
 /// Client-independent configuration data. Target adapters validate supported fields.
@@ -269,9 +269,9 @@ pub struct Settings {
     pub startup_timeout_sec: Option<f64>,
     #[serde(default)]
     pub tool_timeout_sec: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_tools: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disabled_tools: Vec<String>,
 }
 
@@ -322,6 +322,46 @@ where
 use super::{SCHEMA_VERSION, ValidationError};
 
 impl StackV1 {
+    /// Omit captured policies and legacy native tool filters unless opted in.
+    /// Non-permission tool settings, such as output limits, remain portable.
+    pub fn exclude_permissions(&mut self) {
+        for server in self.servers.values_mut() {
+            match server {
+                Server::Portable {
+                    settings,
+                    permissions,
+                    ..
+                } => {
+                    *permissions = None;
+                    settings.enabled_tools = None;
+                    settings.disabled_tools.clear();
+                }
+                Server::Configuration { config } => {
+                    for key in [
+                        "default_tools_approval_mode",
+                        "enabled_tools",
+                        "disabled_tools",
+                    ] {
+                        config.remove(key);
+                    }
+                    if let Some(ConfigValue::Object(tools)) = config.get_mut("tools") {
+                        tools.retain(|_, tool| {
+                            if let ConfigValue::Object(fields) = tool {
+                                fields.remove("approval_mode");
+                                !fields.is_empty()
+                            } else {
+                                true
+                            }
+                        });
+                        if tools.is_empty() {
+                            config.remove("tools");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn validate(&self) -> Result<(), ValidationError> {
         if self.schema_version != SCHEMA_VERSION {
             return Err(ValidationError::UnsupportedVersion);
@@ -334,23 +374,20 @@ impl StackV1 {
                 permissions: Some(policy),
                 ..
             } = server
+                && [
+                    &policy.allow,
+                    &policy.ask,
+                    &policy.deny,
+                    &policy.auto,
+                    &policy.writes,
+                ]
+                .into_iter()
+                .flatten()
+                .any(|rule| {
+                    !nonempty_text(rule) || rule.trim() != rule || rule.starts_with("mcp__")
+                })
             {
-                match &**policy {
-                    Permissions::Codex { tools, .. }
-                        if tools.keys().any(|name| !nonempty_text(name)) =>
-                    {
-                        return Err(ValidationError::InvalidDocument);
-                    }
-                    Permissions::Claude { allow, ask, deny } => {
-                        let prefix = format!("mcp__{name}");
-                        if allow.iter().chain(ask).chain(deny).any(|rule| {
-                            rule != &prefix && !rule.starts_with(&format!("{prefix}__"))
-                        }) {
-                            return Err(ValidationError::InvalidDocument);
-                        }
-                    }
-                    _ => {}
-                }
+                return Err(ValidationError::InvalidDocument);
             }
             server.validate()?;
         }

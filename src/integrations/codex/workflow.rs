@@ -8,15 +8,18 @@ use dialoguer::{Confirm, Input, Select};
 
 use super::config::Snapshot;
 use super::export::ExportError;
-use super::import::prepare;
+use super::import::{ImportError, prepare};
 use super::{Error, default_config};
 use crate::error::AppError;
 use crate::exporters::to_yaml;
 use crate::integrations::secrets::SecretResolver;
-use crate::schema::v1::{ApprovalMode, Permissions};
+use crate::schema::v1::ApprovalMode;
 use crate::schema::{Server, Stack};
 
-pub(super) fn apply_permissions(stack: &Stack, definitions: &mut BTreeMap<String, toml::Table>) {
+pub(super) fn apply_permissions(
+    stack: &Stack,
+    definitions: &mut BTreeMap<String, toml::Table>,
+) -> Result<(), ImportError> {
     let Stack::V1(stack) = stack;
     for (name, server) in &stack.servers {
         let Server::Portable {
@@ -29,120 +32,103 @@ pub(super) fn apply_permissions(stack: &Stack, definitions: &mut BTreeMap<String
         let Some(definition) = definitions.get_mut(name) else {
             continue;
         };
-        match &**policy {
-            Permissions::Codex {
-                default_mode,
-                tools,
-            } => {
-                if let Some(mode) = default_mode {
-                    definition.insert(
-                        "default_tools_approval_mode".into(),
-                        toml::Value::String(mode_text(*mode).into()),
-                    );
-                }
-                if !tools.is_empty() {
-                    let table = tools
-                        .iter()
-                        .map(|(tool, mode)| {
-                            (
-                                tool.clone(),
-                                toml::Value::Table(toml::Table::from_iter([(
-                                    "approval_mode".into(),
-                                    toml::Value::String(mode_text(*mode).into()),
-                                )])),
-                            )
-                        })
-                        .collect();
-                    definition.insert("tools".into(), toml::Value::Table(table));
-                }
-            }
-            Permissions::Claude { allow, ask, deny } => {
-                let prefix = format!("mcp__{name}");
-                let wildcard = format!("{prefix}__*");
-                let mut disabled = Vec::new();
-                let mut unsafe_deny = false;
-                for rule in deny {
-                    match rule.strip_prefix(&format!("{prefix}__")) {
-                        Some(tool) if !tool.is_empty() && !tool.contains('*') => {
-                            disabled.push(tool.to_owned())
-                        }
-                        _ => {
-                            unsafe_deny = true;
-                            tracing::warn!(
-                                "Skipping Claude deny rule {rule:?}: Codex cannot represent its scope exactly."
-                            );
-                        }
+        let fail = |reason| ImportError::Permissions(name.clone(), reason);
+        let mut default = policy.default_mode;
+        let mut tools = BTreeMap::new();
+        let mut global = None;
+        if policy
+            .auto
+            .iter()
+            .chain(&policy.writes)
+            .any(|tool| tool.contains('*'))
+        {
+            return Err(fail(
+                "auto and writes rules require exact tool names; use default_mode for a fallback",
+            ));
+        }
+        for (rules, mode) in [
+            (&policy.allow, ApprovalMode::Allow),
+            (&policy.ask, ApprovalMode::Ask),
+            (&policy.auto, ApprovalMode::Auto),
+            (&policy.writes, ApprovalMode::Writes),
+        ] {
+            for tool in rules {
+                if tool == "*" {
+                    if global.replace(mode).is_some_and(|old| old != mode) {
+                        return Err(fail("overlapping server-wide decisions"));
                     }
-                }
-                if !disabled.is_empty() {
-                    definition.insert(
-                        "disabled_tools".into(),
-                        toml::Value::Array(disabled.into_iter().map(toml::Value::String).collect()),
-                    );
-                }
-                if unsafe_deny {
-                    tracing::warn!(
-                        "Skipping allow and ask rules for {name:?} because an unmatched deny rule could take precedence."
-                    );
-                    continue;
-                }
-                let default = if ask.iter().any(|rule| rule == &prefix || rule == &wildcard) {
-                    Some(ApprovalMode::Prompt)
-                } else if allow
-                    .iter()
-                    .any(|rule| rule == &prefix || rule == &wildcard)
+                } else if tool.contains('*') {
+                    return Err(fail("tool patterns require an exact tool name"));
+                } else if tools
+                    .insert(tool.clone(), mode)
+                    .is_some_and(|old| old != mode)
                 {
-                    Some(ApprovalMode::Approve)
-                } else {
-                    None
-                };
-                if let Some(mode) = default {
-                    definition.insert(
-                        "default_tools_approval_mode".into(),
-                        toml::Value::String(mode_text(mode).into()),
-                    );
-                }
-                let mut tools = toml::Table::new();
-                for (bucket, mode) in [(allow, ApprovalMode::Approve), (ask, ApprovalMode::Prompt)]
-                {
-                    for rule in bucket {
-                        let Some(tool) = rule.strip_prefix(&format!("{prefix}__")) else {
-                            continue;
-                        };
-                        if tool == "*" {
-                            continue;
-                        }
-                        if tool.contains('*') || tool.is_empty() {
-                            tracing::warn!(
-                                "Skipping Claude permission rule {rule:?}: Codex requires an exact tool name."
-                            );
-                            continue;
-                        }
-                        let effective = if matches!(default, Some(ApprovalMode::Prompt)) {
-                            if matches!(mode, ApprovalMode::Approve) {
-                                tracing::warn!(
-                                    "Skipping allow override {rule:?}: a Claude ask rule for the whole server takes precedence."
-                                );
-                            }
-                            ApprovalMode::Prompt
-                        } else {
-                            mode
-                        };
-                        tools.insert(
-                            tool.into(),
-                            toml::Value::Table(toml::Table::from_iter([(
-                                "approval_mode".into(),
-                                toml::Value::String(mode_text(effective).into()),
-                            )])),
-                        );
-                    }
-                }
-                if !tools.is_empty() {
-                    definition.insert("tools".into(), toml::Value::Table(tools));
+                    return Err(fail("multiple approval decisions for one tool"));
                 }
             }
         }
+        if let Some(mode) = global {
+            if default.is_some_and(|fallback| fallback != mode) {
+                return Err(fail(
+                    "a server-wide rule conflicts with the fallback decision",
+                ));
+            }
+            if mode == ApprovalMode::Ask && tools.values().any(|mode| *mode != ApprovalMode::Ask) {
+                return Err(fail(
+                    "server-wide ask takes precedence over tool approval rules",
+                ));
+            }
+            if !policy.auto.is_empty() || !policy.writes.is_empty() {
+                return Err(fail(
+                    "server-wide rules cannot preserve automatic per-tool decisions",
+                ));
+            }
+            default = Some(mode);
+        }
+        if policy.deny.iter().any(|tool| tool.contains('*')) {
+            return Err(fail("deny patterns require an exact tool name"));
+        }
+        if let Some(mode) = default {
+            definition.insert(
+                "default_tools_approval_mode".into(),
+                toml::Value::String(mode_text(mode).into()),
+            );
+        }
+        if !tools.is_empty() {
+            definition.insert(
+                "tools".into(),
+                toml::Value::Table(
+                    tools
+                        .into_iter()
+                        .map(|(tool, mode)| {
+                            (
+                                tool,
+                                toml::Value::Table(toml::Table::from_iter([(
+                                    "approval_mode".into(),
+                                    toml::Value::String(mode_text(mode).into()),
+                                )])),
+                            )
+                        })
+                        .collect(),
+                ),
+            );
+        }
+        if !policy.deny.is_empty() {
+            let mut denied = definition
+                .get("disabled_tools")
+                .and_then(toml::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for tool in &policy.deny {
+                let value = toml::Value::String(tool.clone());
+                if !denied.contains(&value) {
+                    denied.push(value);
+                }
+            }
+            definition.insert("disabled_tools".into(), toml::Value::Array(denied));
+        }
     }
+    Ok(())
 }
 
 pub(super) type Preliminary = (BTreeMap<String, toml::Table>, Vec<String>, bool);
@@ -165,7 +151,7 @@ pub(super) fn preliminary_definitions(
     };
     retain_target_policy(snapshot, stack, &mut definitions, include_permissions)?;
     if include_permissions {
-        apply_permissions(stack, &mut definitions);
+        apply_permissions(stack, &mut definitions)?;
     }
     let secrets = resolver.values.into_values().flatten().collect();
     Ok((definitions, secrets, resolver.missing_used))
@@ -199,9 +185,32 @@ pub(super) fn retain_target_policy(
                 })
             );
         if !restoring_permissions {
-            for field in ["default_tools_approval_mode", "tools"] {
+            for field in [
+                "default_tools_approval_mode",
+                "enabled_tools",
+                "disabled_tools",
+            ] {
                 if let Some(value) = current.get(field) {
                     definition.entry(field).or_insert_with(|| value.clone());
+                }
+            }
+            if let Some(current_tools) = current.get("tools") {
+                let incoming = definition
+                    .entry("tools")
+                    .or_insert_with(|| current_tools.clone());
+                if let (Some(current_tools), Some(incoming)) =
+                    (current_tools.as_table(), incoming.as_table_mut())
+                {
+                    for (tool, current) in current_tools {
+                        if let Some(mode) = current.get("approval_mode") {
+                            let entry = incoming.entry(tool).or_insert_with(|| current.clone());
+                            if let Some(fields) = entry.as_table_mut() {
+                                fields
+                                    .entry("approval_mode")
+                                    .or_insert_with(|| mode.clone());
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -212,9 +221,9 @@ pub(super) fn retain_target_policy(
 fn mode_text(mode: ApprovalMode) -> &'static str {
     match mode {
         ApprovalMode::Auto => "auto",
-        ApprovalMode::Prompt => "prompt",
+        ApprovalMode::Ask => "prompt",
         ApprovalMode::Writes => "writes",
-        ApprovalMode::Approve => "approve",
+        ApprovalMode::Allow => "approve",
     }
 }
 
@@ -319,7 +328,7 @@ pub(crate) async fn run_import(
     let selected_stack = if selection.is_empty() {
         None
     } else {
-        Some(selection.read_stack(&file).await?)
+        Some(selection.read_stack(&file, include_permissions).await?)
     };
     let interactive = !non_interactive && stdin().is_terminal() && stderr().is_terminal();
     if !auto_approve && !interactive {
@@ -327,7 +336,7 @@ pub(crate) async fn run_import(
     }
     let stack: Stack = match selected_stack {
         Some(stack) => stack,
-        None => selection.read_stack(&file).await?,
+        None => selection.read_stack(&file, include_permissions).await?,
     }
     .into();
     let (preliminary, _, missing) =
@@ -376,7 +385,7 @@ pub(crate) async fn run_import(
     let mut definitions = prepared?;
     retain_target_policy(&snapshot, &stack, &mut definitions, include_permissions)?;
     if include_permissions {
-        apply_permissions(&stack, &mut definitions);
+        apply_permissions(&stack, &mut definitions)?;
     }
     let changes = snapshot.preview(&definitions)?;
     let additions: BTreeMap<_, _> = changes
@@ -546,7 +555,7 @@ pub(crate) async fn run_use(
     let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
     let snapshot = Snapshot::read(&path).await?;
     let stack: Stack = crate::integrations::selection::Selection::default()
-        .read_stack(&file)
+        .read_stack(&file, include_permissions)
         .await?
         .into();
     let (preliminary, _, missing) =
@@ -593,7 +602,7 @@ pub(crate) async fn run_use(
     let mut definitions = prepared?;
     retain_target_policy(&snapshot, &stack, &mut definitions, include_permissions)?;
     if include_permissions {
-        apply_permissions(&stack, &mut definitions);
+        apply_permissions(&stack, &mut definitions)?;
     }
     let (changed, _) = snapshot.replacement_proposal(&definitions)?;
     if !changed {

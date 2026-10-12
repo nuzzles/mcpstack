@@ -70,7 +70,7 @@ struct CommonFilterArgs {
     all: bool,
     /// Include the otherwise skipped computer-use server.
     #[arg(long)]
-    allow_computer_use: bool,
+    include_computer_use: bool,
 }
 
 #[derive(Args)]
@@ -79,7 +79,7 @@ pub struct CodexFilterArgs {
     common: CommonFilterArgs,
     /// Include the otherwise skipped node_repl server.
     #[arg(long)]
-    allow_node_repl: bool,
+    include_node_repl: bool,
 }
 
 impl FilterArgs for CodexFilterArgs {
@@ -87,8 +87,8 @@ impl FilterArgs for CodexFilterArgs {
         ServerFilter {
             selection: self.common.selection.clone(),
             all: self.common.all,
-            computer_use: self.common.allow_computer_use,
-            node_repl: self.allow_node_repl,
+            computer_use: self.common.include_computer_use,
+            node_repl: self.include_node_repl,
             workspace: true,
             claude_in_chrome: true,
             claude_preview: true,
@@ -103,16 +103,16 @@ pub struct ClaudeFilterArgs {
     common: CommonFilterArgs,
     /// Include the otherwise skipped workspace server.
     #[arg(long)]
-    allow_workspace: bool,
+    include_workspace: bool,
     /// Include the otherwise skipped claude-in-chrome server.
     #[arg(long)]
-    allow_claude_in_chrome: bool,
+    include_claude_in_chrome: bool,
     /// Include the otherwise skipped Claude Preview server.
     #[arg(long)]
-    allow_claude_preview: bool,
+    include_claude_preview: bool,
     /// Include the otherwise skipped Claude Browser server.
     #[arg(long)]
-    allow_claude_browser: bool,
+    include_claude_browser: bool,
 }
 
 impl FilterArgs for ClaudeFilterArgs {
@@ -120,11 +120,11 @@ impl FilterArgs for ClaudeFilterArgs {
         ServerFilter {
             selection: self.common.selection.clone(),
             all: self.common.all,
-            computer_use: self.common.allow_computer_use,
-            workspace: self.allow_workspace,
-            claude_in_chrome: self.allow_claude_in_chrome,
-            claude_preview: self.allow_claude_preview,
-            claude_browser: self.allow_claude_browser,
+            computer_use: self.common.include_computer_use,
+            workspace: self.include_workspace,
+            claude_in_chrome: self.include_claude_in_chrome,
+            claude_preview: self.include_claude_preview,
+            claude_browser: self.include_claude_browser,
             node_repl: true,
         }
     }

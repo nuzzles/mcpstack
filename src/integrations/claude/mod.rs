@@ -26,6 +26,10 @@ pub enum Error {
     #[error("This stack contains fields or transports Claude Code cannot represent.")]
     Unsupported,
     #[error(
+        "Cannot represent permissions for server {0:?} in Claude Code without loss: {1}. No configuration was changed."
+    )]
+    Permissions(String, &'static str),
+    #[error(
         "Claude Code cannot represent these stack fields: {0}. Edit the stack or use a supported target."
     )]
     UnsupportedFields(String),
@@ -53,6 +57,7 @@ impl Error {
         match self {
             Self::Path | Self::Config | Self::Read => ErrorCode::ConfigReadError,
             Self::Unsupported
+            | Self::Permissions(_, _)
             | Self::UnsupportedFields(_)
             | Self::HeaderConflict(_)
             | Self::HeaderEnvironment(_)
@@ -996,9 +1001,11 @@ async fn write_with_permissions(
     let mut writes = vec![(file, bytes)];
     if let Some((snapshot, value)) = permission_change {
         let bytes = if snapshot.config != value {
-            let mut bytes = serde_json::to_vec_pretty(&value).map_err(|_| Error::Write)?;
-            bytes.push(b'\n');
-            Some(bytes)
+            Some(
+                serialized_config(&value)
+                    .map_err(|_| Error::Write)?
+                    .into_bytes(),
+            )
         } else {
             None
         };
@@ -1059,6 +1066,9 @@ impl ClientAdapter for Claude {
         };
         let (_, _, config) = snapshot(args.config, Some(&filter)).await?;
         let mut values = servers(&config);
+        if include_permissions {
+            permissions::validate_names(values.keys().map(String::as_str))?;
+        }
         values.retain(|name, _| !filter.skip(name));
         let mut stack = as_stack(values)?;
         if !expose_secrets {
@@ -1135,8 +1145,19 @@ impl ClientAdapter for Claude {
             None
         };
         let (config_path, file, config) = snapshot(args.config, None).await?;
-        let stack = args.selection.read_stack(&args.file).await?;
+        let stack = args
+            .selection
+            .read_stack(&args.file, args.include_permissions)
+            .await?;
         let before = servers(&config);
+        if args.include_permissions {
+            permissions::validate_names(
+                before
+                    .keys()
+                    .chain(stack.servers.keys())
+                    .map(String::as_str),
+            )?;
+        }
         let (preview_values, missing) = prepared_preview(&stack)?;
         if missing {
             let mut preliminary = before.clone();
@@ -1170,13 +1191,8 @@ impl ClientAdapter for Claude {
         if let Some(path) = permission_path {
             let settings = permissions::Snapshot::read(&path).await?;
             let names = stack.servers.keys().cloned().collect();
-            if settings.proposed(&stack, &names)? != settings.config {
-                writeln!(
-                    output,
-                    "Permission rules would change in {}.",
-                    path.display()
-                )?;
-            }
+            let proposed = settings.proposed(&stack, &names)?;
+            settings.preview(&proposed, &path, output, colored)?;
         }
         Ok(())
     }
@@ -1198,8 +1214,19 @@ impl ClientAdapter for Claude {
             None
         };
         let (config_path, file, config) = snapshot(args.config, None).await?;
-        let stack = args.selection.read_stack(&args.file).await?;
+        let stack = args
+            .selection
+            .read_stack(&args.file, args.include_permissions)
+            .await?;
         let before = servers(&config);
+        if args.include_permissions {
+            permissions::validate_names(
+                before
+                    .keys()
+                    .chain(stack.servers.keys())
+                    .map(String::as_str),
+            )?;
+        }
         let (preview_values, missing) = prepared_preview(&stack)?;
         if missing {
             let mut preliminary = before.clone();
@@ -1231,19 +1258,25 @@ impl ClientAdapter for Claude {
         };
         let permission_preview = if let Some(settings) = &permission_snapshot {
             let names = stack.servers.keys().cloned().collect();
-            settings.proposed(&stack, &names)? != settings.config
+            Some(settings.proposed(&stack, &names)?)
         } else {
-            false
+            None
         };
-        if all_changes == before && !permission_preview {
+        let permissions_changed = permission_snapshot
+            .as_ref()
+            .zip(permission_preview.as_ref())
+            .is_some_and(|(settings, proposed)| settings.config != *proposed);
+        if all_changes == before && !permissions_changed {
             writeln!(
                 output,
                 "No changes; existing identical entries were unchanged."
             )?;
             return Ok(());
         }
-        if permission_preview {
-            writeln!(output, "Permission rules would change.")?;
+        if let (Some(settings), Some(change), Some(path)) =
+            (&permission_snapshot, &permission_preview, &permission_path)
+        {
+            settings.summarize(change, path, output, colored)?;
         }
         if all_changes != before {
             summarize_changes(output, &config_path, &before, &all_changes, colored)?;
@@ -1297,6 +1330,16 @@ impl ClientAdapter for Claude {
             )?;
             return Ok(());
         }
+        if let (Some((settings, change)), Some(path)) = (&permission_change, &permission_path)
+            && permission_preview.as_ref() != Some(change)
+        {
+            if permissions_changed {
+                writeln!(output, "Selected permission changes:")?;
+                settings.summarize(change, path, output, colored)?;
+            } else {
+                writeln!(output, "Selected permission changes: none.")?;
+            }
+        }
         if dry_run {
             writeln!(output, "Would import {} server(s).", approved.len())?;
             return Ok(());
@@ -1340,8 +1383,19 @@ impl ClientAdapter for Claude {
             None
         };
         let (config_path, file, config) = snapshot(args.config, None).await?;
-        let stack = args.selection.read_stack(&args.file).await?;
+        let stack = args
+            .selection
+            .read_stack(&args.file, args.include_permissions)
+            .await?;
         let before = servers(&config);
+        if args.include_permissions {
+            permissions::validate_names(
+                before
+                    .keys()
+                    .chain(stack.servers.keys())
+                    .map(String::as_str),
+            )?;
+        }
         let (mut preliminary, missing) = prepared_preview(&stack)?;
         if missing {
             preserve_equivalent_servers(&before, &mut preliminary);
@@ -1362,8 +1416,8 @@ impl ClientAdapter for Claude {
                 && stderr().is_terminal(),
         )?;
         preserve_equivalent_servers(&before, &mut proposed);
-        let permission_change = if let Some(path) = permission_path {
-            let settings = permissions::Snapshot::read(&path).await?;
+        let permission_change = if let Some(path) = &permission_path {
+            let settings = permissions::Snapshot::read(path).await?;
             let names = stack.servers.keys().cloned().collect();
             let change = settings.proposed(&stack, &names)?;
             Some((settings, change))
@@ -1381,8 +1435,8 @@ impl ClientAdapter for Claude {
             )?;
             return Ok(());
         }
-        if permissions_changed {
-            writeln!(output, "Permission rules would change.")?;
+        if let (Some((settings, change)), Some(path)) = (&permission_change, &permission_path) {
+            settings.summarize(change, path, output, colored)?;
         }
         if proposed != before {
             summarize_changes(output, &config_path, &before, &proposed, colored)?;

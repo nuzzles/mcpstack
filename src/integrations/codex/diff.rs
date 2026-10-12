@@ -26,7 +26,10 @@ pub(crate) async fn run(
 ) -> Result<(), AppError> {
     let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
     let snapshot = Snapshot::read(&path).await?;
-    let stack: Stack = selection.read_stack(&file).await?.into();
+    let stack: Stack = selection
+        .read_stack(&file, include_permissions)
+        .await?
+        .into();
     let (preliminary, preliminary_secrets, missing) =
         super::workflow::preliminary_definitions(&snapshot, &stack, include_permissions)?;
     if missing {
@@ -86,7 +89,7 @@ pub(crate) async fn run(
         include_permissions,
     )?;
     if include_permissions {
-        super::workflow::apply_permissions(&stack, &mut definitions);
+        super::workflow::apply_permissions(&stack, &mut definitions)?;
     }
     let changes = snapshot.preview(&definitions)?;
     if changes.is_empty() {
