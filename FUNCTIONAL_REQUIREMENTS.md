@@ -437,8 +437,9 @@ indexes identify the executable's version.
 
 Section 2, Compatibility, has Claude Code and Codex subsections covering supported
 scopes, configuration paths, commands, and compatibility limits. Section 3,
-Commands, includes a subsection for every operation, with shared examples and
-both harnesses' generated help.
+Commands, includes a concise subsection for every operation, with shared examples
+and links to both harnesses' generated help files. Pages keep full option listings
+in downloadable text; the CLI schema retains complete machine-readable metadata.
 
 PRs build and validate the site, YAML examples, scratch workflows, local links,
 and anchors. Merged changes deploy through GitHub Pages; PRs cannot deploy.

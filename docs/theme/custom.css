@@ -1,6 +1,6 @@
 /* Keep mdBook's accessible navigation, search, and theme controls. */
 :root {
-    --content-max-width: 860px;
+    --content-max-width: 760px;
 }
 .light {
     --bg: #fafbf9;
@@ -17,54 +17,33 @@
     --sidebar-active: #86dab2;
 }
 .content main {
-    line-height: 1.7;
-    padding-bottom: 4rem;
-}
-.content h1 {
-    letter-spacing: -0.035em;
-    font-weight: 750;
-    line-height: 1.15;
-    margin-bottom: 1.4rem;
+    line-height: 1.5;
+    padding-bottom: 2rem;
 }
 .content h2 {
-    margin-top: 3rem;
-    letter-spacing: -0.02em;
-}
-.content #your-mcp-setup-in-a-file {
-    font-size: clamp(3.6rem, 5vw, 5.8rem);
-    max-width: 650px;
+    margin-top: 2rem;
 }
 .content table {
     display: block;
     overflow-x: auto;
-    margin: 1.5rem 0;
+    margin: 1rem 0;
 }
 .content table th, .content table td {
-    padding: 0.8rem 1.2rem;
+    padding: 0.5rem 0.8rem;
     text-align: left;
-}
-.content pre {
-    border: 1px solid var(--table-border-color);
-    border-radius: 8px;
-    padding: 0.4rem;
 }
 .page-tools {
     display: flex;
     justify-content: flex-end;
     font-size: 1.3rem;
-    margin: 0.5rem 0 1.5rem;
+    margin: 0.5rem 0;
 }
 .page-tools a {
     text-decoration: none;
-    border: 1px solid var(--table-border-color);
-    border-radius: 6px;
-    padding: 0.25rem 0.85rem;
 }
 .page-tools a:hover, .page-tools a:focus-visible {
-    background: var(--quote-bg);
     text-decoration: underline;
 }
 @media (max-width: 600px) {
     .content main { padding-inline: 0.4rem; }
-    .content h1 { font-size: 3rem; }
 }

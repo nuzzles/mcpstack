@@ -1,14 +1,8 @@
-## Example
+Check stack syntax without resolving secrets, reading client config, or running servers.
 
 ```sh
 mcpstack validate work.yaml
 ```
 
-Checks a YAML stack against the shared format without resolving environment
-references, reading client configuration, writing files, or executing servers.
-Validation is offline and does not require a harness installation.
-
-A valid stack may still contain settings the target harness cannot represent.
-Follow validation with `mcpstack codex diff work.yaml` or
-`mcpstack claude diff work.yaml` to check the intended import. See
-[supported harnesses](compatibility.md) and the [stack format](stack-format.md).
+A valid stack may contain unsupported target settings. Use [diff](command-diff.md)
+to check harness compatibility.

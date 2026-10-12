@@ -128,45 +128,39 @@ def main():
     revision = run("git", "rev-parse", "HEAD", cwd=ROOT, capture_output=True).stdout.strip()
     reference = [
         "# Commands\n",
-        f"Generated from mcpstack **{cli_version}** at site build time. Your installed version's "
-        "`--help` and `--schema` are authoritative for that version.\n",
-        "Download the [CLI schema](cli-schema.json) for structured command metadata.\n",
-        "Use `mcpstack <harness> <command>` with [Codex](harness-codex.md) or "
-        "[Claude Code](harness-claude.md). Each operation has a subsection with examples "
-        "and both harnesses' exact syntax and options. "
-        "[validate](command-validate.md) checks a stack independently of either harness.\n",
-        "## Discover the interface\n\n```sh\nmcpstack --version\nmcpstack --schema\n"
-        "mcpstack --help\nmcpstack help codex import\n```\n",
+        "Use `mcpstack <harness> <command>`, with `codex` or `claude`. "
+        "`--config <PATH>` overrides the target configuration.\n",
+        "`--non-interactive` disables prompts; `-y` approves changes. "
+        "Permissions always require `--include-permissions`.\n",
+        "## Operations\n\n| Command | Purpose |\n| --- | --- |",
     ]
     generated_sources = {"cli-reference.md": "docs/build.py"}
     command_pages = {}
+    command_options = {}
+    help_links = []
 
     def describe(command, prefix):
         help_text = run(str(binary), *prefix, "--help", env=env, capture_output=True).stdout
+        help_name = f"help-{'-'.join(prefix) or 'mcpstack'}.txt"
+        (STAGING / "src" / help_name).write_text(help_text, encoding="utf-8")
+        help_links.append(f"- [mcpstack {' '.join(prefix)}]({BASE_URL}{help_name})")
         children = [child for child in command["commands"] if child["name"] != "help"]
-        if not prefix:
-            reference.append(f"## Global options\n\n```text\n{help_text.rstrip()}\n```\n")
-        elif children:
+        if prefix and children:
             harness = STAGING / "src" / f"harness-{prefix[0]}.md"
             with harness.open("a", encoding="utf-8") as page:
-                page.write(f"\n## Usage and options\n\nGenerated from mcpstack **{cli_version}**."
-                           f"\n\n```text\n{help_text.rstrip()}\n```\n")
-        else:
+                page.write(f"\n[Full help]({help_name}) · [Commands](cli-reference.md)\n")
+        elif prefix:
             operation = prefix[-1]
             filename = f"command-{operation}.md"
             if operation not in command_pages:
                 page = [f"# {operation}\n"]
-                if len(prefix) > 1:
-                    page.append("Available for **Codex** and **Claude Code**. Examples use "
-                                "`codex`; replace it with `claude` for Claude Code.\n")
                 guide = SOURCE / "command-guides" / f"{operation}.md"
                 page.append(guide.read_text(encoding="utf-8"))
                 generated_sources[filename] = guide.relative_to(ROOT).as_posix()
                 command_pages[operation] = page
-            command_pages[operation].append(
-                f"\n## mcpstack {' '.join(prefix)}\n\n"
-                f"Generated from mcpstack **{cli_version}**.\n\n```text\n{help_text.rstrip()}\n```\n"
-            )
+                command_options[operation] = []
+            label = {"claude": "Claude Code options", "codex": "Codex options"}.get(prefix[0], "All options")
+            command_options[operation].append(f"[{label}]({help_name})")
         for child in children:
             describe(child, [*prefix, child["name"]])
 
@@ -176,10 +170,17 @@ def main():
     for operation in sorted(command_pages, key=lambda name: (order.index(name) if name in order else len(order), name)):
         filename = f"command-{operation}.md"
         navigation.append(f"  - [{operation}]({filename})")
-        (STAGING / "src" / filename).write_text("\n".join(command_pages[operation]), encoding="utf-8")
-    reference.append("## Exit statuses\n\n| Status | Code | Meaning |\n| --- | --- | --- |")
-    for status in schema["exit_statuses"]:
-        reference.append(f"| {status['status']} | {status['error_code'] or 'SUCCESS'} | {status['description']} |")
+        page = command_pages[operation]
+        content = "\n".join(page) + "\n" + " · ".join(command_options[operation]) + "\n"
+        (STAGING / "src" / filename).write_text(content, encoding="utf-8")
+        guide = SOURCE / "command-guides" / f"{operation}.md"
+        description = guide.read_text(encoding="utf-8").splitlines()[0]
+        reference.append(f"| [{operation}]({filename}) | {description} |")
+    reference.extend([
+        "| [help](command-help.md) | Show command help. |\n",
+        "## Exit statuses\n\nZero means success, cancellation, or no change; nonzero means failure.\n",
+        f"[Full help](help-mcpstack.txt) · [CLI schema and error codes](cli-schema.json) · Version {cli_version}\n",
+    ])
     (STAGING / "src/cli-reference.md").write_text("\n".join(reference) + "\n", encoding="utf-8")
     (STAGING / "src/cli-schema.json").write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
     summary = (STAGING / "src/SUMMARY.md").read_text(encoding="utf-8")
@@ -230,6 +231,8 @@ def main():
         "\n## Machine-readable reference\n",
         f"- [Complete Markdown guide]({BASE_URL}llms-full.txt)",
         f"- [CLI schema JSON]({BASE_URL}cli-schema.json)",
+        "\n## Command help\n",
+        *help_links,
     ])
     (SITE / "llms.txt").write_text("\n".join(index) + "\n", encoding="utf-8")
     (SITE / "llms-full.txt").write_text("\n".join(full) + "\n", encoding="utf-8")
