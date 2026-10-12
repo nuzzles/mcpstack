@@ -74,7 +74,7 @@ to its entry in Current status at the bottom.\
 | Done | Switch between stack files, replacing the complete MCP server set. [*](#switching-stacks) |
 | Done | Produce deterministic YAML exports; require confirmation or `--overwrite` for existing files. [*](#codex-export) |
 | Partial [*](#codex-import) | Keep discovery, validation, and planning free of writes and server execution. |
-| Partial [*](#codex-import) | Preview additions, updates, removals, conflicts, and blockers. |
+| Done | Preview server additions, updates, and removals; require approval for replacements and report configuration validation errors before applying changes. [*](#codex-import) |
 | Partial [*](#codex-import) | Show planned configuration writes with secrets redacted. |
 | Done | Resolve literal relative executable and working-directory paths from the stack location; identify the target config. [*](#stack-relative-paths) |
 | Done | Apply approved file/stack changes as one transaction, the only supported apply mode. [*](#transactions) |
