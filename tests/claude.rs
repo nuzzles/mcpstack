@@ -937,7 +937,10 @@ fn permission_diff_shows_rule_moves_and_matches_written_settings() {
         assert_permission_diff_coordinates(&preview, &original, &written);
         let repeated = run("diff", Some(&stack), &config, &flags);
         assert!(repeated.status.success(), "{repeated:?}");
-        assert!(repeated.stdout.is_empty(), "{repeated:?}");
+        assert!(
+            String::from_utf8_lossy(&repeated.stdout).contains("No changes;"),
+            "{repeated:?}"
+        );
     }
 }
 
@@ -1053,7 +1056,10 @@ fn permission_diff_respects_opt_in_and_selects_shared_rules() {
     std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {allow: [read], ask: [write]}\n  other:\n    transport: {type: stdio, command: tool}\n    permissions: {deny: ['*']}\n").unwrap();
     let omitted = run("diff", Some(&stack), &config, &[]);
     assert!(omitted.status.success(), "{omitted:?}");
-    assert!(omitted.stdout.is_empty(), "{omitted:?}");
+    assert!(
+        String::from_utf8_lossy(&omitted.stdout).contains("No changes;"),
+        "{omitted:?}"
+    );
     let selected = run(
         "diff",
         Some(&stack),

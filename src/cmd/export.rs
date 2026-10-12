@@ -131,7 +131,13 @@ impl Export {
             .replace(&yaml)
             .await
             .map_err(AppError::StackWrite)?;
-        writeln!(output, "Exported stack to {}.", self.file.display())?;
+        writeln!(
+            output,
+            "Exported stack to {}.",
+            std::path::absolute(&self.file)?
+                .to_string_lossy()
+                .escape_debug()
+        )?;
         Ok(())
     }
 }

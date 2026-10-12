@@ -42,7 +42,8 @@ async fn main() -> ExitCode {
         Ok(code) => code,
         Err(error) => {
             let code = error.code();
-            if tracing::dispatcher::has_been_set() {
+            // Fatal diagnostics are command results, even when logs are filtered out.
+            if tracing::enabled!(tracing::Level::ERROR) {
                 tracing::error!("{}: {error}", code.as_ref());
             } else {
                 let _ = writeln!(std::io::stderr().lock(), "{}: {error}", code.as_ref());

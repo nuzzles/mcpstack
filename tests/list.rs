@@ -212,7 +212,7 @@ fn list_filters_before_validation_and_rejects_other_clients_flags() {
         std::fs::write(&config, document).unwrap();
         assert_eq!(
             success(&run(client, &config)),
-            "No MCP servers configured.\n"
+            "No MCP servers matched the current filters. Use --all to include skipped servers.\n"
         );
         for flag in ["--all", "--include-computer-use"] {
             let output = run_with_flags(client, &config, &[flag]);

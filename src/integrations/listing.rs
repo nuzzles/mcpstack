@@ -34,6 +34,7 @@ pub(super) fn write(
             .collect(),
     };
     filter.validate(definitions.keys().map(|name| name.as_str()))?;
+    let configured = !definitions.is_empty();
     // Prepare every row before writing, so invalid entries produce no partial list.
     let rows = definitions
         .into_iter()
@@ -41,7 +42,15 @@ pub(super) fn write(
         .map(|(name, value)| row(name, value, source))
         .collect::<Result<Vec<_>, _>>()?;
     if rows.is_empty() {
-        writeln!(output, "No MCP servers configured.")?;
+        writeln!(
+            output,
+            "{}",
+            if configured {
+                "No MCP servers matched the current filters. Use --all to include skipped servers."
+            } else {
+                "No MCP servers configured."
+            }
+        )?;
         return Ok(());
     }
     let headers = ["NAME", "TRANSPORT", "STATE", "COMMAND / ENDPOINT"];

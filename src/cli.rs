@@ -11,7 +11,7 @@ use std::io::Write;
 
 pub use crate::integrations::EXAMPLES;
 
-/// A Rust CLI for humans and agents to install multiple MCP servers, version-control and switch stacks, and share setups across teams.
+/// Manage, share, and switch MCP server configurations across clients.
 #[derive(Parser)]
 #[command(
     name = "mcpstack",

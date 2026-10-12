@@ -13,15 +13,20 @@ use crate::error::{AppError, ErrorCode};
 use crate::exporters::to_yaml;
 use crate::integrations::secrets::SecretResolver;
 use crate::integrations::{Claude, ClientAdapter, ExportArgs, StackArgs};
+use crate::integrations::{
+    write_dry_run, write_import_result, write_no_changes, write_switch_plan, write_switch_result,
+};
 use crate::io;
 use crate::schema::v1::{ConfigValue, Transport, ValueSource};
 use crate::schema::{SCHEMA_VERSION, Server, StackV1};
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Cannot determine the Claude Code user configuration path.")]
+    #[error("Cannot determine the Claude Code user configuration path. Supply --config <PATH>.")]
     Path,
-    #[error("Invalid Claude Code user configuration or MCP server definition.")]
+    #[error(
+        "Invalid Claude Code configuration. Check JSON syntax, the mcpServers object, and permission rule arrays in the selected settings file."
+    )]
     Config,
     #[error("This stack contains fields or transports Claude Code cannot represent.")]
     Unsupported,
@@ -39,7 +44,9 @@ pub enum Error {
     HeaderEnvironment(String),
     #[error("A masked field needs a nonempty secret value from its environment variable.")]
     Secret,
-    #[error("Unable to read Claude Code configuration.")]
+    #[error(
+        "Unable to read Claude Code configuration. Check the selected config/settings path and file permissions."
+    )]
     Read,
     #[error("Unable to safely write Claude Code configuration.")]
     Write,
@@ -1187,11 +1194,24 @@ impl ClientAdapter for Claude {
         let before = proposed.clone();
         proposed.extend(incoming);
         preserve_equivalent_servers(&before, &mut proposed);
-        preview(output, &config_path, &file, before, proposed, colored)?;
-        if let Some(path) = permission_path {
-            let settings = permissions::Snapshot::read(&path).await?;
+        let servers_changed = before != proposed;
+        let mut permissions_changed = false;
+        // Validate permissions before emitting the final server preview.
+        let permission_preview = if let Some(path) = &permission_path {
+            let settings = permissions::Snapshot::read(path).await?;
             let names = stack.servers.keys().cloned().collect();
             let proposed = settings.proposed(&stack, &names)?;
+            permissions_changed = settings.config != proposed;
+            Some((settings, proposed))
+        } else {
+            None
+        };
+        if !servers_changed && !permissions_changed {
+            write_no_changes(output, &config_path, false)?;
+            return Ok(());
+        }
+        preview(output, &config_path, &file, before, proposed, colored)?;
+        if let (Some(path), Some((settings, proposed))) = (permission_path, permission_preview) {
             settings.preview(&proposed, &path, output, colored)?;
         }
         Ok(())
@@ -1267,10 +1287,7 @@ impl ClientAdapter for Claude {
             .zip(permission_preview.as_ref())
             .is_some_and(|(settings, proposed)| settings.config != *proposed);
         if all_changes == before && !permissions_changed {
-            writeln!(
-                output,
-                "No changes; existing identical entries were unchanged."
-            )?;
+            write_no_changes(output, &config_path, dry_run)?;
             return Ok(());
         }
         if let (Some(settings), Some(change), Some(path)) =
@@ -1286,6 +1303,15 @@ impl ClientAdapter for Claude {
         }
         let mut proposed = before.clone();
         let mut approved = std::collections::BTreeSet::new();
+        let total = incoming
+            .iter()
+            .filter(|(name, definition)| {
+                before.get(*name).is_none_or(|existing| {
+                    canonical_server(existing) != canonical_server(definition)
+                })
+            })
+            .count();
+        let mut current = 0;
         for (name, definition) in incoming {
             if proposed
                 .get(&name)
@@ -1294,13 +1320,20 @@ impl ClientAdapter for Claude {
                 approved.insert(name);
                 continue;
             }
+            current += 1;
             if !auto_approve {
                 if non_interactive || !stdin().is_terminal() || !stderr().is_terminal() {
                     return Err(AppError::ImportApprovalRequired);
                 }
+                let action = if before.contains_key(&name) {
+                    "Replace existing server"
+                } else {
+                    "Import"
+                };
                 if !Confirm::new()
-                    .with_prompt(format!("Import or replace {name:?}?"))
+                    .with_prompt(format!("Server {current}/{total}: {action} {name:?}?"))
                     .default(false)
+                    .report(false)
                     .interact()
                     .map_err(|_| AppError::ImportApprovalCancelled)?
                 {
@@ -1326,7 +1359,7 @@ impl ClientAdapter for Claude {
         if proposed == before && !permissions_changed {
             writeln!(
                 output,
-                "No changes; existing identical entries were unchanged."
+                "No changes approved; client configuration was not changed."
             )?;
             return Ok(());
         }
@@ -1340,8 +1373,12 @@ impl ClientAdapter for Claude {
                 writeln!(output, "Selected permission changes: none.")?;
             }
         }
+        let imported = proposed
+            .iter()
+            .filter(|(name, definition)| before.get(*name) != Some(*definition))
+            .count();
         if dry_run {
-            writeln!(output, "Would import {} server(s).", approved.len())?;
+            write_import_result(output, imported, permissions_changed, true)?;
             return Ok(());
         }
         if permissions_changed
@@ -1349,10 +1386,14 @@ impl ClientAdapter for Claude {
             && !Confirm::new()
                 .with_prompt("Apply MCP permission changes in Claude Code settings?")
                 .default(false)
+                .report(false)
                 .interact()
                 .map_err(|_| AppError::ImportApprovalCancelled)?
         {
-            writeln!(output, "Permission changes cancelled.")?;
+            writeln!(
+                output,
+                "Import cancelled; client configuration and permission settings were not changed."
+            )?;
             return Ok(());
         }
         write_with_permissions(
@@ -1362,7 +1403,7 @@ impl ClientAdapter for Claude {
             permission_change,
         )
         .await?;
-        writeln!(output, "Imported MCP servers.")?;
+        write_import_result(output, imported, permissions_changed, false)?;
         Ok(())
     }
     async fn use_stack(
@@ -1429,12 +1470,10 @@ impl ClientAdapter for Claude {
             .is_some_and(|(settings, change)| settings.config != *change);
         if proposed == before && !permissions_changed {
             file.check_unchanged().await.map_err(|_| Error::Write)?;
-            writeln!(
-                output,
-                "No changes; the configured MCP servers already match this stack."
-            )?;
+            write_no_changes(output, &config_path, dry_run)?;
             return Ok(());
         }
+        write_switch_plan(output, proposed.len())?;
         if let (Some((settings, change)), Some(path)) = (&permission_change, &permission_path) {
             settings.summarize(change, path, output, colored)?;
         }
@@ -1442,6 +1481,7 @@ impl ClientAdapter for Claude {
             summarize_changes(output, &config_path, &before, &proposed, colored)?;
         }
         if dry_run {
+            write_dry_run(output)?;
             return Ok(());
         }
         if !auto_approve {
@@ -1451,10 +1491,14 @@ impl ClientAdapter for Claude {
             if !Confirm::new()
                 .with_prompt("Replace ALL configured MCP servers with this stack?")
                 .default(false)
+                .report(false)
                 .interact()
                 .map_err(|_| AppError::ImportApprovalCancelled)?
             {
-                writeln!(output, "Stack switch cancelled.")?;
+                writeln!(
+                    output,
+                    "Stack switch cancelled; client configuration was not changed."
+                )?;
                 return Ok(());
             }
         }
@@ -1465,7 +1509,7 @@ impl ClientAdapter for Claude {
             permission_change,
         )
         .await?;
-        writeln!(output, "Using stack with {} MCP server(s).", proposed.len())?;
+        write_switch_result(output, proposed.len())?;
         Ok(())
     }
 }

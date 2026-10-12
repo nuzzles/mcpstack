@@ -26,6 +26,65 @@ use crate::cmd::{
 };
 use crate::error::{AppError, ErrorCode};
 
+fn write_dry_run(output: &mut impl Write) -> std::io::Result<()> {
+    writeln!(output, "Dry run; no configuration files were changed.")
+}
+
+fn write_no_changes(output: &mut impl Write, target: &Path, dry_run: bool) -> std::io::Result<()> {
+    writeln!(
+        output,
+        "Target config: {}",
+        std::path::absolute(target)?
+            .to_string_lossy()
+            .escape_debug()
+    )?;
+    writeln!(
+        output,
+        "No changes; requested configuration is already in place."
+    )?;
+    if dry_run {
+        write_dry_run(output)?;
+    }
+    Ok(())
+}
+
+fn write_import_result(
+    output: &mut impl Write,
+    count: usize,
+    permissions_changed: bool,
+    dry_run: bool,
+) -> std::io::Result<()> {
+    if count > 0 {
+        let verb = if dry_run { "Would import" } else { "Imported" };
+        writeln!(
+            output,
+            "{verb} {count} MCP server(s); identical entries were unchanged."
+        )?;
+    }
+    if permissions_changed {
+        let verb = if dry_run { "Would update" } else { "Updated" };
+        writeln!(output, "{verb} MCP permission rules.")?;
+    }
+    if dry_run {
+        write_dry_run(output)?;
+    }
+    Ok(())
+}
+
+fn write_switch_plan(output: &mut impl Write, count: usize) -> std::io::Result<()> {
+    writeln!(
+        output,
+        "Stack switch plan: {count} MCP server(s); servers absent from the stack will be removed."
+    )
+}
+
+fn write_switch_result(output: &mut impl Write, count: usize) -> std::io::Result<()> {
+    writeln!(
+        output,
+        "Using stack with {count} MCP server(s); all other MCP servers were removed."
+    )
+}
+
 fn write_change_summary(
     output: &mut impl Write,
     target: &Path,
@@ -98,7 +157,7 @@ pub struct ExportArgs {
     /// Read this client config file instead of the default configuration.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
-    /// Include per-server MCP tool permissions when available.
+    /// Include per-server MCP permissions and tool filters; --all does not include them.
     #[arg(long)]
     include_permissions: bool,
     #[arg(skip)]
@@ -130,7 +189,7 @@ pub struct StackArgs {
     /// Use this client config file instead of the default configuration.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
-    /// Apply or compare permission rules stored in the stack.
+    /// Apply or compare permissions and tool filters; otherwise preserve the target policy.
     #[arg(long)]
     include_permissions: bool,
     /// Use this Claude Code settings file for permission rules.
@@ -156,6 +215,9 @@ pub struct CodexCommands {
 #[derive(Subcommand)]
 enum CodexOperation {
     List(List<reserved::CodexFilterArgs>),
+    #[command(
+        after_help = "Examples:\n  mcpstack codex use work.yml\n  mcpstack codex use personal.yml --dry-run\n  mcpstack codex use work.yml --config config.toml -y"
+    )]
     Use(Use),
     Import(Import),
     Show(CodexShow),
@@ -173,6 +235,9 @@ pub struct ClaudeCommands {
 #[derive(Subcommand)]
 enum ClaudeOperation {
     List(List<reserved::ClaudeFilterArgs>),
+    #[command(
+        after_help = "Examples:\n  mcpstack claude use work.yml\n  mcpstack claude use personal.yml --dry-run\n  mcpstack claude use work.yml --config claude.json -y"
+    )]
     Use(Use),
     Import(Import),
     Show(ClaudeShow),

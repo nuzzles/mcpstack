@@ -13,6 +13,9 @@ use super::{Error, default_config};
 use crate::error::AppError;
 use crate::exporters::to_yaml;
 use crate::integrations::secrets::SecretResolver;
+use crate::integrations::{
+    write_dry_run, write_import_result, write_no_changes, write_switch_plan, write_switch_result,
+};
 use crate::schema::v1::ApprovalMode;
 use crate::schema::{Server, Stack};
 
@@ -319,9 +322,6 @@ pub(crate) async fn run_import(
     dry_run: bool,
     auto_approve: bool,
 ) -> Result<(), AppError> {
-    if dry_run {
-        tracing::warn!("Dry run; no changes will be committed.");
-    }
     let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
     let snapshot = Snapshot::read(&path).await?;
     // Explicit selections must be checked before prompts or backup creation.
@@ -394,10 +394,7 @@ pub(crate) async fn run_import(
         .collect();
     warn_runtime_bindings(&additions);
     if additions.is_empty() {
-        writeln!(
-            output,
-            "No changes; existing identical entries were unchanged."
-        )?;
+        write_no_changes(output, &path, dry_run)?;
         return Ok(());
     }
     let added = changes
@@ -481,7 +478,7 @@ pub(crate) async fn run_import(
         )?;
     }
     if dry_run {
-        writeln!(output, "Would import {} server(s).", approved.len())?;
+        write_import_result(output, approved.len(), false, true)?;
         return Ok(());
     }
     {
@@ -527,10 +524,7 @@ pub(crate) async fn run_import(
     // Check that the target still matches the snapshot before
     // atomic replacement.
     let added = snapshot.apply(&approved).await?;
-    writeln!(
-        output,
-        "Imported {added} server(s); existing identical entries were unchanged."
-    )?;
+    write_import_result(output, added, false, false)?;
     Ok(())
 }
 
@@ -549,9 +543,6 @@ pub(crate) async fn run_use(
     dry_run: bool,
     auto_approve: bool,
 ) -> Result<(), AppError> {
-    if dry_run {
-        tracing::warn!("Dry run; no changes will be committed.");
-    }
     let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
     let snapshot = Snapshot::read(&path).await?;
     let stack: Stack = crate::integrations::selection::Selection::default()
@@ -609,10 +600,7 @@ pub(crate) async fn run_use(
         if !dry_run {
             snapshot.replace_servers(&definitions).await?;
         }
-        writeln!(
-            output,
-            "No changes; the configured MCP servers already match this stack."
-        )?;
+        write_no_changes(output, &path, dry_run)?;
         return Ok(());
     }
     warn_runtime_bindings(&definitions);
@@ -633,13 +621,10 @@ pub(crate) async fn run_use(
         .filter(|name| !definitions.contains_key(*name))
         .cloned()
         .collect();
-    writeln!(
-        output,
-        "Would switch to {} MCP server(s); all servers absent from the stack would be removed.",
-        definitions.len()
-    )?;
+    write_switch_plan(output, definitions.len())?;
     super::super::write_change_summary(output, &path, &added, &modified, &deleted, colored)?;
     if dry_run {
+        write_dry_run(output)?;
         return Ok(());
     }
     if !auto_approve {
@@ -665,11 +650,7 @@ pub(crate) async fn run_use(
     let backup = snapshot.default_backup_path().await?;
     snapshot.create_backup_at(&backup).await?;
     snapshot.replace_servers(&definitions).await?;
-    writeln!(
-        output,
-        "Using stack with {} MCP server(s); all other MCP servers were removed.",
-        definitions.len()
-    )?;
+    write_switch_result(output, definitions.len())?;
     Ok(())
 }
 

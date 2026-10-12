@@ -70,7 +70,7 @@ to its entry in Current status at the bottom.\
 
 | Implementation | Brief description |
 | --- | --- |
-| Partial [*](#human-and-agent-readable-output) | Make all CLI output readable and understandable to both humans and AI agents. |
+| Done | Make all CLI output readable and understandable to both humans and AI agents. |
 | Done | List server names, transports, commands/endpoints, and available configuration state. [*](#listing-servers) |
 | Done | Select servers by name; reject unknown selections. [*](#server-selection) |
 | Done | Switch between stack files, replacing the complete MCP server set. [*](#switching-stacks) |
@@ -302,7 +302,9 @@ displayed. Names and commands escape terminal control characters. No new
 credential values are read from the environment. Listing validates its displayed
 fields without rejecting unrelated or newer settings. Invalid definitions fail
 with `CONFIG_READ_ERROR` and no partial table. A missing configuration fails;
-an empty configuration, server map, or filtered result reports `No MCP servers configured.`
+an empty configuration or server map reports `No MCP servers configured.` If filters
+hide every configured server, output explains that no servers matched and suggests
+`--all` to include skipped servers.
 
 ### Server selection
 
@@ -499,8 +501,23 @@ must be understandable to both humans and AI agents. Use clear, consistent label
 and enough context to identify targets, actions, outcomes, and next steps when
 needed. Preserve meaning in plain text without relying on color or terminal UI.
 
-Existing summaries, diffs, structured exports, CLI schema, and error codes support
-this requirement. A complete output consistency audit remains before marking it Done.
+Both clients identify targets and label added, modified, and deleted items in
+plain text. No-op diff/import/use results explicitly report that no changes are
+needed. Successful dry runs state that no configuration files were changed;
+imports report the changed server count and Claude permission-only imports report
+settings changes. Plans, completed writes, declined changes, and cancellations
+have distinct messages. Import prompts identify additions versus replacements
+and show progress through servers requiring approval.
+
+Help describes summary previews, approval behavior, permission opt-in, and examples
+for the selected client. File paths in results are absolute and escape control
+characters. YAML exports and JSON CLI schema remain clean on stdout; diagnostics
+and logs use stderr. Fatal diagnostics retain their stable error code and failure
+exit status even with `--log off` or filtering through `RUST_LOG`.
+
+Integration tests cover these results, channel separation, color controls, and
+secret redaction. Terminal checks also verify declined imports, stack switches,
+and permission approval leave configuration unchanged and create no backups.
 
 ### Cross-platform integration tests
 
@@ -628,5 +645,6 @@ editing still has a final check/rename race.
 Diffs use the original and proposed file line numbers. Recognized credentials and
 resolved secrets are redacted; hidden changes display `<redacted: changed>`.
 Comments and unrelated values are omitted from preview context. These previews
-are for review, not patch application. Dry-run logs one initial warning and
-creates no files or backups. Import does not remove servers; `use` replaces the whole server set.
+are for review, not patch application. Successful dry runs report on stdout that
+configuration files were not changed and create no files or backups. Import does
+not remove servers; `use` replaces the whole server set.
