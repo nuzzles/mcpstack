@@ -1,6 +1,6 @@
 # mcpstack
 
-Manage, share, and switch MCP server configurations across **Codex** and **Claude Code**.
+Manage, share, and switch MCP server configurations across **Codex**, **Claude Code**, and **Claude Desktop**.
 
 ```sh
 mcpstack codex export work.yaml --non-interactive

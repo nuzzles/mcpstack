@@ -129,3 +129,20 @@ impl FilterArgs for ClaudeFilterArgs {
         }
     }
 }
+
+/// Desktop local servers have no Claude Code reserved-name exclusions.
+#[derive(Args)]
+pub struct DesktopFilterArgs {
+    #[command(flatten)]
+    selection: super::selection::Selection,
+}
+
+impl FilterArgs for DesktopFilterArgs {
+    fn filter(&self) -> ServerFilter {
+        ServerFilter {
+            selection: self.selection.clone(),
+            all: true,
+            ..Default::default()
+        }
+    }
+}

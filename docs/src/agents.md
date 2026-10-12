@@ -20,6 +20,6 @@ with `use --dry-run`; it shows removals that `diff` does not.
 | stderr | Diagnostics and prompts |
 
 `--non-interactive` disables prompts; `-y` approves changes. Missing secrets fail;
-supply them through environment variables. Permissions require `--include-permissions`.
+supply them through environment variables. Only Codex and Claude Code support `--include-permissions`.
 Nonzero exits mean failure; zero can also mean cancellation or no change. Inspect
 results before retrying. There is no JSON result mode for imports or switches.

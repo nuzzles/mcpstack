@@ -1,4 +1,5 @@
-//! Claude Code user-scope MCP configuration in ~/.claude.json.
+//! Shared JSON MCP workflows for Claude Code and Claude Desktop.
+mod desktop;
 mod permissions;
 use std::collections::BTreeMap;
 use std::io::{IsTerminal, Write, stderr, stdin};
@@ -11,6 +12,7 @@ use tokio::fs;
 
 use crate::error::{AppError, ErrorCode};
 use crate::exporters::to_yaml;
+use crate::integrations::codex::export::visit_credentials_with_templates;
 use crate::integrations::secrets::SecretResolver;
 use crate::integrations::{Claude, ClientAdapter, ExportArgs, StackArgs};
 use crate::integrations::{
@@ -24,20 +26,28 @@ use crate::schema::{SCHEMA_VERSION, Server, StackV1};
 pub enum Error {
     #[error("Cannot determine the Claude Code user configuration path. Supply --config <PATH>.")]
     Path,
+    #[error("Cannot determine the Claude Desktop configuration path. Supply --config <PATH>.")]
+    DesktopPath,
     #[error(
-        "Invalid Claude Code configuration. Check JSON syntax, the mcpServers object, and permission rule arrays in the selected settings file."
+        "Claude Desktop local configuration supports only command-based STDIO servers with command, args, and env fields. Manage remote connectors and permissions in Claude Desktop."
+    )]
+    DesktopConfig,
+    #[error(
+        "Invalid Claude MCP configuration. Check JSON syntax, the mcpServers object, and any selected permission rule arrays."
     )]
     Config,
-    #[error("This stack contains fields or transports Claude Code cannot represent.")]
+    #[error(
+        "This stack contains fields or transports the selected Claude client cannot represent."
+    )]
     Unsupported,
     #[error(
         "Cannot represent permissions for server {0:?} in Claude Code without loss: {1}. No configuration was changed."
     )]
     Permissions(String, &'static str),
     #[error(
-        "Claude Code cannot represent these stack fields: {0}. Edit the stack or use a supported target."
+        "{0} cannot represent these stack fields: {1}. Edit the stack or use a supported target."
     )]
-    UnsupportedFields(String),
+    UnsupportedFields(Claude, String),
     #[error("Server {0:?} defines the same HTTP header in multiple fields.")]
     HeaderConflict(String),
     #[error("Server {0:?} has an invalid environment variable name for an HTTP header.")]
@@ -45,14 +55,14 @@ pub enum Error {
     #[error("A masked field needs a nonempty secret value from its environment variable.")]
     Secret,
     #[error(
-        "Unable to read Claude Code configuration. Check the selected config/settings path and file permissions."
+        "Unable to read Claude MCP configuration. Check the selected config/settings path and file permissions."
     )]
     Read,
-    #[error("Unable to safely write Claude Code configuration.")]
+    #[error("Unable to safely write Claude MCP configuration.")]
     Write,
     #[error(transparent)]
     Transaction(io::TransactionError),
-    #[error("Unable to create a Claude Code configuration backup.")]
+    #[error("Unable to create a Claude MCP configuration backup.")]
     Backup,
     #[error("Secret selection was cancelled; no stack was exported.")]
     Prompt,
@@ -62,10 +72,13 @@ pub enum Error {
 impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
-            Self::Path | Self::Config | Self::Read => ErrorCode::ConfigReadError,
+            Self::Path | Self::DesktopPath | Self::Config | Self::Read => {
+                ErrorCode::ConfigReadError
+            }
             Self::Unsupported
+            | Self::DesktopConfig
             | Self::Permissions(_, _)
-            | Self::UnsupportedFields(_)
+            | Self::UnsupportedFields(_, _)
             | Self::HeaderConflict(_)
             | Self::HeaderEnvironment(_)
             | Self::Secret => ErrorCode::ImportError,
@@ -81,7 +94,10 @@ impl From<Error> for AppError {
     }
 }
 
-fn path(config: Option<PathBuf>) -> Result<PathBuf, Error> {
+fn path(target: Claude, config: Option<PathBuf>) -> Result<PathBuf, Error> {
+    if target == Claude::Desktop {
+        return desktop::path(config);
+    }
     config
         .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".claude.json")))
         .ok_or(Error::Path)
@@ -101,7 +117,10 @@ fn parse(bytes: &[u8]) -> Result<Value, Error> {
     }
     Ok(value)
 }
-fn validate(definition: &Value) -> Result<(), Error> {
+fn validate(target: Claude, definition: &Value) -> Result<(), Error> {
+    if target == Claude::Desktop {
+        desktop::validate(definition)?;
+    }
     let object = definition.as_object().ok_or(Error::Config)?;
     if object.keys().any(|key| {
         !matches!(
@@ -310,28 +329,27 @@ fn map_native_server(server: &str, mut definition: Value) -> Result<Value, Error
     }
     Ok(definition)
 }
-fn unsupported_fields(stack: &StackV1) -> Vec<String> {
+fn unsupported_fields(target: Claude, stack: &StackV1) -> Vec<String> {
     let mut fields = Vec::new();
     for (name, server) in &stack.servers {
         let mut add = |field: &str| fields.push(format!("{name:?}.{field:?}"));
-        if crate::integrations::reserved::is_reserved(name) {
+        if target == Claude::Code && crate::integrations::reserved::is_reserved(name) {
             add("server name (reserved by Claude Code)");
         }
         match server {
             Server::Configuration { config } => {
                 for key in config.keys() {
-                    if !matches!(
-                        key.as_str(),
-                        "type"
-                            | "command"
-                            | "args"
-                            | "env"
-                            | "url"
-                            | "headers"
-                            | "http_headers"
-                            | "env_http_headers"
-                            | "bearer_token_env_var"
-                    ) {
+                    let supported = matches!(key.as_str(), "type" | "command" | "args" | "env")
+                        || (target == Claude::Code
+                            && matches!(
+                                key.as_str(),
+                                "url"
+                                    | "headers"
+                                    | "http_headers"
+                                    | "env_http_headers"
+                                    | "bearer_token_env_var"
+                            ));
+                    if !supported {
                         add(key);
                     }
                 }
@@ -368,7 +386,11 @@ fn unsupported_fields(stack: &StackV1) -> Vec<String> {
                             add("transport.cwd");
                         }
                     }
-                    Transport::Http { .. } | Transport::Sse { .. } => {}
+                    Transport::Http { .. } | Transport::Sse { .. } => {
+                        if target == Claude::Desktop {
+                            add("transport (remote connector)");
+                        }
+                    }
                     Transport::Websocket { .. } => add("transport.websocket"),
                 }
             }
@@ -377,16 +399,17 @@ fn unsupported_fields(stack: &StackV1) -> Vec<String> {
     fields
 }
 fn prepare(
+    target: Claude,
     stack: &StackV1,
     resolver: &mut SecretResolver,
 ) -> Result<BTreeMap<String, Value>, Error> {
-    let unsupported = unsupported_fields(stack);
+    let unsupported = unsupported_fields(target, stack);
     if !unsupported.is_empty() {
-        return Err(Error::UnsupportedFields(unsupported.join(", ")));
+        return Err(Error::UnsupportedFields(target, unsupported.join(", ")));
     }
     let mut values = BTreeMap::new();
     for (name, server) in &stack.servers {
-        let definition = match server {
+        let mut definition = match server {
             Server::Configuration { config } => map_native_server(
                 name,
                 Value::Object(
@@ -483,12 +506,17 @@ fn prepare(
                 }
             }
         };
-        validate(&definition)?;
+        validate(target, &definition)?;
+        if target == Claude::Desktop {
+            // Desktop's documented local format is command/args/env, with no type tag.
+            definition.as_object_mut().unwrap().remove("type");
+        }
         values.insert(name.clone(), definition);
     }
     Ok(values)
 }
 fn prepared(
+    target: Claude,
     stack: &StackV1,
     dry_run: bool,
     interactive: bool,
@@ -501,13 +529,16 @@ fn prepared(
         values: BTreeMap::new(),
         cancelled: false,
     };
-    let result = prepare(stack, &mut resolver);
+    let result = prepare(target, stack, &mut resolver);
     if resolver.cancelled {
         return Err(AppError::ImportApprovalCancelled);
     }
     result.map_err(Into::into)
 }
-fn prepared_preview(stack: &StackV1) -> Result<(BTreeMap<String, Value>, bool), AppError> {
+fn prepared_preview(
+    target: Claude,
+    stack: &StackV1,
+) -> Result<(BTreeMap<String, Value>, bool), AppError> {
     let mut resolver = SecretResolver {
         dry_run: true,
         interactive: false,
@@ -516,7 +547,7 @@ fn prepared_preview(stack: &StackV1) -> Result<(BTreeMap<String, Value>, bool), 
         values: BTreeMap::new(),
         cancelled: false,
     };
-    let values = prepare(stack, &mut resolver)?;
+    let values = prepare(target, stack, &mut resolver)?;
     Ok((values, resolver.missing_used))
 }
 fn as_stack(values: BTreeMap<String, Value>) -> Result<StackV1, AppError> {
@@ -536,11 +567,16 @@ fn reference_names(stack: &StackV1) -> std::collections::BTreeSet<String> {
     }
     names
 }
-fn mask(values: BTreeMap<String, Value>) -> Result<BTreeMap<String, Value>, AppError> {
+fn mask(
+    target: Claude,
+    values: BTreeMap<String, Value>,
+) -> Result<BTreeMap<String, Value>, AppError> {
     let mut stack = as_stack(values)?;
     let mut names = reference_names(&stack);
-    super::codex::export::visit_credentials(&mut stack, &mut names, &mut |_| Ok(false))
-        .map_err(|_| Error::Config)?;
+    visit_credentials_with_templates(&mut stack, &mut names, target == Claude::Code, &mut |_| {
+        Ok(false)
+    })
+    .map_err(|_| Error::Config)?;
     let value = serde_json::to_value(stack).map_err(|_| Error::Config)?;
     Ok(value["servers"]
         .as_object()
@@ -869,6 +905,7 @@ fn serialized_config(config: &Value) -> Result<String, Error> {
     Ok(text)
 }
 fn preview(
+    target: Claude,
     output: &mut impl Write,
     path: &Path,
     file: &io::Snapshot,
@@ -879,12 +916,13 @@ fn preview(
     if before == after {
         return Ok(());
     }
-    preview_diff(output, path, file, &before, &after, colored)?;
+    preview_diff(target, output, path, file, &before, &after, colored)?;
     summarize_changes(output, path, &before, &after, colored)?;
     Ok(())
 }
 
 fn preview_diff(
+    target: Claude,
     output: &mut impl Write,
     path: &Path,
     file: &io::Snapshot,
@@ -892,8 +930,8 @@ fn preview_diff(
     after: &BTreeMap<String, Value>,
     colored: bool,
 ) -> Result<(), AppError> {
-    let mut before_mask = mask(before.clone())?;
-    let mut after_mask = mask(after.clone())?;
+    let mut before_mask = mask(target, before.clone())?;
+    let mut after_mask = mask(target, after.clone())?;
     for (name, after_value) in after {
         if let (Some(before_value), Some(before_mask), Some(after_mask)) = (
             before.get(name),
@@ -970,10 +1008,11 @@ fn summarize_changes(
     Ok(())
 }
 async fn snapshot(
+    target: Claude,
     config: Option<PathBuf>,
     filter: Option<&super::reserved::ServerFilter>,
 ) -> Result<(PathBuf, io::Snapshot, Value), AppError> {
-    let path = path(config)?;
+    let path = path(target, config)?;
     let file = io::Snapshot::read(&path).await.map_err(|_| Error::Read)?;
     let parsed = parse(file.contents())?;
     let definitions = servers(&parsed);
@@ -982,7 +1021,7 @@ async fn snapshot(
     }
     for (name, definition) in &definitions {
         if filter.is_none_or(|filter| !filter.skip(name)) {
-            validate(definition)?;
+            validate(target, definition)?;
         }
     }
     Ok((path, file, parsed))
@@ -1033,7 +1072,7 @@ impl ClientAdapter for Claude {
         output: &mut impl Write,
         colored: bool,
     ) -> Result<(), AppError> {
-        let bytes = fs::read(path(config)?)
+        let bytes = fs::read(path(*self, config)?)
             .await
             .map_err(AppError::ConfigRead)?;
         let config = if bytes.is_empty() {
@@ -1048,7 +1087,10 @@ impl ClientAdapter for Claude {
         super::listing::write(
             output,
             &config,
-            super::listing::Source::Claude,
+            match self {
+                Claude::Code => super::listing::Source::Claude,
+                Claude::Desktop => super::listing::Source::ClaudeDesktop,
+            },
             filter,
             colored,
         )
@@ -1071,7 +1113,7 @@ impl ClientAdapter for Claude {
         } else {
             None
         };
-        let (_, _, config) = snapshot(args.config, Some(&filter)).await?;
+        let (_, _, config) = snapshot(*self, args.config, Some(&filter)).await?;
         let mut values = servers(&config);
         if include_permissions {
             permissions::validate_names(values.keys().map(String::as_str))?;
@@ -1083,47 +1125,68 @@ impl ClientAdapter for Claude {
             let interactive = !non_interactive && stdin().is_terminal() && stderr().is_terminal();
             if interactive {
                 let mut total = 0;
-                super::codex::export::visit_credentials(&mut stack, &mut names, &mut |_| {
-                    total += 1;
-                    Ok(true)
-                })
+                visit_credentials_with_templates(
+                    &mut stack,
+                    &mut names,
+                    *self == Claude::Code,
+                    &mut |_| {
+                        total += 1;
+                        Ok(true)
+                    },
+                )
                 .map_err(|_| Error::Config)?;
                 let mut current = 0;
                 let mut remaining = None;
-                super::codex::export::visit_credentials(&mut stack, &mut names, &mut |field| {
-                    current += 1;
-                    if let Some(choice) = remaining {
-                        return Ok(choice);
-                    }
-                    let choice = Select::new()
-                        .with_prompt(format!(
-                            "Secret {current}/{total}: Include {field} as a literal?"
-                        ))
-                        .items([
-                            "No, mask with environment reference",
-                            "Yes, include literal value",
-                            "No to all, mask this and remaining secrets",
-                            "Yes to all, include this and remaining secrets",
-                        ])
-                        .default(0)
-                        .report(false)
-                        .interact_opt()
-                        .map_err(|_| super::codex::export::ExportError::Prompt)?
-                        .ok_or(super::codex::export::ExportError::Prompt)?;
-                    if choice >= 2 {
-                        remaining = Some(choice == 3);
-                    }
-                    Ok(choice == 1 || choice == 3)
-                })
+                visit_credentials_with_templates(
+                    &mut stack,
+                    &mut names,
+                    *self == Claude::Code,
+                    &mut |field| {
+                        current += 1;
+                        if let Some(choice) = remaining {
+                            return Ok(choice);
+                        }
+                        let choice = Select::new()
+                            .with_prompt(format!(
+                                "Secret {current}/{total}: Include {field} as a literal?"
+                            ))
+                            .items([
+                                "No, mask with environment reference",
+                                "Yes, include literal value",
+                                "No to all, mask this and remaining secrets",
+                                "Yes to all, include this and remaining secrets",
+                            ])
+                            .default(0)
+                            .report(false)
+                            .interact_opt()
+                            .map_err(|_| super::codex::export::ExportError::Prompt)?
+                            .ok_or(super::codex::export::ExportError::Prompt)?;
+                        if choice >= 2 {
+                            remaining = Some(choice == 3);
+                        }
+                        Ok(choice == 1 || choice == 3)
+                    },
+                )
                 .map_err(|_| Error::Prompt)?;
             } else {
-                super::codex::export::visit_credentials(&mut stack, &mut names, &mut |_| Ok(false))
-                    .map_err(|_| Error::Config)?;
+                visit_credentials_with_templates(
+                    &mut stack,
+                    &mut names,
+                    *self == Claude::Code,
+                    &mut |_| Ok(false),
+                )
+                .map_err(|_| Error::Config)?;
             }
         }
-        let mut stack =
-            super::portable::normalize(stack, super::portable::Source::Claude, include_permissions)
-                .map_err(Error::ExportPortable)?;
+        let mut stack = super::portable::normalize(
+            stack,
+            match self {
+                Claude::Code => super::portable::Source::Claude,
+                Claude::Desktop => super::portable::Source::ClaudeDesktop,
+            },
+            include_permissions,
+        )
+        .map_err(Error::ExportPortable)?;
         if let Some(path) = permissions_path {
             let settings = permissions::Snapshot::read(&path).await?;
             for (name, server) in &mut stack.servers {
@@ -1151,7 +1214,7 @@ impl ClientAdapter for Claude {
         } else {
             None
         };
-        let (config_path, file, config) = snapshot(args.config, None).await?;
+        let (config_path, file, config) = snapshot(*self, args.config, None).await?;
         let stack = args
             .selection
             .read_stack(&args.file, args.include_permissions)
@@ -1165,7 +1228,7 @@ impl ClientAdapter for Claude {
                     .map(String::as_str),
             )?;
         }
-        let (preview_values, missing) = prepared_preview(&stack)?;
+        let (preview_values, missing) = prepared_preview(*self, &stack)?;
         if missing {
             let mut preliminary = before.clone();
             preliminary.extend(preview_values);
@@ -1176,6 +1239,7 @@ impl ClientAdapter for Claude {
                     "Preliminary preview; missing secrets will be requested for an exact comparison."
                 )?;
                 preview(
+                    *self,
                     output,
                     &config_path,
                     &file,
@@ -1186,6 +1250,7 @@ impl ClientAdapter for Claude {
             }
         }
         let incoming = prepared(
+            *self,
             &stack,
             true,
             !non_interactive && stdin().is_terminal() && stderr().is_terminal(),
@@ -1210,7 +1275,15 @@ impl ClientAdapter for Claude {
             write_no_changes(output, &config_path, false)?;
             return Ok(());
         }
-        preview(output, &config_path, &file, before, proposed, colored)?;
+        preview(
+            *self,
+            output,
+            &config_path,
+            &file,
+            before,
+            proposed,
+            colored,
+        )?;
         if let (Some(path), Some((settings, proposed))) = (permission_path, permission_preview) {
             settings.preview(&proposed, &path, output, colored)?;
         }
@@ -1233,7 +1306,7 @@ impl ClientAdapter for Claude {
         } else {
             None
         };
-        let (config_path, file, config) = snapshot(args.config, None).await?;
+        let (config_path, file, config) = snapshot(*self, args.config, None).await?;
         let stack = args
             .selection
             .read_stack(&args.file, args.include_permissions)
@@ -1247,7 +1320,7 @@ impl ClientAdapter for Claude {
                     .map(String::as_str),
             )?;
         }
-        let (preview_values, missing) = prepared_preview(&stack)?;
+        let (preview_values, missing) = prepared_preview(*self, &stack)?;
         if missing {
             let mut preliminary = before.clone();
             preliminary.extend(preview_values);
@@ -1261,6 +1334,7 @@ impl ClientAdapter for Claude {
             }
         }
         let incoming = prepared(
+            *self,
             &stack,
             dry_run,
             (dry_run || !auto_approve)
@@ -1423,7 +1497,7 @@ impl ClientAdapter for Claude {
         } else {
             None
         };
-        let (config_path, file, config) = snapshot(args.config, None).await?;
+        let (config_path, file, config) = snapshot(*self, args.config, None).await?;
         let stack = args
             .selection
             .read_stack(&args.file, args.include_permissions)
@@ -1437,7 +1511,7 @@ impl ClientAdapter for Claude {
                     .map(String::as_str),
             )?;
         }
-        let (mut preliminary, missing) = prepared_preview(&stack)?;
+        let (mut preliminary, missing) = prepared_preview(*self, &stack)?;
         if missing {
             preserve_equivalent_servers(&before, &mut preliminary);
             if preliminary != before {
@@ -1449,6 +1523,7 @@ impl ClientAdapter for Claude {
             }
         }
         let mut proposed = prepared(
+            *self,
             &stack,
             dry_run,
             (dry_run || !auto_approve)

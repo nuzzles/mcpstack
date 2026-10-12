@@ -9,7 +9,8 @@ mcpstack validate demo.yaml
 mcpstack codex use demo.yaml --config scratch.toml --dry-run --non-interactive
 ```
 
-Nothing is written or executed. For Claude Code, use `claude` and `scratch.json`.
+Nothing is written or executed. For Claude Code or Desktop, use `claude` or
+`claude-desktop` with `scratch.json`.
 
 ## Share
 
@@ -31,5 +32,5 @@ mcpstack codex use personal.yaml
 **`use` removes servers absent from the stack.** An empty stack clears them all.
 Unrelated settings are preserved. Repeating an identical import or switch writes nothing.
 
-Both harnesses support these commands. See [secrets and permissions](secrets-and-permissions.md)
+All three harnesses support these commands. Restart Claude Desktop after applying changes. See [secrets and permissions](secrets-and-permissions.md)
 and [recovery](recovery.md) before sharing or applying changes.

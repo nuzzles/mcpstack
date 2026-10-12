@@ -82,8 +82,8 @@ def check_examples(binary, pages, env):
                 count += 1
         stack = SOURCE / "src/examples/demo.yaml"
         run(str(binary), "validate", str(stack), env=env, capture_output=True)
-        for client, extension in [("codex", "toml"), ("claude", "json")]:
-            config = temp / f"scratch.{extension}"
+        for client, extension in [("codex", "toml"), ("claude", "json"), ("claude-desktop", "json")]:
+            config = temp / f"{client}-scratch.{extension}"
             args = [str(binary), client]
             target = [str(stack), "--config", str(config), "--non-interactive"]
             before = set(temp.iterdir())
@@ -97,7 +97,7 @@ def check_examples(binary, pages, env):
                 run(*args, operation, *target, "-y", env=env, capture_output=True)
                 assert original == {path: path.read_bytes() for path in temp.iterdir()}
             run(*args, "list", "--config", str(config), env=env, capture_output=True)
-        print(f"Validated {count + 1} YAML examples and both scratch-config workflows.")
+        print(f"Validated {count + 1} YAML examples and all three scratch-config workflows.")
 
 
 def main():
@@ -140,11 +140,11 @@ def main():
     revision = run("git", "rev-parse", "HEAD", cwd=ROOT, capture_output=True).stdout.strip()
     reference = [
         "# Commands\n",
-        "Use `mcpstack <harness> <command>`, with `codex` or `claude`. "
+        "Use `mcpstack <harness> <command>`, with `codex`, `claude`, or `claude-desktop`. "
         "`--config <PATH>` overrides the target configuration. "
         "`validate` and `update` run at the top level.\n",
         "`--non-interactive` disables prompts; `-y` approves changes. "
-        "Permissions always require `--include-permissions`.\n",
+        "Codex and Claude Code permissions require `--include-permissions`.\n",
         "## Operations\n\n| Command | Purpose |\n| --- | --- |",
     ]
     generated_sources = {"cli-reference.md": "docs/build.py"}
@@ -172,7 +172,7 @@ def main():
                 generated_sources[filename] = guide.relative_to(ROOT).as_posix()
                 command_pages[operation] = page
                 command_options[operation] = []
-            label = {"claude": "Claude Code options", "codex": "Codex options"}.get(prefix[0], "All options")
+            label = {"claude": "Claude Code options", "claude-desktop": "Claude Desktop options", "codex": "Codex options"}.get(prefix[0], "All options")
             command_options[operation].append(f"[{label}]({help_name})")
         for child in children:
             describe(child, [*prefix, child["name"]])
@@ -208,7 +208,7 @@ def main():
 
     index = [
         f"# mcpstack {cli_version}\n",
-        "> Manage, share, and switch MCP server configurations across Codex and Claude Code.\n",
+        "> Manage, share, and switch MCP server configurations across Codex, Claude Code, and Claude Desktop.\n",
         f"Documentation for mcpstack {cli_version}. Permissions are opt-in; "
         "use replaces the entire server set. For unattended import previews, "
         "use --non-interactive -y.\n",

@@ -5,7 +5,7 @@ use std::io::Write;
 
 /// Approve and apply server additions and replacements.
 #[derive(Args)]
-pub struct Import {
+pub struct Import<S: Args + Into<StackArgs> = StackArgs> {
     #[command(flatten)]
     selection: crate::integrations::selection::Selection,
     /// Summarize changes without writing files; use --non-interactive -y for unattended previews.
@@ -13,29 +13,30 @@ pub struct Import {
     /// Without --non-interactive, missing secrets may still prompt even with -y.
     #[arg(long)]
     dry_run: bool,
-    /// Approve all selected server and permission changes without prompting.
+    /// Approve all selected changes without prompting.
     #[arg(short = 'y', long)]
     auto_approve: bool,
     #[command(flatten)]
-    stack: StackArgs,
+    stack: S,
 }
 
-impl Import {
+impl<S: Args + Into<StackArgs>> Import<S> {
     pub fn is_dry_run(&self) -> bool {
         self.dry_run
     }
 
     pub async fn run(
-        mut self,
+        self,
         target: &impl ClientAdapter,
         output: &mut impl Write,
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {
-        self.stack.selection = self.selection;
+        let mut stack = self.stack.into();
+        stack.selection = self.selection;
         target
             .import(
-                self.stack,
+                stack,
                 output,
                 non_interactive,
                 colored,

@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn update_checks_respect_read_only_operations_terminals_and_opt_out() {
-        for harness in ["codex", "claude"] {
+        for harness in ["codex", "claude", "claude-desktop"] {
             for operation in ["export", "import", "use"] {
                 let args = ["mcpstack", harness, operation, "stack.yaml"];
                 let cli = parse(args);

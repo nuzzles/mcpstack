@@ -2,5 +2,5 @@ schema_version: 1
 servers:
   example:
     transport:
-      type: http
-      url: https://mcp.example.com/mcp
+      type: stdio
+      command: example-server

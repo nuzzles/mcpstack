@@ -6,4 +6,4 @@ mcpstack codex import work.yaml --non-interactive -y
 ```
 
 `-y` approves changes; `--non-interactive` prevents secret prompts.
-Permissions are preserved unless `--include-permissions` is supplied.
+Codex and Claude Code preserve permissions unless `--include-permissions` is supplied.

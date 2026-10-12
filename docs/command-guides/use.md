@@ -6,4 +6,5 @@ mcpstack codex use work.yaml --non-interactive -y
 ```
 
 An empty stack clears all servers. Unrelated settings are preserved.
-Permissions require `--include-permissions`; `--server` is not supported.
+Codex and Claude Code permissions require `--include-permissions`.
+`--server` is not supported.

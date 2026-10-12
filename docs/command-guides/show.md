@@ -4,5 +4,5 @@ Print a portable YAML stack to stdout.
 mcpstack codex show --non-interactive
 ```
 
-Masks recognized credentials. Add `--include-permissions` to include policy.
+Masks recognized credentials. Codex and Claude Code offer `--include-permissions` to include policy.
 Use [export](command-export.md) to save a file.

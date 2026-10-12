@@ -13,6 +13,7 @@ use crate::schema::{Server, StackV1};
 pub(super) enum Source {
     Codex,
     Claude,
+    ClaudeDesktop,
 }
 
 pub(super) fn normalize(
@@ -35,6 +36,7 @@ pub(super) fn normalize(
         let transport = match source {
             Source::Codex => codex_transport(&mut fields, &name)?,
             Source::Claude => claude_transport(&mut fields, &name)?,
+            Source::ClaudeDesktop => desktop_transport(&mut fields, &name)?,
         };
         let permissions = if matches!(source, Source::Codex) {
             codex_permissions(&mut fields, &name, include_permissions)?
@@ -350,4 +352,21 @@ fn claude_transport(fields: &mut Map<String, Value>, name: &str) -> Result<Trans
         }
         _ => Err(format!("{name:?}: unsupported Claude transport")),
     }
+}
+
+fn desktop_transport(fields: &mut Map<String, Value>, name: &str) -> Result<Transport, String> {
+    let kind = take_string(fields, "type", name)?;
+    if kind.as_deref().is_some_and(|kind| kind != "stdio") {
+        return Err(format!("{name:?}: unsupported Claude Desktop transport"));
+    }
+    Ok(Transport::Stdio {
+        command: take_string(fields, "command", name)?
+            .ok_or_else(|| format!("{name:?}.command"))?,
+        path_resolution: PathResolution::Client,
+        // Desktop strings are literals, not Claude Code ${VAR} templates.
+        args: take_array(fields, "args", name, false)?,
+        env: take_map(fields, "env", name, false)?,
+        env_vars: Vec::new(),
+        cwd: None,
+    })
 }

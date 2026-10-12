@@ -7,6 +7,7 @@
   - [Crates.io](install-crates.md)
 - [Compatibility](compatibility.md)
   - [Claude Code](harness-claude.md)
+  - [Claude Desktop](harness-claude-desktop.md)
   - [Codex](harness-codex.md)
 - [Commands](cli-reference.md)
 <!-- command-pages -->

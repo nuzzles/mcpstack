@@ -143,6 +143,20 @@ pub(crate) fn visit_credentials(
     names: &mut BTreeSet<String>,
     expose: &mut impl FnMut(&str) -> Result<bool, ExportError>,
 ) -> Result<(), ExportError> {
+    visit_credentials_with_templates(stack, names, true, expose)
+}
+
+pub(crate) fn visit_credentials_with_templates(
+    stack: &mut StackV1,
+    names: &mut BTreeSet<String>,
+    preserve_templates: bool,
+    expose: &mut impl FnMut(&str) -> Result<bool, ExportError>,
+) -> Result<(), ExportError> {
+    let mut visitor = CredentialVisitor {
+        names,
+        expose,
+        preserve_templates,
+    };
     for (server_name, server) in &mut stack.servers {
         if let Server::Configuration { config, .. } = server {
             for (key, value) in config {
@@ -155,8 +169,7 @@ pub(crate) fn visit_credentials(
                     &format!("{server_name}.{key}"),
                     secret_key(key),
                     key == "args",
-                    names,
-                    expose,
+                    &mut visitor,
                 )?;
             }
         }
@@ -264,14 +277,19 @@ fn secret_key(key: &str) -> bool {
         }
 }
 
+struct CredentialVisitor<'a, F> {
+    names: &'a mut BTreeSet<String>,
+    expose: &'a mut F,
+    preserve_templates: bool,
+}
+
 fn protect(
     value: &mut ConfigValue,
     path: &str,
     display_path: &str,
     sensitive: bool,
     arguments: bool,
-    names: &mut BTreeSet<String>,
-    expose: &mut impl FnMut(&str) -> Result<bool, ExportError>,
+    visitor: &mut CredentialVisitor<'_, impl FnMut(&str) -> Result<bool, ExportError>>,
 ) -> Result<(), ExportError> {
     match value {
         ConfigValue::Object(values) => {
@@ -283,8 +301,7 @@ fn protect(
                         &format!("{display_path}.{key}"),
                         sensitive || secret_key(key),
                         key == "args",
-                        names,
-                        expose,
+                        visitor,
                     )?;
                 }
             }
@@ -319,16 +336,17 @@ fn protect(
                     &format!("{display_path}[{index}]"),
                     sensitive || next_secret || inline_secret,
                     false,
-                    names,
-                    expose,
+                    visitor,
                 )?;
                 next_secret = following_secret;
             }
         }
         ConfigValue::String(text)
-            if sensitive && crate::integrations::portable::is_claude_reference(text) => {}
+            if sensitive
+                && visitor.preserve_templates
+                && crate::integrations::portable::is_claude_reference(text) => {}
         ConfigValue::String(_) | ConfigValue::Number(_) if sensitive => {
-            if expose(display_path)? {
+            if (visitor.expose)(display_path)? {
                 return Ok(());
             }
             // Never derive names from values or read the process environment.
@@ -345,7 +363,7 @@ fn protect(
             let base = format!("MCPSTACK_{suffix}");
             let mut name = base.clone();
             let mut index = 2;
-            while !names.insert(name.clone()) {
+            while !visitor.names.insert(name.clone()) {
                 name = format!("{base}_{index}");
                 index += 1;
             }

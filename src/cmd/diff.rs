@@ -5,24 +5,23 @@ use std::io::Write;
 
 /// Show a redacted diff of a stack against client configuration without writing files.
 #[derive(Args)]
-pub struct Diff {
+pub struct Diff<S: Args + Into<StackArgs> = StackArgs> {
     #[command(flatten)]
     selection: crate::integrations::selection::Selection,
     #[command(flatten)]
-    stack: StackArgs,
+    stack: S,
 }
 
-impl Diff {
+impl<S: Args + Into<StackArgs>> Diff<S> {
     pub async fn run(
-        mut self,
+        self,
         target: &impl ClientAdapter,
         output: &mut impl Write,
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {
-        self.stack.selection = self.selection;
-        target
-            .diff(self.stack, output, non_interactive, colored)
-            .await
+        let mut stack = self.stack.into();
+        stack.selection = self.selection;
+        target.diff(stack, output, non_interactive, colored).await
     }
 }

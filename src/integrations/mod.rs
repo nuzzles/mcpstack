@@ -18,10 +18,10 @@ use thiserror::Error;
 
 use crate::cmd::{
     diff::Diff,
-    export::{ClaudeExport, CodexExport},
+    export::{ClaudeExport, CodexExport, DesktopExport},
     import::Import,
     list::List,
-    show::{ClaudeShow, CodexShow},
+    show::{ClaudeShow, CodexShow, DesktopShow},
     r#use::Use,
 };
 use crate::error::{AppError, ErrorCode};
@@ -150,16 +150,18 @@ pub const EXAMPLES: &[&str] = &[
     "mcpstack claude list --help",
     "mcpstack claude show --help",
     "mcpstack claude export --help",
+    "mcpstack claude-desktop --help",
+    "mcpstack claude-desktop use --help",
 ];
 
 #[derive(Args)]
 pub struct ExportArgs {
     /// Read this client config file instead of the default configuration.
     #[arg(long, value_name = "PATH")]
-    config: Option<PathBuf>,
+    pub(crate) config: Option<PathBuf>,
     /// Include per-server MCP permissions and tool filters; --all does not include them.
     #[arg(long)]
-    include_permissions: bool,
+    pub(crate) include_permissions: bool,
     #[arg(skip)]
     pub(crate) permissions_config: Option<PathBuf>,
     #[arg(skip)]
@@ -203,6 +205,8 @@ pub enum Client {
     Codex(CodexCommands),
     /// Manage MCP servers in Claude Code user configuration.
     Claude(ClaudeCommands),
+    /// Manage local MCP servers in Claude Desktop configuration.
+    ClaudeDesktop(DesktopCommands),
 }
 
 #[derive(Args)]
@@ -245,6 +249,49 @@ enum ClaudeOperation {
     Diff(Diff),
 }
 
+/// Desktop has no portable permission settings in its local MCP config file.
+#[derive(Args)]
+pub struct DesktopStackArgs {
+    /// Stack file to compare, import, or use.
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+    /// Use this Claude Desktop config file instead of the default configuration.
+    #[arg(long, value_name = "PATH")]
+    config: Option<PathBuf>,
+}
+
+impl From<DesktopStackArgs> for StackArgs {
+    fn from(args: DesktopStackArgs) -> Self {
+        Self {
+            file: args.file,
+            config: args.config,
+            selection: Default::default(),
+            include_permissions: false,
+            permissions_config: None,
+        }
+    }
+}
+
+#[derive(Args)]
+#[command(arg_required_else_help = false)]
+pub struct DesktopCommands {
+    #[command(subcommand)]
+    operation: DesktopOperation,
+}
+
+#[derive(Subcommand)]
+enum DesktopOperation {
+    List(List<reserved::DesktopFilterArgs>),
+    #[command(
+        after_help = "Examples:\n  mcpstack claude-desktop use work.yml --dry-run\n  mcpstack claude-desktop use work.yml --config claude_desktop_config.json -y\n\nRestart Claude Desktop after applying changes."
+    )]
+    Use(Use<DesktopStackArgs>),
+    Import(Import<DesktopStackArgs>),
+    Show(DesktopShow),
+    Export(DesktopExport),
+    Diff(Diff<DesktopStackArgs>),
+}
+
 impl Client {
     // Read-only discovery and previews must not create even an update cache.
     pub fn allows_update_check(&self) -> bool {
@@ -253,6 +300,12 @@ impl Client {
                 CodexOperation::Export(_) => true,
                 CodexOperation::Import(args) => !args.is_dry_run(),
                 CodexOperation::Use(args) => !args.is_dry_run(),
+                _ => false,
+            },
+            Self::ClaudeDesktop(commands) => match &commands.operation {
+                DesktopOperation::Export(_) => true,
+                DesktopOperation::Import(args) => !args.is_dry_run(),
+                DesktopOperation::Use(args) => !args.is_dry_run(),
                 _ => false,
             },
             Self::Claude(commands) => match &commands.operation {
@@ -285,18 +338,46 @@ impl Client {
                     args.run(&Codex, output, non_interactive, colored).await
                 }
             },
+            Self::ClaudeDesktop(commands) => match commands.operation {
+                DesktopOperation::List(args) => args.run(&Claude::Desktop, output, colored).await,
+                DesktopOperation::Use(args) => {
+                    args.run(&Claude::Desktop, output, non_interactive, colored)
+                        .await
+                }
+                DesktopOperation::Import(args) => {
+                    args.run(&Claude::Desktop, output, non_interactive, colored)
+                        .await
+                }
+                DesktopOperation::Show(args) => {
+                    args.run(&Claude::Desktop, output, non_interactive).await
+                }
+                DesktopOperation::Export(args) => {
+                    args.run(&Claude::Desktop, output, non_interactive).await
+                }
+                DesktopOperation::Diff(args) => {
+                    args.run(&Claude::Desktop, output, non_interactive, colored)
+                        .await
+                }
+            },
             Self::Claude(commands) => match commands.operation {
-                ClaudeOperation::List(args) => args.run(&Claude, output, colored).await,
+                ClaudeOperation::List(args) => args.run(&Claude::Code, output, colored).await,
                 ClaudeOperation::Use(args) => {
-                    args.run(&Claude, output, non_interactive, colored).await
+                    args.run(&Claude::Code, output, non_interactive, colored)
+                        .await
                 }
                 ClaudeOperation::Import(args) => {
-                    args.run(&Claude, output, non_interactive, colored).await
+                    args.run(&Claude::Code, output, non_interactive, colored)
+                        .await
                 }
-                ClaudeOperation::Show(args) => args.run(&Claude, output, non_interactive).await,
-                ClaudeOperation::Export(args) => args.run(&Claude, output, non_interactive).await,
+                ClaudeOperation::Show(args) => {
+                    args.run(&Claude::Code, output, non_interactive).await
+                }
+                ClaudeOperation::Export(args) => {
+                    args.run(&Claude::Code, output, non_interactive).await
+                }
                 ClaudeOperation::Diff(args) => {
-                    args.run(&Claude, output, non_interactive, colored).await
+                    args.run(&Claude::Code, output, non_interactive, colored)
+                        .await
                 }
             },
         }
@@ -358,7 +439,20 @@ pub trait ClientAdapter {
 }
 
 pub struct Codex;
-pub struct Claude;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Claude {
+    Code,
+    Desktop,
+}
+
+impl std::fmt::Display for Claude {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Code => "Claude Code",
+            Self::Desktop => "Claude Desktop",
+        })
+    }
+}
 
 impl ClientAdapter for Codex {
     async fn list(

@@ -15,11 +15,11 @@ can skip backups; automatic imports, stack switches, and Claude writes back up c
 existing files. Keep credential-bearing configs and backups private.
 
 To restore, preserve any newer changes, inspect the backup, then copy it to the original
-path. For Claude, check both MCP config and permission settings. There is no restore command.
+path. For Claude Code, check both MCP config and permission settings. There is no restore command.
 
 ## Transactions
 
-Changes apply as a whole file/stack. Codex replaces one file atomically. Claude
+Changes apply as a whole file/stack. Codex and Claude Desktop replace one file atomically. Claude Code
 attempts rollback if either file fails, while protecting detected concurrent edits.
 There is no crash recovery, locking, or atomic multi-file commit. Incomplete recovery
 is reported; a backup-write failure may leave a partial backup.

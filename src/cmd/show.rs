@@ -1,5 +1,7 @@
 use crate::error::AppError;
-use crate::integrations::reserved::{ClaudeFilterArgs, CodexFilterArgs, FilterArgs};
+use crate::integrations::reserved::{
+    ClaudeFilterArgs, CodexFilterArgs, DesktopFilterArgs, FilterArgs,
+};
 use crate::integrations::{ClientAdapter, ExportArgs};
 use clap::Args;
 use std::io::Write;
@@ -75,6 +77,42 @@ impl ClaudeShow {
         self.show.args.permissions_config = self.permissions_config;
         self.show.args.server_filter = self.filter.filter();
         self.show
+    }
+
+    pub async fn run(
+        self,
+        target: &impl ClientAdapter,
+        output: &mut impl Write,
+        non_interactive: bool,
+    ) -> Result<(), AppError> {
+        self.into_show().run(target, output, non_interactive).await
+    }
+}
+
+/// Show Claude Desktop local MCP servers as a YAML stack.
+#[derive(Args)]
+pub struct DesktopShow {
+    /// Read this Claude Desktop config file instead of the default configuration.
+    #[arg(long, value_name = "PATH")]
+    config: Option<PathBuf>,
+    /// Preserve literal credentials in the stack.
+    #[arg(long)]
+    expose_secrets: bool,
+    #[command(flatten)]
+    filter: DesktopFilterArgs,
+}
+
+impl DesktopShow {
+    pub(crate) fn into_show(self) -> Show {
+        Show {
+            expose_secrets: self.expose_secrets,
+            args: ExportArgs {
+                config: self.config,
+                include_permissions: false,
+                permissions_config: None,
+                server_filter: self.filter.filter(),
+            },
+        }
     }
 
     pub async fn run(

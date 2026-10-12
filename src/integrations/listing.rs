@@ -11,6 +11,7 @@ use crate::error::AppError;
 pub(super) enum Source {
     Codex,
     Claude,
+    ClaudeDesktop,
 }
 
 pub(super) fn write(
@@ -23,7 +24,7 @@ pub(super) fn write(
     let root = config.as_object().ok_or(AppError::ListConfig)?;
     let key = match source {
         Source::Codex => "mcp_servers",
-        Source::Claude => "mcpServers",
+        Source::Claude | Source::ClaudeDesktop => "mcpServers",
     };
     let definitions: BTreeMap<_, _> = match root.get(key) {
         None => BTreeMap::new(),
@@ -82,6 +83,10 @@ fn row(name: &str, definition: &Value, source: Source) -> Result<[String; 4], Ap
             (None, Some(_)) => "http",
             _ => return Err(AppError::ListConfig),
         },
+        Source::ClaudeDesktop => match (command, url, text(fields.get("type"))?) {
+            (Some(_), None, None | Some("stdio")) => "stdio",
+            _ => return Err(AppError::ListConfig),
+        },
         Source::Claude => match text(fields.get("type"))? {
             None | Some("stdio") if command.is_some() && url.is_none() => "stdio",
             Some(kind @ ("http" | "sse")) if url.is_some() && command.is_none() => kind,
@@ -95,7 +100,7 @@ fn row(name: &str, definition: &Value, source: Source) -> Result<[String; 4], Ap
             _ => return Err(AppError::ListConfig),
         },
         Source::Claude if super::reserved::is_reserved(name) => "ignored",
-        Source::Claude => "configured",
+        Source::Claude | Source::ClaudeDesktop => "configured",
     };
     let endpoint = match (command, url) {
         (Some(command), None) => command.to_owned(),

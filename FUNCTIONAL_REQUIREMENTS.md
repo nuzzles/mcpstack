@@ -93,7 +93,7 @@ to its entry in Current status at the bottom.\
 
 | Implementation | Brief description |
 | --- | --- |
-| Unsupported | Claude Desktop MCP server list, import, show, export, diff, and stack switching. |
+| Done | Claude Desktop local MCP server list, import, show, export, diff, and stack switching. [*](#claude-desktop-support) |
 | Done | Detect newer stable releases, notify users when the CLI is out of date, and install updates with `mcpstack update` after approval. [*](#updates) |
 
 ## Notes
@@ -159,7 +159,7 @@ avoid drift. Schema output is independent of interactive controls.
 input disables prompts. Export defaults to masking credentials; `--expose-secrets`
 includes them without prompting.
 
-Import defaults to skipping each addition or replacement. Both clients offer
+Import defaults to skipping each addition or replacement. All three harnesses offer
 per-server approval; Codex also offers bulk choices. A named change summary
 appears before approval prompts. Added, modified, and deleted entries use green
 `+`, yellow `~`, and red `-` when color is enabled; plain output keeps the markers.
@@ -292,16 +292,17 @@ adapters remain future work.
 
 ### Listing servers
 
-`mcpstack codex list` and `mcpstack claude list` read the same default configuration
-paths as their adapters, or the file selected by `--config <path>`. They print a
+`mcpstack <harness> list` reads the same default configuration path as its
+adapter, or the file selected by `--config <path>`. It prints a
 table sorted by server name with transport, configuration state, and command or
-endpoint. Listing shares the same default exclusions and client-specific
-`--include-*` flags as show/export; `--all` includes every normally skipped name.
+endpoint. Codex and Claude Code listing share the default exclusions and
+`--include-*` flags from show/export; `--all` includes every normally skipped name.
 The shared filter runs before server validation. It does not prompt,
 resolve secrets, write files or backups, run helpers, or contact MCP servers.
 
-Codex state is `enabled` (the default when absent) or `disabled`. Claude lists
+Codex state is `enabled` (the default when absent) or `disabled`. Claude Code lists
 user-scope definitions as `configured`, and its reserved names as `ignored`.
+Claude Desktop lists all local servers as `configured`, with no default exclusions.
 Output contains only the table, without an explanatory footer.
 Claude project and permission overrides are not evaluated; configuration state
 does not establish connection health. No synthetic per-server enabled flag is
@@ -319,7 +320,7 @@ hide every configured server, output explains that no servers matched and sugges
 
 ### Server selection
 
-Both clients accept repeatable `--server <NAME>` on `list`, `show`, `export`,
+All three harnesses accept repeatable `--server <NAME>` on `list`, `show`, `export`,
 `import`, and `diff`. Names match exactly and case-sensitively; repeating a name
 does not duplicate it. With no selection, commands retain their existing behavior.
 For example: `mcpstack codex export work.yml --server github --server linear` or
@@ -339,7 +340,7 @@ Unknown names or explicitly selected excluded names fail with `INVALID_ARGUMENT`
 
 ### Stack-relative paths
 
-Both clients' `import`, `use`, and `diff` resolve literal relative `command`
+All three harnesses' `import`, `use`, and `diff` resolve literal relative `command`
 paths and `cwd` values from the directory containing the input stack. Portable
 stdio transports and native configuration definitions share this behavior.
 For `stacks/work.yml`, `command: ./bin/server` points to `stacks/bin/server` and
@@ -355,7 +356,7 @@ such as `C:server.exe`. Existing Windows drive-rooted and UNC paths are preserve
 Only literal command/cwd fields are resolved. Arguments, environment values,
 URLs, secret references, and strings containing client-side `${...}` expansion
 are unchanged. There is no shell expansion or executable/prerequisite check.
-Claude still rejects `cwd` because its server definitions cannot represent it.
+Claude Code and Desktop reject `cwd` because their server definitions cannot represent it.
 
 The stack's containing directory is resolved to an absolute directory. A symlinked
 stack uses the directory containing the link, not the linked file's directory.
@@ -363,7 +364,7 @@ Server paths need not exist and are not canonicalized; previews and writes use
 the same resolved values. Loading does not modify the source stack.
 
 Stdio transports accept `path_resolution: stack` (the default) or
-`path_resolution: client`. Both clients' show/export commands emit `client` to
+`path_resolution: client`. All three harnesses' show/export commands emit `client` to
 preserve the original command and cwd literally: relative paths retain the
 client's runtime semantics instead of being rebased to the exported stack's
 directory. This preserves export/import round trips without guessing a launch
@@ -381,12 +382,13 @@ characters in the displayed path are escaped so filenames cannot alter the termi
 prepare all approved configuration changes before committing them.
 Codex uses one atomic config replacement and now creates automatic import backups
 only after validation and approval; invalid inputs and no-op imports create no
-backups. Claude serializes both server config and permission settings before
+backups. Claude Desktop also replaces a single config with numbered backups.
+Claude Code serializes both server config and permission settings before
 writing, checks all snapshots, and creates numbered backups of changed existing
 files before replacing either file. Unchanged files are checked without being
 rewritten, and duplicate target paths are rejected.
 
-If a Claude write fails, earlier writes are restored in reverse order, including
+If a Claude Code write fails, earlier writes are restored in reverse order, including
 removing files that did not originally exist. Recovery checks for the exact bytes
 written by this operation and refuses to overwrite detected concurrent edits.
 Recovery continues for other files if one cannot be restored, then reports an
@@ -433,6 +435,32 @@ Documentation publishing to GitHub Pages is supported.
 
 ## Current status
 
+### Claude Desktop support
+
+`mcpstack claude-desktop` provides `list`, `show`, `export`, `diff`, `import`, and
+`use` for local STDIO servers in `claude_desktop_config.json`. Defaults are
+`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS and
+`%APPDATA%\Claude\claude_desktop_config.json` on Windows. `--config` overrides
+that path on every platform; other platforms require the override.
+
+Desktop supports command, arguments, and environment values. Remote connectors,
+extensions, and app-managed approvals are outside this file and are not managed.
+There are no permission flags; captured stack permissions are omitted on import
+and use. Unsupported transports/settings fail before backups or writes.
+Desktop does not inherit Claude Code reserved-name exclusions or `${VAR}` template
+interpretation. Named server selection, masking, environment-secret resolution,
+relative stack paths, overwrite approval, and clean YAML output follow the shared
+CLI contracts. Exported stacks remain harness-independent.
+
+Desktop uses the existing JSON-preserving previews, snapshots, numbered backups,
+and single-file transaction path. Unrelated preferences and nested objects retain
+their text. Repeat imports/switches do not rewrite equivalent configurations;
+empty stacks clear only the local server set. Restart Claude Desktop after applying
+changes. Integration tests exercise all commands, defaults/overrides, cross-harness
+round trips, secrets, unsupported options, preservation, no-op behavior, and failures.
+
+Configuration reference: [local MCP servers](https://modelcontextprotocol.io/docs/develop/connect-local-servers).
+
 ### Updates
 
 Interactive `export`, `import`, and `use` check crates.io for the latest non-yanked
@@ -472,10 +500,10 @@ from the executable during the same build. The generated reference and agent
 indexes identify the executable's version.
 
 Section 1, Installation, has From source and Crates.io subsections for 0.1.0.
-Section 2, Compatibility, has Claude Code and Codex subsections covering supported
+Section 2, Compatibility, has Claude Code, Claude Desktop, and Codex subsections covering supported
 scopes, configuration paths, commands, and compatibility limits. Section 3,
 Commands, includes a concise subsection for every operation, with shared examples
-and links to both harnesses' generated help files. Pages keep full option listings
+and links to all three harnesses' generated help files. Pages keep full option listings
 in downloadable text; the CLI schema retains complete machine-readable metadata.
 Section 4, References, groups workflows (including the scratch preview), secrets
 and permissions, recovery, agent guidance, and the stack format.
@@ -488,12 +516,13 @@ Contributor build instructions are in [`docs/README.md`](docs/README.md).
 
 Client operations are grouped under `mcpstack <client> <operation>`. Codex exposes
 `list`, `use`, `import`, `show`, `export`, and `diff`; `validate`, `update`, and `--schema` stay at the top
-level. Claude Code exposes the same six operations under `claude`. The parent
-command selects the target, so there is no `--client` option.
+level. Claude Code and Desktop expose the same six operations under `claude` and
+`claude-desktop`. The parent command selects the target, so there is no `--client` option.
 The previous operation-first syntax is no longer accepted.
 
 Help, version, `--schema`, `validate <file>`, `codex list`, `claude list`, `codex show`, `codex export <file>`,
-`codex diff <file>`, `codex import <file>`, `codex use <file>`, and runnable examples are implemented.
+`codex diff <file>`, `codex import <file>`, `codex use <file>`, the equivalent Claude
+commands, and runnable examples are implemented.
 CLI integration tests verify help/version output, the generated argument schema,
 runnable examples, and rejection of invalid arguments.
 
@@ -540,14 +569,14 @@ and unrelated settings, so the displayed patch is not independently applicable.
 ### Output formats
 
 Help, version, server inventories, and validation results use text output;
-`--schema` emits JSON; both clients' `show` commands emit YAML on stdout, while
+`--schema` emits JSON; all three harnesses' `show` commands emit YAML on stdout, while
 `export <file>` writes the same YAML to the named file. `diff` emits a redacted
 unified diff; import and use dry-runs summarize added, modified, and deleted servers.
 Diagnostics go to stderr without echoing argument values. Automation uses the
 noninteractive commands and stable exit statuses; structured JSON operation
 results are not required.
 
-Detailed server configuration diffs are implemented for both clients.
+Detailed server configuration diffs are implemented for all three harnesses.
 `claude diff --include-permissions` also shows the planned `allow`, `ask`, and
 `deny` edits in a separate settings-file diff, including permission-only changes.
 It uses the same serialization as the settings write, preserving original and
@@ -565,7 +594,7 @@ must be understandable to both humans and AI agents. Use clear, consistent label
 and enough context to identify targets, actions, outcomes, and next steps when
 needed. Preserve meaning in plain text without relying on color or terminal UI.
 
-Both clients identify targets and label added, modified, and deleted items in
+All three harnesses identify targets and label added, modified, and deleted items in
 plain text. No-op diff/import/use results explicitly report that no changes are
 needed. Successful dry runs state that no configuration files were changed;
 imports report the changed server count and Claude permission-only imports report
@@ -641,7 +670,7 @@ including when standard input is redirected. `--expose-secrets` on either comman
 preserves literal values, including credentials, without prompting.
 No export mode changes the source file or logs its values. Server names and field
 keys remain visible. `--config <path>` reads an explicit TOML file instead of the default
-config. Relative paths resolve from the current working directory. Both clients'
+config. Relative paths resolve from the current working directory. All three harnesses'
 file exports create new destinations without confirmation. An existing destination,
 including an empty file, requires an overwrite prompt (default No) or `--overwrite`.
 `--non-interactive` and redirected input reject existing files unless `--overwrite`

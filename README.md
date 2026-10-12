@@ -18,7 +18,7 @@ and switch stacks, and share setups across teams.
 | --- | --- | --- |
 | Codex | ✅ | ✅ |
 | Claude Code | ✅ | ✅ |
-| Claude Desktop | ❌ | ❌ |
+| Claude Desktop | ❌ | ✅ |
 | Cursor | ❌ | ❌ |
 | Gemini CLI | ❌ | ❌ |
 | OpenCode | ❌ | ❌ |

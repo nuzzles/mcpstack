@@ -1,4 +1,4 @@
-use crate::cmd::show::{ClaudeShow, CodexShow, Show};
+use crate::cmd::show::{ClaudeShow, CodexShow, DesktopShow, Show};
 use crate::error::AppError;
 use crate::integrations::ClientAdapter;
 use crate::io;
@@ -60,6 +60,32 @@ pub struct ClaudeExport {
 }
 
 impl ClaudeExport {
+    pub async fn run(
+        self,
+        target: &impl ClientAdapter,
+        output: &mut impl Write,
+        non_interactive: bool,
+    ) -> Result<(), AppError> {
+        Export {
+            file: self.destination.file,
+            overwrite: self.destination.overwrite,
+            show: self.show.into_show(),
+        }
+        .run(target, output, non_interactive)
+        .await
+    }
+}
+
+/// Export Claude Desktop local MCP servers to a YAML stack file.
+#[derive(Args)]
+pub struct DesktopExport {
+    #[command(flatten)]
+    destination: Destination,
+    #[command(flatten)]
+    show: DesktopShow,
+}
+
+impl DesktopExport {
     pub async fn run(
         self,
         target: &impl ClientAdapter,

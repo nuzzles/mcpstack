@@ -23,9 +23,11 @@ Native `config` entries use `{$env: VARIABLE}` for masked literals.
 
 ## Permissions
 
-Both harnesses require **`--include-permissions`** to export, compare, or apply policy.
+Codex and Claude Code require **`--include-permissions`** to export, compare, or apply policy.
 Otherwise target policy is preserved. `--all` does not include permissions.
 
 Use local tool names: `permissions: {allow: [read], ask: [write], deny: [delete]}`.
 When included, `{}` clears captured decisions; an omitted policy preserves them.
 Unsupported conversions fail before writes. See [compatibility](compatibility.md).
+
+Claude Desktop approvals are managed in the app; mcpstack does not import or export them.
