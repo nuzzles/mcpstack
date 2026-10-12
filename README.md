@@ -1,7 +1,13 @@
 # <img src="docs/theme/favicon.svg" width="32" height="32" alt=""> mcpstack
 
+[![crates.io](https://img.shields.io/crates/v/mcpstack.svg)](https://crates.io/crates/mcpstack)
+[![docs.rs](https://docs.rs/mcpstack/badge.svg)](https://docs.rs/mcpstack)
+[![CI](https://github.com/nuzzles/mcpstack/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nuzzles/mcpstack/actions/workflows/ci.yml)
+
 A Rust CLI for humans and agents to install multiple MCP servers, version-control
 and switch stacks, and share setups across teams.
+
+[Documentation](https://nuzzles.github.io/mcpstack/)
 
 > [!NOTE]
 > mcpstack is in early development.
