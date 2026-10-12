@@ -39,10 +39,8 @@ pub enum Error {
     Read,
     #[error("Unable to safely write Claude Code configuration.")]
     Write,
-    #[error(
-        "Permission settings write failed after server configuration changed; restore from the numbered backups if needed."
-    )]
-    PartialWrite,
+    #[error(transparent)]
+    Transaction(io::TransactionError),
     #[error("Unable to create a Claude Code configuration backup.")]
     Backup,
     #[error("Secret selection was cancelled; no stack was exported.")]
@@ -59,7 +57,7 @@ impl Error {
             | Self::HeaderConflict(_)
             | Self::HeaderEnvironment(_)
             | Self::Secret => ErrorCode::ImportError,
-            Self::Write | Self::PartialWrite => ErrorCode::ConfigWriteError,
+            Self::Write | Self::Transaction(_) => ErrorCode::ConfigWriteError,
             Self::Backup => ErrorCode::BackupError,
             Self::Prompt | Self::ExportPortable(_) => ErrorCode::ExportError,
         }
@@ -977,82 +975,42 @@ async fn snapshot(
     }
     Ok((path, file, parsed))
 }
-async fn write_config(file: io::Snapshot, config: Value) -> Result<(), AppError> {
-    let original = std::str::from_utf8(file.contents()).map_err(|_| Error::Write)?;
-    let bytes = proposed_config_text(original, &servers(&config)).map_err(|_| Error::Write)?;
-    file.replace(bytes.as_bytes())
-        .await
-        .map_err(|_| Error::Write)?;
-    Ok(())
-}
-
 async fn write_with_permissions(
-    config_path: &Path,
     file: io::Snapshot,
     config: Value,
     config_changed: bool,
     permission_change: Option<(permissions::Snapshot, Value)>,
 ) -> Result<(), AppError> {
-    let permission_change = permission_change.filter(|(snapshot, value)| snapshot.config != *value);
-    if !config_changed && permission_change.is_none() {
-        return Ok(());
-    }
-    file.ensure_write_supported().map_err(|_| Error::Write)?;
-    file.check_unchanged().await.map_err(|_| Error::Write)?;
-    if let Some((snapshot, _)) = &permission_change {
-        snapshot
-            .file
-            .ensure_write_supported()
-            .map_err(|_| Error::Write)?;
-        snapshot
-            .file
-            .check_unchanged()
-            .await
-            .map_err(|_| Error::Write)?;
-    }
-    if config_changed {
-        let backup = file
-            .default_backup_path()
-            .await
-            .map_err(|_| Error::Backup)?;
-        file.create_backup_at(&backup)
-            .await
-            .map_err(|_| Error::Backup)?;
-    }
-    if let Some((snapshot, _)) = &permission_change {
-        let backup = snapshot
-            .file
-            .default_backup_path()
-            .await
-            .map_err(|_| Error::Backup)?;
-        snapshot
-            .file
-            .create_backup_at(&backup)
-            .await
-            .map_err(|_| Error::Backup)?;
-    }
-    let original = file.contents().to_vec();
-    if config_changed {
-        write_config(file, config).await?;
-    }
+    // Serialize every proposal before backups or writes. Include unchanged files
+    // as snapshot guards when only the other file needs updating.
+    let bytes = if config_changed {
+        let original = std::str::from_utf8(file.contents()).map_err(|_| Error::Write)?;
+        Some(
+            proposed_config_text(original, &servers(&config))
+                .map_err(|_| Error::Write)?
+                .into_bytes(),
+        )
+    } else {
+        None
+    };
+    let mut writes = vec![(file, bytes)];
     if let Some((snapshot, value)) = permission_change {
-        let mut bytes = serde_json::to_vec_pretty(&value).map_err(|_| Error::Write)?;
-        bytes.push(b'\n');
-        if snapshot.file.replace(&bytes).await.is_err() {
-            if config_changed {
-                let restored = match io::Snapshot::read(config_path).await {
-                    Ok(current) => current.replace(&original).await.is_ok(),
-                    Err(_) => false,
-                };
-                if !restored {
-                    return Err(Error::PartialWrite.into());
-                }
-            }
-            return Err(Error::Write.into());
-        }
+        let bytes = if snapshot.config != value {
+            let mut bytes = serde_json::to_vec_pretty(&value).map_err(|_| Error::Write)?;
+            bytes.push(b'\n');
+            Some(bytes)
+        } else {
+            None
+        };
+        writes.push((snapshot.file, bytes));
     }
+    io::replace_all(writes).await.map_err(|error| match error {
+        io::TransactionError::Prepare(io::Error::Backup) => Error::Backup,
+        error => Error::Transaction(error),
+    })?;
     Ok(())
 }
+
 impl ClientAdapter for Claude {
     async fn list(
         &self,
@@ -1266,8 +1224,12 @@ impl ClientAdapter for Claude {
         let mut all_changes = before.clone();
         all_changes.extend(incoming.clone());
         preserve_equivalent_servers(&before, &mut all_changes);
-        let permission_preview = if let Some(path) = &permission_path {
-            let settings = permissions::Snapshot::read(path).await?;
+        let permission_snapshot = if let Some(path) = &permission_path {
+            Some(permissions::Snapshot::read(path).await?)
+        } else {
+            None
+        };
+        let permission_preview = if let Some(settings) = &permission_snapshot {
             let names = stack.servers.keys().cloned().collect();
             settings.proposed(&stack, &names)? != settings.config
         } else {
@@ -1315,8 +1277,7 @@ impl ClientAdapter for Claude {
             approved.insert(name.clone());
             proposed.insert(name, definition);
         }
-        let permission_change = if let Some(path) = permission_path {
-            let settings = permissions::Snapshot::read(&path).await?;
+        let permission_change = if let Some(settings) = permission_snapshot {
             let change = settings.proposed(&stack, &approved)?;
             Some((settings, change))
         } else {
@@ -1352,7 +1313,6 @@ impl ClientAdapter for Claude {
             return Ok(());
         }
         write_with_permissions(
-            &config_path,
             file,
             with_servers(config, &proposed),
             proposed != before,
@@ -1445,7 +1405,6 @@ impl ClientAdapter for Claude {
             }
         }
         write_with_permissions(
-            &config_path,
             file,
             with_servers(config, &proposed),
             proposed != before,

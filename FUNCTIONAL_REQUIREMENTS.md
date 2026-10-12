@@ -45,7 +45,7 @@ to its entry in Current status at the bottom.\
 | Done | Replace recognized credentials with secret references by default; allow interactive selections or `--expose-secrets` to include values. |
 | Done | Import/merge a stack into Codex without losing supported fields. [*](#phase-1-boundaries) |
 | Done | Resolve masked literals from environment variables or hidden prompts; preserve runtime bindings. [*](#secrets) |
-| Done | Offer a unique numbered backup before processing import; abort if a requested backup fails. [*](#codex-import) |
+| Done | Offer a unique numbered backup after validation and approval, before applying import; abort if a requested backup fails. [*](#codex-import) |
 | Done | Atomic config writes with Unix `0600` permissions or inherited Windows directory permissions; preserve originals on failure. [*](#codex-import) |
 | Done | Test round trips, repeat imports, config schema compatibility, missing secrets, and write failures. [*](#stack-workflow-tests) |
 
@@ -78,7 +78,7 @@ to its entry in Current status at the bottom.\
 | Partial [*](#codex-import) | Preview additions, updates, removals, conflicts, and blockers. |
 | Partial [*](#codex-import) | Show planned writes, downloads, and commands with secrets redacted. |
 | Done | Resolve literal relative executable and working-directory paths from the stack location; identify the target config. [*](#stack-relative-paths) |
-| Unsupported | Apply a whole stack as one transaction. [*](#transactions) |
+| Partial [*](#transactions) | Apply a whole stack as one transaction. |
 | Unsupported | Optionally continue installing independent servers after failures. [*](#continue-on-failure) |
 | Partial [*](#codex-import) | Require explicit conflict resolution and validate prerequisites before writes. |
 | Partial [*](#codex-import) | Private recovery copies and stale-plan detection. |
@@ -317,9 +317,25 @@ characters in the displayed path are escaped so filenames cannot alter the termi
 ### Transactions
 
 [*] Validate and prepare the whole stack before committing configuration changes.
-On failure, preserve or restore the previous managed configuration. Downloads and
-external installer effects may not be reversible; report those explicitly rather
-than claiming complete rollback.
+Codex uses one atomic config replacement and now creates automatic import backups
+only after validation and approval; invalid inputs and no-op imports create no
+backups. Claude serializes both server config and permission settings before
+writing, checks all snapshots, and creates numbered backups of changed existing
+files before replacing either file. Unchanged files are checked without being
+rewritten, and duplicate target paths are rejected.
+
+If a Claude write fails, earlier writes are restored in reverse order, including
+removing files that did not originally exist. Recovery checks for the exact bytes
+written by this operation and refuses to overwrite detected concurrent edits.
+Recovery continues for other files if one cannot be restored, then reports an
+incomplete recovery and directs the user to inspect the files and backups.
+Successful backups remain available after failures.
+
+This is a small in-process file transaction, not an atomic multi-file commit or
+crash/interruption recovery. Snapshot checks still have a final check/rename (or
+check/remove) race; no locking or journal is added. Installation transactions
+remain unimplemented. Downloads and external installer effects may not be
+reversible; report those explicitly rather than claiming complete rollback.
 
 ### Continue on failure
 
@@ -514,8 +530,9 @@ without running Codex or servers.
 
 Backups default to numbered sibling files (`config.toml.~1~`, `config.toml.~2~`,
 etc.) beyond the highest existing generation. The prompt allows another path or
-skipping backup. Automatically approved imports create the backup before stack
-reads; interactive imports offer it after the change preview and server choices.
+skipping backup. Both automatically approved and interactive imports create
+requested backups after stack validation, change preparation, and server approval.
+Invalid stacks, missing secrets, dry runs, and no-op imports create no backups.
 Backups never overwrite existing files and remain after later failures.
 
 Replacements update the complete server definition. Unrelated settings, comments,

@@ -10,6 +10,9 @@ use tokio::io::AsyncWriteExt;
 
 use thiserror::Error;
 
+mod transaction;
+pub use transaction::{TransactionError, replace_all};
+
 #[cfg(windows)]
 #[allow(unsafe_code)] // Only the Windows backend may call native path APIs.
 mod windows;
@@ -157,7 +160,7 @@ impl Snapshot {
 
     /// Replace the target with already-serialized bytes. Returns false for an
     /// unchanged existing file; an absent file can still be created empty.
-    pub async fn replace(self, contents: &[u8]) -> Result<bool, Error> {
+    pub async fn replace(&self, contents: &[u8]) -> Result<bool, Error> {
         self.ensure_write_supported()?;
         self.check_unchanged().await?;
         if self.original.as_deref() == Some(contents) {

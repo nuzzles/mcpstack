@@ -325,11 +325,6 @@ pub(crate) async fn run_import(
     if !auto_approve && !interactive {
         return Err(AppError::ImportApprovalRequired);
     }
-    if !dry_run && auto_approve {
-        snapshot.ensure_write_supported()?;
-        let backup = snapshot.default_backup_path().await?;
-        snapshot.create_backup_at(&backup).await?;
-    }
     let stack: Stack = match selected_stack {
         Some(stack) => stack,
         None => selection.read_stack(&file).await?,
@@ -480,11 +475,11 @@ pub(crate) async fn run_import(
         writeln!(output, "Would import {} server(s).", approved.len())?;
         return Ok(());
     }
-    if !auto_approve {
+    {
         snapshot.ensure_write_supported()?;
         let backup_path = choose_backup_path(
             &snapshot,
-            false,
+            auto_approve,
             || {
                 Confirm::new()
                     .with_prompt("Create a backup before importing?")

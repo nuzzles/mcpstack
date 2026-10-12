@@ -815,6 +815,157 @@ fn claude_permission_rules_are_opt_in_and_restore_from_settings() {
 
 #[test]
 #[cfg(any(unix, windows))]
+fn claude_prepares_both_files_before_writes_and_repeats_without_backups() {
+    for operation in ["import", "use"] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("claude.json");
+        let settings = dir.path().join("settings.json");
+        let stack = dir.path().join("stack.yml");
+        let original = "{\"theme\":\"dark\",\"mcpServers\":{}}\n";
+        let original_settings = "{\"permissions\":{\"allow\":[\"Bash\"]}}\n";
+        std::fs::write(&config, original).unwrap();
+        std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {source: claude, allow: [mcp__example]}\n").unwrap();
+        let flags = &["-y", "--include-permissions"];
+        // Malformed second file fails before creating backups or changing servers.
+        std::fs::write(&settings, "{invalid fixture-secret").unwrap();
+        let failed = run(operation, Some(&stack), &config, flags);
+        assert!(!failed.status.success());
+        assert!(!String::from_utf8_lossy(&failed.stderr).contains("fixture-secret"));
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+        std::fs::write(&settings, original_settings).unwrap();
+        let preview = run(
+            operation,
+            Some(&stack),
+            &config,
+            &["-y", "--include-permissions", "--dry-run"],
+        );
+        assert!(preview.status.success(), "{preview:?}");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+        assert_eq!(
+            std::fs::read_to_string(&settings).unwrap(),
+            original_settings
+        );
+        let applied = run(operation, Some(&stack), &config, flags);
+        assert!(applied.status.success(), "{applied:?}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("claude.json.~1~")).unwrap(),
+            original
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("settings.json.~1~")).unwrap(),
+            original_settings
+        );
+        let written = std::fs::read(&config).unwrap();
+        let written_settings = std::fs::read(&settings).unwrap();
+        let servers: serde_json::Value = serde_json::from_slice(&written).unwrap();
+        let permissions: serde_json::Value = serde_json::from_slice(&written_settings).unwrap();
+        assert_eq!(servers["mcpServers"]["example"]["command"], "tool");
+        assert_eq!(servers["theme"], "dark");
+        assert_eq!(
+            permissions["permissions"]["allow"],
+            serde_json::json!(["Bash", "mcp__example"])
+        );
+        let repeated = run(operation, Some(&stack), &config, flags);
+        assert!(repeated.status.success(), "{repeated:?}");
+        assert_eq!(std::fs::read(&config).unwrap(), written);
+        assert_eq!(std::fs::read(&settings).unwrap(), written_settings);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 5);
+    }
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn claude_server_changes_do_not_require_an_unchanged_settings_directory() {
+    for operation in ["import", "use"] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("claude.json");
+        let settings = dir.path().join("missing/nested/settings.json");
+        let stack = dir.path().join("stack.yml");
+        let original = "{\"theme\":\"dark\",\"mcpServers\":{}}\n";
+        std::fs::write(&config, original).unwrap();
+        std::fs::write(
+            &stack,
+            "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n",
+        )
+        .unwrap();
+        let flags = [
+            "-y",
+            "--include-permissions",
+            "--permissions-config",
+            settings.to_str().unwrap(),
+        ];
+        let mut preview_flags = flags.to_vec();
+        preview_flags.push("--dry-run");
+        let preview = run(operation, Some(&stack), &config, &preview_flags);
+        assert!(preview.status.success(), "{preview:?}");
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+
+        let applied = run(operation, Some(&stack), &config, &flags);
+        assert!(applied.status.success(), "{applied:?}");
+        let written = std::fs::read(&config).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&written).unwrap();
+        assert_eq!(value["mcpServers"]["example"]["command"], "tool");
+        assert_eq!(value["theme"], "dark");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("claude.json.~1~")).unwrap(),
+            original
+        );
+        let repeated = run(operation, Some(&stack), &config, &flags);
+        assert!(repeated.status.success(), "{repeated:?}");
+        assert_eq!(std::fs::read(&config).unwrap(), written);
+        assert!(!dir.path().join("missing").exists());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+    }
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn claude_rejects_aliasing_targets_and_backup_failure_before_config_writes() {
+    for operation in ["import", "use"] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("claude.json");
+        let settings = dir.path().join("settings.json");
+        let stack = dir.path().join("stack.yml");
+        let original = "{}";
+        std::fs::write(&config, original).unwrap();
+        std::fs::write(&settings, original).unwrap();
+        std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {source: claude, allow: [mcp__example]}\n").unwrap();
+        let failed = run(
+            operation,
+            Some(&stack),
+            &config,
+            &[
+                "-y",
+                "--include-permissions",
+                "--permissions-config",
+                config.to_str().unwrap(),
+            ],
+        );
+        assert!(!failed.status.success());
+        assert!(String::from_utf8_lossy(&failed.stderr).contains("different files"));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+        std::fs::write(
+            dir.path().join(format!("settings.json.~{}~", u64::MAX)),
+            "keep",
+        )
+        .unwrap();
+        let failed = run(
+            operation,
+            Some(&stack),
+            &config,
+            &["-y", "--include-permissions"],
+        );
+        assert!(!failed.status.success());
+        assert!(String::from_utf8_lossy(&failed.stderr).contains("BACKUP_ERROR"));
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), original);
+    }
+}
+
+#[test]
+#[cfg(any(unix, windows))]
 fn untranslatable_codex_mode_warns_and_keeps_claude_rules() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("claude.json");

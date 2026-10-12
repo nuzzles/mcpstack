@@ -1435,10 +1435,7 @@ fn import_merges_resolved_stacks_with_backup_and_noop_repeat() {
     let output = execute();
     assert!(output.status.success(), "{output:?}");
     assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
-    assert_eq!(
-        std::fs::read_to_string(config.with_extension("toml.~2~")).unwrap(),
-        written
-    );
+    assert!(!config.with_extension("toml.~2~").exists());
     let modified = std::fs::metadata(&config).unwrap().modified().unwrap();
     let output = execute();
     assert!(output.status.success(), "{output:?}");
@@ -1452,7 +1449,7 @@ fn import_merges_resolved_stacks_with_backup_and_noop_repeat() {
 
 #[cfg(any(unix, windows))]
 #[test]
-fn import_backs_up_before_validation_and_preserves_original_on_failure() {
+fn import_validates_before_backups_and_preserves_original_on_failure() {
     let original = "[mcp_servers.shared]\ncommand='original'\n";
     for (document, status) in [
         ("broken: [fixture-secret", 4),
@@ -1486,10 +1483,7 @@ fn import_backs_up_before_validation_and_preserves_original_on_failure() {
         }
         assert!(!String::from_utf8_lossy(&output.stderr).contains("fixture-secret"));
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
-        assert_eq!(
-            std::fs::read_to_string(fixture.directory.path().join("config.toml.~1~")).unwrap(),
-            original
-        );
+        assert!(!fixture.directory.path().join("config.toml.~1~").exists());
     }
     let fixture =
         StackFixture::new("schema_version: 1\nservers:\n  added:\n    config: {command: tool}\n");
@@ -1497,7 +1491,7 @@ fn import_backs_up_before_validation_and_preserves_original_on_failure() {
     let backup = fixture.directory.path().join("config.toml.~1~");
     std::fs::write(&config, original).unwrap();
     std::fs::write(&backup, "keep backup").unwrap();
-    // An existing backup is retained; the next backup precedes reading the stack.
+    // Invalid input must not create another backup generation.
     std::fs::remove_file(&fixture.file).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
         .args(["codex", "import", "--auto-approve"])
@@ -1509,10 +1503,7 @@ fn import_backs_up_before_validation_and_preserves_original_on_failure() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(3));
-    assert_eq!(
-        std::fs::read_to_string(config.with_extension("toml.~2~")).unwrap(),
-        original
-    );
+    assert!(!config.with_extension("toml.~2~").exists());
     assert_eq!(std::fs::read_to_string(&backup).unwrap(), "keep backup");
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
 }
@@ -1752,12 +1743,7 @@ fn masked_import_rejects_missing_values_without_interactive_input() {
         assert!(!preview.contains("MCPSTACK_MASKED_SECRET"), "{preview}");
         assert!(!config.exists());
         let backup = fixture.directory.path().join("config.toml.~1~");
-        if flag == "--dry-run" {
-            assert!(!backup.exists());
-        } else {
-            assert_eq!(std::fs::read(&backup).unwrap(), b"");
-            std::fs::remove_file(backup).unwrap();
-        }
+        assert!(!backup.exists());
     }
 }
 
