@@ -435,12 +435,14 @@ also has a Markdown download. `llms.txt` indexes the agent-readable pages and
 from the executable during the same build. The generated reference and agent
 indexes identify the executable's version.
 
-Section 1, Installation, covers prerequisites, source installation, and a scratch
-preview. Section 2, Compatibility, has Claude Code and Codex subsections covering supported
+Section 1, Installation, has From source and Crates.io subsections for 0.1.0.
+Section 2, Compatibility, has Claude Code and Codex subsections covering supported
 scopes, configuration paths, commands, and compatibility limits. Section 3,
 Commands, includes a concise subsection for every operation, with shared examples
 and links to both harnesses' generated help files. Pages keep full option listings
 in downloadable text; the CLI schema retains complete machine-readable metadata.
+Section 4, References, groups workflows (including the scratch preview), secrets
+and permissions, recovery, agent guidance, and the stack format.
 
 PRs build and validate the site, YAML examples, scratch workflows, local links,
 and anchors. Merged changes deploy through GitHub Pages; PRs cannot deploy.
