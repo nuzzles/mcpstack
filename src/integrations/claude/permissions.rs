@@ -8,6 +8,7 @@ use serde_json::{Map, Value};
 use super::Error;
 use crate::error::AppError;
 use crate::integrations::diff_output::write_diff;
+use crate::integrations::write_change_rows;
 use crate::io;
 use crate::schema::v1::{ApprovalMode, ConfigValue, Permissions};
 use crate::schema::{Server, StackV1};
@@ -199,6 +200,51 @@ impl Snapshot {
         Ok(proposed)
     }
 
+    pub fn summarize(
+        &self,
+        proposed: &Value,
+        path: &Path,
+        output: &mut impl Write,
+        colored: bool,
+    ) -> Result<(), AppError> {
+        if *proposed == self.config {
+            return Ok(());
+        }
+        let before = rule_modes(&self.config)?;
+        let after = rule_modes(proposed)?;
+        let mut changes = [Vec::new(), Vec::new(), Vec::new()];
+        for (rule, modes) in &after {
+            match before.get(rule) {
+                None => changes[0].push(format!("{rule:?} ({})", modes.join(", "))),
+                Some(old) if old != modes => changes[1].push(format!(
+                    "{rule:?} ({} -> {})",
+                    old.join(", "),
+                    modes.join(", ")
+                )),
+                Some(_) => {}
+            }
+        }
+        for (rule, modes) in &before {
+            if !after.contains_key(rule) {
+                changes[2].push(format!("{rule:?} ({})", modes.join(", ")));
+            }
+        }
+        writeln!(
+            output,
+            "Target settings: {}",
+            std::path::absolute(path)?.to_string_lossy().escape_debug()
+        )?;
+        writeln!(output, "MCP permission changes:")?;
+        write_change_rows(output, &changes, colored)?;
+        if changes.iter().all(Vec::is_empty) {
+            writeln!(
+                output,
+                "Permission rule order or duplicate entries would be normalized."
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn preview(
         &self,
         proposed: &Value,
@@ -249,6 +295,18 @@ impl Snapshot {
         write_diff(output, &diff, colored)?;
         Ok(())
     }
+}
+
+fn rule_modes(config: &Value) -> Result<BTreeMap<String, Vec<&'static str>>, Error> {
+    let mut modes: BTreeMap<String, Vec<&'static str>> = BTreeMap::new();
+    for bucket in ["allow", "ask", "deny"] {
+        for rule in rules(config, bucket)?.into_iter().collect::<BTreeSet<_>>() {
+            if rule.starts_with("mcp__") {
+                modes.entry(rule).or_default().push(bucket);
+            }
+        }
+    }
+    Ok(modes)
 }
 
 fn redacted_settings(source: &str, config: &Value) -> Result<String, Error> {

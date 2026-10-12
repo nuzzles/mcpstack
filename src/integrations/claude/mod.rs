@@ -1228,19 +1228,25 @@ impl ClientAdapter for Claude {
         };
         let permission_preview = if let Some(settings) = &permission_snapshot {
             let names = stack.servers.keys().cloned().collect();
-            settings.proposed(&stack, &names)? != settings.config
+            Some(settings.proposed(&stack, &names)?)
         } else {
-            false
+            None
         };
-        if all_changes == before && !permission_preview {
+        let permissions_changed = permission_snapshot
+            .as_ref()
+            .zip(permission_preview.as_ref())
+            .is_some_and(|(settings, proposed)| settings.config != *proposed);
+        if all_changes == before && !permissions_changed {
             writeln!(
                 output,
                 "No changes; existing identical entries were unchanged."
             )?;
             return Ok(());
         }
-        if permission_preview {
-            writeln!(output, "Permission rules would change.")?;
+        if let (Some(settings), Some(change), Some(path)) =
+            (&permission_snapshot, &permission_preview, &permission_path)
+        {
+            settings.summarize(change, path, output, colored)?;
         }
         if all_changes != before {
             summarize_changes(output, &config_path, &before, &all_changes, colored)?;
@@ -1293,6 +1299,16 @@ impl ClientAdapter for Claude {
                 "No changes; existing identical entries were unchanged."
             )?;
             return Ok(());
+        }
+        if let (Some((settings, change)), Some(path)) = (&permission_change, &permission_path)
+            && permission_preview.as_ref() != Some(change)
+        {
+            if permissions_changed {
+                writeln!(output, "Selected permission changes:")?;
+                settings.summarize(change, path, output, colored)?;
+            } else {
+                writeln!(output, "Selected permission changes: none.")?;
+            }
         }
         if dry_run {
             writeln!(output, "Would import {} server(s).", approved.len())?;
@@ -1359,8 +1375,8 @@ impl ClientAdapter for Claude {
                 && stderr().is_terminal(),
         )?;
         preserve_equivalent_servers(&before, &mut proposed);
-        let permission_change = if let Some(path) = permission_path {
-            let settings = permissions::Snapshot::read(&path).await?;
+        let permission_change = if let Some(path) = &permission_path {
+            let settings = permissions::Snapshot::read(path).await?;
             let names = stack.servers.keys().cloned().collect();
             let change = settings.proposed(&stack, &names)?;
             Some((settings, change))
@@ -1378,8 +1394,8 @@ impl ClientAdapter for Claude {
             )?;
             return Ok(());
         }
-        if permissions_changed {
-            writeln!(output, "Permission rules would change.")?;
+        if let (Some((settings, change)), Some(path)) = (&permission_change, &permission_path) {
+            settings.summarize(change, path, output, colored)?;
         }
         if proposed != before {
             summarize_changes(output, &config_path, &before, &proposed, colored)?;

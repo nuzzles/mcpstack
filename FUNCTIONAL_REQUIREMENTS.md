@@ -439,7 +439,10 @@ Detailed server configuration diffs are implemented for both clients.
 It uses the same serialization as the settings write, preserving original and
 proposed file line numbers. Unrelated settings and non-MCP rules are omitted
 from the preview. No-op settings produce no diff; previews create no files or
-backups. Import and use retain their summary output and approval behavior.
+backups. With `--include-permissions`, import and use show the target settings
+path and added, modified, and deleted MCP rules before approval, including in
+dry runs. Modified rules show their old and new `allow`/`ask`/`deny` memberships.
+Import refreshes the permission summary when server approvals narrow the plan.
 
 ### Cross-platform integration tests
 
@@ -464,7 +467,8 @@ replacement, and repeat imports.
 Claude permission preview tests cover rule additions, removals and moves,
 redaction in formatted/minified settings, file line numbers against actual writes,
 missing settings files, no-op results, server selection, Codex rule translation,
-color controls, and malformed inputs without writes.
+color controls, permission summaries before approval, normalization versus no-op
+changes, and malformed inputs without writes.
 Other platforms reject import safely.
 
 ### Codex export
