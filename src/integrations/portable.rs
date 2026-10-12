@@ -96,41 +96,68 @@ fn codex_permissions(
     name: &str,
     include: bool,
 ) -> Result<Option<Permissions>, String> {
-    let default_mode = fields
-        .remove("default_tools_approval_mode")
-        .map(|value| {
-            serde_json::from_value::<ApprovalMode>(value)
-                .map_err(|_| format!("{name:?}.default_tools_approval_mode"))
-        })
-        .transpose()?;
-    let mut tools = BTreeMap::new();
+    let mut policy = Permissions::default();
+    if let Some(value) = fields.remove("default_tools_approval_mode") {
+        policy.default_mode = Some(
+            approval_mode(&value).ok_or_else(|| format!("{name:?}.default_tools_approval_mode"))?,
+        );
+    }
     if let Some(value) = fields.remove("tools") {
         let entries = value.as_object().ok_or_else(|| format!("{name:?}.tools"))?;
         for (tool, definition) in entries {
+            // Shared selectors reserve '*' for patterns. A literal native tool
+            // name containing it cannot be exported without changing meaning.
+            if include && tool.contains('*') {
+                return Err(format!(
+                    "{name:?}.tools: literal tool names containing '*' cannot be represented"
+                ));
+            }
             let mut definition = definition
                 .as_object()
                 .cloned()
                 .ok_or_else(|| format!("{name:?}.tools.{tool:?}"))?;
             if let Some(value) = definition.remove("approval_mode") {
-                let mode = serde_json::from_value(value)
-                    .map_err(|_| format!("{name:?}.tools.{tool:?}.approval_mode"))?;
-                tools.insert(tool.clone(), mode);
+                let bucket = match approval_mode(&value)
+                    .ok_or_else(|| format!("{name:?}.tools.{tool:?}.approval_mode"))?
+                {
+                    ApprovalMode::Allow => &mut policy.allow,
+                    ApprovalMode::Ask => &mut policy.ask,
+                    ApprovalMode::Auto => &mut policy.auto,
+                    ApprovalMode::Writes => &mut policy.writes,
+                };
+                bucket.push(tool.clone());
             }
             if let Some(field) = definition.keys().next() {
                 return Err(format!("{name:?}.tools.{tool:?}.{field:?}"));
             }
         }
     }
-    Ok(
-        if include && (default_mode.is_some() || !tools.is_empty()) {
-            Some(Permissions::Codex {
-                default_mode,
-                tools,
-            })
-        } else {
-            None
-        },
-    )
+    if include {
+        // Disabled tools are permission denials in the shared model. Without
+        // opt-in they retain their existing representation in server settings.
+        if let Some(value) = fields.remove("disabled_tools") {
+            policy.deny =
+                serde_json::from_value(value).map_err(|_| format!("{name:?}.disabled_tools"))?;
+            if policy.deny.iter().any(|tool| tool.contains('*')) {
+                return Err(format!(
+                    "{name:?}.disabled_tools: literal tool names containing '*' cannot be represented"
+                ));
+            }
+        }
+        Ok(Some(policy))
+    } else {
+        Ok(None)
+    }
+}
+
+fn approval_mode(value: &Value) -> Option<ApprovalMode> {
+    match value.as_str()? {
+        "approve" => Some(ApprovalMode::Allow),
+        "prompt" => Some(ApprovalMode::Ask),
+        "auto" => Some(ApprovalMode::Auto),
+        "writes" => Some(ApprovalMode::Writes),
+        _ => None,
+    }
 }
 
 fn take_string(

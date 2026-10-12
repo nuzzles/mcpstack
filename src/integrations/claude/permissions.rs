@@ -57,141 +57,60 @@ impl Snapshot {
     pub fn for_server(&self, name: &str) -> Result<Option<Permissions>, Error> {
         let prefix = format!("mcp__{name}");
         let select = |bucket| -> Result<Vec<String>, Error> {
-            Ok(rules(&self.config, bucket)?
+            rules(&self.config, bucket)?
                 .into_iter()
-                .filter(|rule| rule == &prefix || rule.starts_with(&format!("{prefix}__")))
-                .collect())
+                .filter_map(|rule| {
+                    if rule == prefix {
+                        Some(Ok("*".into()))
+                    } else {
+                        rule.strip_prefix(&format!("{prefix}__")).map(|tool| {
+                            if tool.is_empty() {
+                                Err(Error::Config)
+                            } else {
+                                Ok(tool.to_owned())
+                            }
+                        })
+                    }
+                })
+                .collect()
         };
-        let allow = select("allow")?;
-        let ask = select("ask")?;
-        let deny = select("deny")?;
-        Ok(Some(Permissions::Claude { allow, ask, deny }))
+        Ok(Some(Permissions {
+            allow: select("allow")?,
+            ask: select("ask")?,
+            deny: select("deny")?,
+            ..Permissions::default()
+        }))
     }
 
     pub fn proposed(&self, stack: &StackV1, names: &BTreeSet<String>) -> Result<Value, Error> {
-        let mut proposed = self.config.clone();
-        for bucket in ["allow", "ask", "deny"] {
-            let mut entries = rules(&proposed, bucket)?;
-            for (name, server) in &stack.servers {
-                if !names.contains(name) {
-                    continue;
-                }
-                let Server::Portable {
-                    permissions: Some(policy),
-                    ..
-                } = server
-                else {
-                    continue;
-                };
-                let prefix = format!("mcp__{name}");
-                match &**policy {
-                    Permissions::Claude { .. } => entries.retain(|rule| {
-                        rule != &prefix && !rule.starts_with(&format!("{prefix}__"))
-                    }),
-                    Permissions::Codex {
-                        default_mode,
-                        tools,
-                    } => {
-                        let map_default = default_mode.is_some_and(representable)
-                            && tools.values().all(|mode| representable(*mode))
-                            && !(matches!(default_mode, Some(ApprovalMode::Prompt))
-                                && tools
-                                    .values()
-                                    .any(|mode| matches!(mode, ApprovalMode::Approve)));
-                        entries.retain(|rule| {
-                            if (rule == &prefix || rule == &format!("{prefix}__*")) && map_default {
-                                return false;
-                            }
-                            !tools.iter().any(|(tool, mode)| {
-                                representable(*mode)
-                                    && !(matches!(default_mode, Some(ApprovalMode::Prompt))
-                                        && matches!(mode, ApprovalMode::Approve))
-                                    && rule == &format!("{prefix}__{tool}")
-                            })
-                        });
-                    }
-                }
+        let mut policies = Vec::new();
+        for (name, server) in &stack.servers {
+            if !names.contains(name) {
+                continue;
             }
-            for (name, server) in &stack.servers {
-                if !names.contains(name) {
-                    continue;
-                }
-                let Server::Portable {
-                    permissions: Some(policy),
-                    ..
-                } = server
-                else {
-                    continue;
-                };
-                match &**policy {
-                    Permissions::Claude { allow, ask, deny } => {
-                        entries.extend(
-                            match bucket {
-                                "allow" => allow,
-                                "ask" => ask,
-                                _ => deny,
-                            }
-                            .iter()
-                            .cloned(),
-                        );
+            let Server::Portable {
+                permissions: Some(policy),
+                ..
+            } = server
+            else {
+                continue;
+            };
+            // Convert every selected policy before preparing any file writes.
+            policies.push((format!("mcp__{name}"), native_rules(name, policy)?));
+        }
+        let mut proposed = self.config.clone();
+        for (index, bucket) in ["allow", "ask", "deny"].into_iter().enumerate() {
+            let mut entries = rules(&proposed, bucket)?;
+            for (prefix, policy) in &policies {
+                let bare_server_rule = entries.contains(prefix);
+                entries.retain(|rule| rule != prefix && !rule.starts_with(&format!("{prefix}__")));
+                entries.extend(policy[index].iter().map(|tool| {
+                    if tool == "*" && bare_server_rule {
+                        prefix.clone()
+                    } else {
+                        format!("{prefix}__{tool}")
                     }
-                    Permissions::Codex {
-                        default_mode,
-                        tools,
-                    } => {
-                        let unrepresentable_tools =
-                            tools.values().any(|mode| !representable(*mode));
-                        let conflicting_override =
-                            matches!(default_mode, Some(ApprovalMode::Prompt))
-                                && tools
-                                    .values()
-                                    .any(|mode| matches!(mode, ApprovalMode::Approve));
-                        if let Some(mode) = default_mode {
-                            if representable(*mode)
-                                && !unrepresentable_tools
-                                && !conflicting_override
-                            {
-                                add_codex_rule(
-                                    &mut entries,
-                                    bucket,
-                                    &format!("mcp__{name}__*"),
-                                    *mode,
-                                );
-                            } else if bucket == "allow" {
-                                tracing::warn!(
-                                    "Skipping Codex default approval mode for {name:?}: Claude Code cannot reproduce auto or writes mode or this combination of tool overrides. MCP servers will still be applied."
-                                );
-                            }
-                        }
-                        for (tool, mode) in tools {
-                            if !representable(*mode) {
-                                if bucket == "allow" {
-                                    tracing::warn!(
-                                        "Skipping Codex approval mode for {name:?}.{tool:?}: Claude Code cannot reproduce auto or writes mode. MCP servers will still be applied."
-                                    );
-                                }
-                                continue;
-                            }
-                            if matches!(
-                                (default_mode, mode),
-                                (Some(ApprovalMode::Prompt), ApprovalMode::Approve)
-                            ) {
-                                if bucket == "allow" {
-                                    tracing::warn!(
-                                        "Skipping Codex approval override for {name:?}.{tool:?}: Claude's server-wide ask rule takes precedence."
-                                    );
-                                }
-                                continue;
-                            }
-                            add_codex_rule(
-                                &mut entries,
-                                bucket,
-                                &format!("mcp__{name}__{tool}"),
-                                *mode,
-                            );
-                        }
-                    }
-                }
+                }));
             }
             let mut unique = BTreeSet::new();
             entries.retain(|rule| unique.insert(rule.clone()));
@@ -357,19 +276,45 @@ fn redacted_fields(
     Ok(output)
 }
 
-fn representable(mode: ApprovalMode) -> bool {
-    matches!(mode, ApprovalMode::Approve | ApprovalMode::Prompt)
-}
-
-fn add_codex_rule(entries: &mut Vec<String>, bucket: &str, rule: &str, mode: ApprovalMode) {
-    match mode {
-        ApprovalMode::Approve if bucket == "allow" => entries.push(rule.into()),
-        ApprovalMode::Prompt if bucket == "ask" => entries.push(rule.into()),
-        ApprovalMode::Auto | ApprovalMode::Writes if bucket == "allow" => tracing::warn!(
-            "Skipping Codex approval mode for {rule}: Claude Code has no exact equivalent."
-        ),
-        _ => {}
+fn native_rules(name: &str, policy: &Permissions) -> Result<[Vec<String>; 3], Error> {
+    let fail = |reason| Error::Permissions(name.into(), reason);
+    if !policy.auto.is_empty()
+        || !policy.writes.is_empty()
+        || matches!(
+            policy.default_mode,
+            Some(ApprovalMode::Auto | ApprovalMode::Writes)
+        )
+    {
+        return Err(fail(
+            "auto and writes approval decisions have no equivalent",
+        ));
     }
+    let mut buckets = [
+        policy.allow.clone(),
+        policy.ask.clone(),
+        policy.deny.clone(),
+    ];
+    if let Some(mode) = policy.default_mode {
+        // A shared default is a fallback; Claude's server-wide ask rule also
+        // overrides allow rules for individual tools, so that case is lossy.
+        if mode == ApprovalMode::Ask && !policy.allow.is_empty() {
+            return Err(fail(
+                "a default ask decision cannot preserve tool allow overrides",
+            ));
+        }
+        if (mode == ApprovalMode::Allow && policy.ask.iter().any(|tool| tool == "*"))
+            || policy.deny.iter().any(|tool| tool == "*")
+        {
+            return Err(fail(
+                "a server-wide rule would override the fallback decision",
+            ));
+        }
+        let index = if mode == ApprovalMode::Allow { 0 } else { 1 };
+        if !buckets[index].iter().any(|tool| tool == "*") {
+            buckets[index].push("*".into());
+        }
+    }
+    Ok(buckets)
 }
 
 fn rules(config: &Value, bucket: &str) -> Result<Vec<String>, Error> {

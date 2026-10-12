@@ -729,13 +729,14 @@ fn codex_export_includes_approval_only_when_requested() {
             .unwrap();
         assert!(exported.status.success(), "{exported:?}");
         let stack: serde_json::Value = yaml_serde::from_slice(&exported.stdout).unwrap();
-        assert_eq!(
-            stack["servers"]["obsidian"]["permissions"]["source"],
-            "codex"
+        assert!(
+            stack["servers"]["obsidian"]["permissions"]
+                .get("source")
+                .is_none()
         );
         assert_eq!(
             stack["servers"]["obsidian"]["permissions"]["default_mode"],
-            "prompt"
+            "ask"
         );
     }
 }
@@ -769,13 +770,14 @@ fn claude_permission_rules_are_opt_in_and_restore_from_settings() {
     );
     assert!(exported.status.success(), "{exported:?}");
     let value: serde_json::Value = yaml_serde::from_slice(&exported.stdout).unwrap();
-    assert_eq!(
-        value["servers"]["obsidian"]["permissions"]["source"],
-        "claude"
+    assert!(
+        value["servers"]["obsidian"]["permissions"]
+            .get("source")
+            .is_none()
     );
     assert_eq!(
         value["servers"]["obsidian"]["permissions"]["allow"],
-        serde_json::json!(["mcp__obsidian__read"])
+        serde_json::json!(["read"])
     );
     std::fs::write(&stack, &exported.stdout).unwrap();
     let unchanged = run("use", Some(&stack), &target, &["-y"]);
@@ -842,7 +844,7 @@ fn permission_diff_shows_rule_moves_and_matches_written_settings() {
                 .replace("fixture-secret", "fixture\\u002dsecret")
         };
         std::fs::write(&settings, &original).unwrap();
-        std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions:\n      source: claude\n      allow: [mcp__example__read]\n      ask: [mcp__example__write]\n      deny: []\n").unwrap();
+        std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions:\n      allow: ['read']\n      ask: ['write']\n      deny: []\n").unwrap();
         let flags = [
             "--include-permissions",
             "--permissions-config",
@@ -985,7 +987,7 @@ fn permission_diff_handles_missing_settings_and_color_without_writes() {
     let settings = dir.path().join("missing/settings.json");
     let stack = dir.path().join("stack.yml");
     std::fs::write(&config, r#"{"mcpServers":{"example":{"command":"tool"}}}"#).unwrap();
-    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {source: claude, allow: [mcp__example__read], ask: [mcp__example__write], deny: [mcp__example__delete]}\n").unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {allow: [read], ask: [write], deny: [delete]}\n").unwrap();
     let execute = |flags: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_mcpstack"))
             .args(["--non-interactive", "claude", "diff"])
@@ -1034,7 +1036,7 @@ fn permission_diff_handles_missing_settings_and_color_without_writes() {
 }
 
 #[test]
-fn permission_diff_respects_opt_in_selection_and_codex_translation() {
+fn permission_diff_respects_opt_in_and_selects_shared_rules() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("claude.json");
     let settings = dir.path().join("settings.json");
@@ -1045,7 +1047,7 @@ fn permission_diff_respects_opt_in_selection_and_codex_translation() {
     )
     .unwrap();
     std::fs::write(&settings, "{}\n").unwrap();
-    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {source: codex, default_mode: auto, tools: {read: approve, write: prompt}}\n  other:\n    transport: {type: stdio, command: tool}\n    permissions: {source: claude, deny: [mcp__other__*]}\n").unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {allow: [read], ask: [write]}\n  other:\n    transport: {type: stdio, command: tool}\n    permissions: {deny: ['*']}\n").unwrap();
     let omitted = run("diff", Some(&stack), &config, &[]);
     assert!(omitted.status.success(), "{omitted:?}");
     assert!(omitted.stdout.is_empty(), "{omitted:?}");
@@ -1067,9 +1069,7 @@ fn permission_diff_respects_opt_in_selection_and_codex_translation() {
     assert!(text.contains("mcp__example__write"), "{text}");
     assert!(!text.contains("mcp__example__*"), "{text}");
     assert!(!text.contains("mcp__other"), "{text}");
-    assert!(
-        String::from_utf8_lossy(&selected.stderr).contains("Skipping Codex default approval mode")
-    );
+    assert!(selected.stderr.is_empty(), "{:?}", selected.stderr);
     assert_eq!(std::fs::read_to_string(&settings).unwrap(), "{}\n");
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
 }
@@ -1081,7 +1081,7 @@ fn permission_diff_rejects_malformed_settings_without_exposing_values() {
     let settings = dir.path().join("settings.json");
     let stack = dir.path().join("stack.yml");
     std::fs::write(&config, r#"{"mcpServers":{"example":{"command":"tool"}}}"#).unwrap();
-    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {source: claude, allow: [mcp__example]}\n").unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {allow: ['*']}\n").unwrap();
     for invalid in [
         r#"{"permissions":{"allow":["fixture-secret",123]}}"#,
         r#"{"permissions":{"allow":"fixture-secret"}}"#,
@@ -1115,7 +1115,7 @@ fn permission_summaries_classify_rules_and_precede_approval_without_writes() {
     .to_string();
     std::fs::write(&config, original_config).unwrap();
     std::fs::write(&settings, &original_settings).unwrap();
-    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions:\n      source: claude\n      allow: [mcp__example__read, mcp__example__multi]\n      ask: [mcp__example__write]\n      deny: [mcp__example__multi]\n").unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions:\n      allow: ['read', 'multi']\n      ask: ['write']\n      deny: ['multi']\n").unwrap();
     let expected = concat!(
         "MCP permission changes:\n",
         "  + Added: \"mcp__example__write\" (ask)\n",
@@ -1194,7 +1194,7 @@ fn permission_summary_distinguishes_normalization_from_noop_and_filters_selectio
         r#"{"mcpServers":{"example":{"command":"tool"},"other":{"command":"tool"}}}"#,
     )
     .unwrap();
-    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {source: claude, allow: [mcp__example]}\n  other:\n    transport: {type: stdio, command: tool}\n    permissions: {source: claude, deny: [mcp__other]}\n").unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {allow: ['*']}\n  other:\n    transport: {type: stdio, command: tool}\n    permissions: {deny: ['*']}\n").unwrap();
     for operation in ["use", "import"] {
         std::fs::write(
             &settings,
@@ -1240,7 +1240,7 @@ fn permission_summary_distinguishes_normalization_from_noop_and_filters_selectio
     assert!(selected.status.success(), "{selected:?}");
     let text = String::from_utf8(selected.stdout).unwrap();
     assert!(
-        text.contains("  + Added: \"mcp__example\" (allow)\n"),
+        text.contains("  + Added: \"mcp__example__*\" (allow)\n"),
         "{text}"
     );
     assert!(!text.contains("mcp__other"), "{text}");
@@ -1259,7 +1259,7 @@ fn claude_prepares_both_files_before_writes_and_repeats_without_backups() {
         let original = "{\"theme\":\"dark\",\"mcpServers\":{}}\n";
         let original_settings = "{\"permissions\":{\"allow\":[\"Bash\"]}}\n";
         std::fs::write(&config, original).unwrap();
-        std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {source: claude, allow: [mcp__example]}\n").unwrap();
+        std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {allow: ['*']}\n").unwrap();
         let flags = &["-y", "--include-permissions"];
         // Malformed second file fails before creating backups or changing servers.
         std::fs::write(&settings, "{invalid fixture-secret").unwrap();
@@ -1299,7 +1299,7 @@ fn claude_prepares_both_files_before_writes_and_repeats_without_backups() {
         assert_eq!(servers["theme"], "dark");
         assert_eq!(
             permissions["permissions"]["allow"],
-            serde_json::json!(["Bash", "mcp__example"])
+            serde_json::json!(["Bash", "mcp__example__*"])
         );
         let repeated = run(operation, Some(&stack), &config, flags);
         assert!(repeated.status.success(), "{repeated:?}");
@@ -1366,7 +1366,7 @@ fn claude_rejects_aliasing_targets_and_backup_failure_before_config_writes() {
         let original = "{}";
         std::fs::write(&config, original).unwrap();
         std::fs::write(&settings, original).unwrap();
-        std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {source: claude, allow: [mcp__example]}\n").unwrap();
+        std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {allow: ['*']}\n").unwrap();
         let failed = run(
             operation,
             Some(&stack),
@@ -1401,7 +1401,7 @@ fn claude_rejects_aliasing_targets_and_backup_failure_before_config_writes() {
 
 #[test]
 #[cfg(any(unix, windows))]
-fn untranslatable_codex_mode_warns_and_keeps_claude_rules() {
+fn untranslatable_default_mode_rejects_without_changing_claude_files() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("claude.json");
     let settings = dir.path().join("settings.json");
@@ -1409,7 +1409,7 @@ fn untranslatable_codex_mode_warns_and_keeps_claude_rules() {
     std::fs::write(&config, r#"{"mcpServers":{}}"#).unwrap();
     let original = r#"{"permissions":{"ask":["mcp__example__*"]}}"#;
     std::fs::write(&settings, original).unwrap();
-    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {source: codex, default_mode: writes}\n").unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {default_mode: writes}\n").unwrap();
     let output = run(
         "use",
         Some(&stack),
@@ -1421,16 +1421,17 @@ fn untranslatable_codex_mode_warns_and_keeps_claude_rules() {
             settings.to_str().unwrap(),
         ],
     );
-    assert!(output.status.success(), "{output:?}");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot reproduce auto or writes"));
+    assert!(!output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("without loss"));
     assert_eq!(std::fs::read_to_string(&settings).unwrap(), original);
     let value: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
-    assert_eq!(value["mcpServers"]["example"]["command"], "tool");
+    assert!(value["mcpServers"].as_object().unwrap().is_empty());
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
 }
 
 #[test]
-fn untranslatable_tool_mode_does_not_block_other_permission_rules() {
+fn untranslatable_tool_mode_rejects_the_whole_stack() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("claude.json");
     let settings = dir.path().join("settings.json");
@@ -1441,7 +1442,7 @@ fn untranslatable_tool_mode_does_not_block_other_permission_rules() {
         r#"{"permissions":{"ask":["mcp__example__write"]}}"#,
     )
     .unwrap();
-    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions:\n      source: codex\n      default_mode: auto\n      tools: {read: approve, write: writes}\n").unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions:\n      allow: [read]\n      writes: [write]\n").unwrap();
     let result = run(
         "use",
         Some(&stack),
@@ -1453,23 +1454,21 @@ fn untranslatable_tool_mode_does_not_block_other_permission_rules() {
             settings.to_str().unwrap(),
         ],
     );
-    assert!(result.status.success(), "{result:?}");
+    assert!(!result.status.success(), "{result:?}");
     let warnings = String::from_utf8_lossy(&result.stderr);
     assert!(warnings.contains("write"), "{warnings}");
-    assert!(warnings.contains("default approval mode"), "{warnings}");
+    assert!(warnings.contains("without loss"), "{warnings}");
     let value: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
-    assert_eq!(
-        value["permissions"]["allow"],
-        serde_json::json!(["mcp__example__read"])
-    );
+    assert!(value["permissions"].get("allow").is_none());
     assert_eq!(
         value["permissions"]["ask"],
         serde_json::json!(["mcp__example__write"])
     );
     let servers: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
-    assert_eq!(servers["mcpServers"]["example"]["command"], "tool");
+    assert!(servers["mcpServers"].as_object().unwrap().is_empty());
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
 }
 
 #[test]
@@ -1500,9 +1499,10 @@ fn empty_claude_permission_policy_clears_old_rules_when_included() {
     );
     assert!(exported.status.success(), "{exported:?}");
     let value: serde_json::Value = yaml_serde::from_slice(&exported.stdout).unwrap();
-    assert_eq!(
-        value["servers"]["example"]["permissions"]["source"],
-        "claude"
+    assert!(
+        value["servers"]["example"]["permissions"]
+            .get("source")
+            .is_none()
     );
     std::fs::write(&stack, exported.stdout).unwrap();
     let result = run(

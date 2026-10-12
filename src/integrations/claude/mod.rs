@@ -26,6 +26,10 @@ pub enum Error {
     #[error("This stack contains fields or transports Claude Code cannot represent.")]
     Unsupported,
     #[error(
+        "Cannot represent permissions for server {0:?} in Claude Code without loss: {1}. No configuration was changed."
+    )]
+    Permissions(String, &'static str),
+    #[error(
         "Claude Code cannot represent these stack fields: {0}. Edit the stack or use a supported target."
     )]
     UnsupportedFields(String),
@@ -53,6 +57,7 @@ impl Error {
         match self {
             Self::Path | Self::Config | Self::Read => ErrorCode::ConfigReadError,
             Self::Unsupported
+            | Self::Permissions(_, _)
             | Self::UnsupportedFields(_)
             | Self::HeaderConflict(_)
             | Self::HeaderEnvironment(_)

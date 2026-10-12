@@ -86,7 +86,7 @@ pub(crate) async fn run(
         include_permissions,
     )?;
     if include_permissions {
-        super::workflow::apply_permissions(&stack, &mut definitions);
+        super::workflow::apply_permissions(&stack, &mut definitions)?;
     }
     let changes = snapshot.preview(&definitions)?;
     if changes.is_empty() {

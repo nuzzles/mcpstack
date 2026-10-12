@@ -40,6 +40,7 @@ to its entry in Current status at the bottom.\
 | Done | Deterministic stack files and configuration previews. [*](#deterministic-output) |
 | Done | Human-readable operation results; diagnostics on stderr. [*](#output-formats) |
 | Done | Define a versioned, client-independent stack format. |
+| Done | Store permissions in a shared format without harness ownership; preserve supported permission behavior on round trips and reject lossy conversions. [*](#shared-permissions) |
 | Done | Validate schema versions, server definitions, names, and secret references. |
 | Done | Show Codex server entries as YAML on stdout or export them to a named stack file with safe defaults. [*](#codex-export) |
 | Done | Replace recognized credentials with secret references by default; allow interactive selections or `--expose-secrets` to include values. |
@@ -195,12 +196,10 @@ overwriting either value. Claude Code's reserved server names also fail before
 writes. Claude Code cannot apply per-server Codex startup timeouts.
 Both exporters emit portable `transport` entries. Permission export is opt-in
 with `--include-permissions`; `show --all` and `export --all` also include
-permissions. Export stores Codex default and per-tool approval modes or Claude's server-scoped
-`allow`, `ask`, and `deny` rules in source-tagged permission metadata. Import,
-use, and diff ignore this metadata unless passed `--include-permissions`.
-Same-client restoration preserves the captured rules. Cross-client restoration
-translates representable rules, warns about each unsupported mode or pattern,
-and continues applying MCP servers. Claude settings are read and written in
+permissions. Both adapters convert native policies to the same
+[shared permission format](#shared-permissions). Import, use, and diff ignore
+permission metadata unless passed `--include-permissions`. Conversions that
+cannot preserve the policy fail before backups or writes. Claude settings are read and written in
 `settings.json` (or the file selected by `--permissions-config`), with backups
 for changed settings. Project, managed, and rules outside the chosen settings
 file are outside this export scope. Other unmappable source fields fail export
@@ -210,6 +209,47 @@ Claude Code permission rules live in `settings.json` under `permissions.allow`,
 matches tools from that server. These rules are outside MCP server transport data.
 Older v1 stacks with `bearer_token` are accepted and normalized to an
 Authorization header when read. New exports write only `headers`.
+
+### Shared permissions
+
+Permission metadata belongs to the server, with no `source` or harness tag.
+Rules use local tool names rather than native `mcp__server__tool` spellings:
+
+```yaml
+permissions:
+  allow: [read]
+  ask: [write]
+  deny: [delete]
+```
+
+`allow` approves matching tools, `ask` requires approval, and `deny` blocks them.
+`auto` and `writes` preserve automatic and write-sensitive approval decisions
+for exact tool names.
+Optional `default_mode: allow|ask|auto|writes` is a fallback for tools without an
+explicit approval decision. The `allow`/`ask`/`deny` lists can contain `'*'` for
+all tools or tool patterns;
+within matching rules, deny takes precedence over ask, then allow. A wildcard
+ask rule therefore also constrains tools with an explicit allow rule, unlike an
+ask fallback. Empty `permissions: {}` explicitly clears captured permission
+decisions when included; omitted metadata leaves existing approval policy alone.
+
+Codex translates `allow`/`ask` to `approve`/`prompt`, retains `auto`/`writes`, and
+stores exact denials as `disabled_tools`. Its exporter moves those denials into
+permission metadata when requested. Claude adds native server prefixes only
+when writing its `allow`, `ask`, and `deny` arrays. Semantically equivalent native
+spellings, such as a bare server rule and its all-tools wildcard, can normalize.
+Lossless restoration concerns permission decisions, not JSON/TOML layout or spelling.
+
+Both native models can be exported and restored using this shared representation.
+The target must support every decision being restored: Claude rejects `auto`,
+`writes`, and default-ask policies with allow overrides; Codex rejects partial
+tool patterns, wildcard denials, and overlapping approval decisions it cannot
+retain. No unsupported decision is silently discarded or weakened. Existing
+transport/settings compatibility checks still apply.
+
+This changes the unpublished v1 permission format. Legacy `source: claude` and
+`source: codex` policies, and native-qualified permission rules, are rejected.
+Re-export native configurations with `--include-permissions` to migrate them.
 
 ### Switching stacks
 
@@ -480,6 +520,9 @@ redaction in formatted/minified settings, file line numbers against actual write
 missing settings files, no-op results, server selection, Codex rule translation,
 color controls, permission summaries before approval, normalization versus no-op
 changes, and malformed inputs without writes.
+Shared permission tests cover all Codex approval modes, Claude patterns and
+overlapping rules, native and cross-client round trips, explicit empty policies,
+opt-in preservation, legacy-format rejection, and failures without partial writes.
 Other platforms reject import safely.
 
 ### Codex export

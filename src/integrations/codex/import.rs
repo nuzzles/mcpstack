@@ -20,6 +20,10 @@ pub enum ImportError {
     )]
     Unsupported,
     #[error(
+        "Cannot represent permissions for server {0:?} in Codex without loss: {1}. No configuration was changed."
+    )]
+    Permissions(String, &'static str),
+    #[error(
         "Invalid Codex server definition. Check transport fields, settings, and resolved values."
     )]
     Definition,

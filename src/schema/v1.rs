@@ -30,32 +30,32 @@ pub enum Server {
     },
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Permissions {
-    Codex {
-        #[serde(default)]
-        default_mode: Option<ApprovalMode>,
-        #[serde(default, deserialize_with = "unique_map")]
-        tools: BTreeMap<String, ApprovalMode>,
-    },
-    Claude {
-        #[serde(default)]
-        allow: Vec<String>,
-        #[serde(default)]
-        ask: Vec<String>,
-        #[serde(default)]
-        deny: Vec<String>,
-    },
+/// Server-local permission decisions. Adapters supply native server prefixes
+/// and must reject policies they cannot represent without loss.
+#[derive(Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Permissions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_mode: Option<ApprovalMode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ask: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deny: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auto: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub writes: Vec<String>,
 }
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalMode {
     Auto,
-    Prompt,
+    Ask,
     Writes,
-    Approve,
+    Allow,
 }
 
 /// Client-independent configuration data. Target adapters validate supported fields.
@@ -334,23 +334,20 @@ impl StackV1 {
                 permissions: Some(policy),
                 ..
             } = server
+                && [
+                    &policy.allow,
+                    &policy.ask,
+                    &policy.deny,
+                    &policy.auto,
+                    &policy.writes,
+                ]
+                .into_iter()
+                .flatten()
+                .any(|rule| {
+                    !nonempty_text(rule) || rule.trim() != rule || rule.starts_with("mcp__")
+                })
             {
-                match &**policy {
-                    Permissions::Codex { tools, .. }
-                        if tools.keys().any(|name| !nonempty_text(name)) =>
-                    {
-                        return Err(ValidationError::InvalidDocument);
-                    }
-                    Permissions::Claude { allow, ask, deny } => {
-                        let prefix = format!("mcp__{name}");
-                        if allow.iter().chain(ask).chain(deny).any(|rule| {
-                            rule != &prefix && !rule.starts_with(&format!("{prefix}__"))
-                        }) {
-                            return Err(ValidationError::InvalidDocument);
-                        }
-                    }
-                    _ => {}
-                }
+                return Err(ValidationError::InvalidDocument);
             }
             server.validate()?;
         }
