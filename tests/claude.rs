@@ -49,7 +49,7 @@ fn user_config_round_trip_and_switch_preserve_unrelated_settings() {
     );
     assert!(value["mcpServers"].get("old").is_none());
     assert_eq!(value["mcpServers"]["api"]["type"], "http");
-    let export = run("export", None, &config, &[]);
+    let export = run("show", None, &config, &[]);
     assert!(export.status.success(), "{export:?}");
     let exported = String::from_utf8(export.stdout).unwrap();
     assert!(exported.contains("process:"));
@@ -128,7 +128,7 @@ fn claude_export_then_use_omits_empty_optional_fields_without_a_diff() {
     let stack = dir.path().join("stack.yml");
     let original = r#"{"theme":"dark","mcpServers":{"linear-server":{"type":"http","url":"https://example.com/mcp"},"plain":{"command":"plain-tool"},"explicit":{"type":"stdio","command":"explicit-tool","args":[],"env":{}},"empty-headers":{"type":"http","url":"https://example.com/other","headers":{}}}}"#;
     std::fs::write(&config, original).unwrap();
-    let exported = run("export", None, &config, &[]);
+    let exported = run("show", None, &config, &[]);
     assert!(exported.status.success(), "{exported:?}");
     std::fs::write(&stack, exported.stdout).unwrap();
     let preview = run("use", Some(&stack), &config, &["--dry-run"]);
@@ -160,7 +160,7 @@ fn masked_export_and_invalid_import_do_not_expose_or_write_secrets() {
     let config = dir.path().join("claude.json");
     let stack = dir.path().join("stack.yml");
     std::fs::write(&config,r#"{"mcpServers":{"api":{"type":"http","url":"https://example.com/mcp","headers":{"Authorization":"Bearer fixture-secret"}}}}"#).unwrap();
-    let export = run("export", None, &config, &[]);
+    let export = run("show", None, &config, &[]);
     assert!(export.status.success(), "{export:?}");
     let yaml = String::from_utf8(export.stdout).unwrap();
     assert!(!yaml.contains("fixture-secret"));
@@ -184,7 +184,7 @@ fn duplicate_json_keys_and_missing_secret_references_fail_without_writes() {
     let stack = dir.path().join("stack.yml");
     let duplicate = r#"{"mcpServers":{"a":{"command":"first"},"a":{"command":"second"}}}"#;
     std::fs::write(&config, duplicate).unwrap();
-    let export = run("export", None, &config, &[]);
+    let export = run("show", None, &config, &[]);
     assert!(!export.status.success());
     assert!(export.stdout.is_empty());
     std::fs::write(&config, r#"{"mcpServers":{},"theme":"dark"}"#).unwrap();
@@ -572,7 +572,7 @@ fn export_skips_reserved_server_names_before_validation() {
     let config = dir.path().join("claude.json");
     let original = r#"{"mcpServers":{"computer-use":{"unexpected":"fixture"},"Claude Preview":{"future":true},"ordinary":{"command":"tool"}}}"#;
     std::fs::write(&config, original).unwrap();
-    let result = run("export", None, &config, &[]);
+    let result = run("show", None, &config, &[]);
     assert!(result.status.success(), "{result:?}");
     let output = String::from_utf8(result.stdout).unwrap();
     assert!(output.contains("ordinary"));
@@ -602,19 +602,19 @@ fn export_allow_flags_include_only_named_servers() {
         serde_json::json!({"mcpServers":servers}).to_string(),
     )
     .unwrap();
-    let default = run("export", None, &config, &[]);
+    let default = run("show", None, &config, &[]);
     assert!(default.status.success(), "{default:?}");
     let stack: serde_json::Value = yaml_serde::from_slice(&default.stdout).unwrap();
     assert!(stack["servers"].as_object().unwrap().is_empty());
     for (name, flag) in names {
-        let result = run("export", None, &config, &[flag]);
+        let result = run("show", None, &config, &[flag]);
         assert!(result.status.success(), "{result:?}");
         let stack: serde_json::Value = yaml_serde::from_slice(&result.stdout).unwrap();
         let exported = stack["servers"].as_object().unwrap();
         assert_eq!(exported.len(), 1);
         assert!(exported.contains_key(name));
     }
-    let all = run("export", None, &config, &["--all"]);
+    let all = run("show", None, &config, &["--all"]);
     assert!(all.status.success(), "{all:?}");
     let stack: serde_json::Value = yaml_serde::from_slice(&all.stdout).unwrap();
     assert_eq!(stack["servers"].as_object().unwrap().len(), names.len());
@@ -661,7 +661,7 @@ fn codex_and_claude_exports_share_portable_http_bindings() {
     std::fs::write(&codex, "[mcp_servers.api]\nurl='https://example.com/mcp'\nbearer_token_env_var='SERVICE_TOKEN'\n[mcp_servers.api.env_http_headers]\nX-Key='SERVICE_KEY'\n").unwrap();
     std::fs::write(&claude, r#"{"mcpServers":{},"theme":"dark"}"#).unwrap();
     let export = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["--non-interactive", "codex", "export", "--config"])
+        .args(["--non-interactive", "codex", "show", "--config"])
         .arg(&codex)
         .env_remove("RUST_LOG")
         .stdin(Stdio::null())
@@ -691,7 +691,7 @@ fn codex_and_claude_exports_share_portable_http_bindings() {
         value["mcpServers"]["api"]["headers"]["X-Key"],
         "${SERVICE_KEY}"
     );
-    let reexport = run("export", None, &claude, &[]);
+    let reexport = run("show", None, &claude, &[]);
     assert!(reexport.status.success(), "{reexport:?}");
     let roundtrip: serde_json::Value = yaml_serde::from_slice(&reexport.stdout).unwrap();
     assert_eq!(roundtrip["servers"]["api"]["transport"], *transport);
@@ -703,7 +703,7 @@ fn codex_export_includes_approval_only_when_requested() {
     let codex = dir.path().join("config.toml");
     std::fs::write(&codex, "[mcp_servers.obsidian]\nurl='https://example.com/mcp'\ndefault_tools_approval_mode='prompt'\n").unwrap();
     let exported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args(["--non-interactive", "codex", "export", "--config"])
+        .args(["--non-interactive", "codex", "show", "--config"])
         .arg(&codex)
         .env_remove("RUST_LOG")
         .stdin(Stdio::null())
@@ -716,7 +716,7 @@ fn codex_export_includes_approval_only_when_requested() {
     assert!(stack["servers"]["obsidian"].get("permissions").is_none());
     for flag in ["--include-permissions", "--all"] {
         let exported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .args(["--non-interactive", "codex", "export", "--config"])
+            .args(["--non-interactive", "codex", "show", "--config"])
             .arg(&codex)
             .arg(flag)
             .env_remove("RUST_LOG")
@@ -754,7 +754,7 @@ fn claude_permission_rules_are_opt_in_and_restore_from_settings() {
     )
     .unwrap();
     let exported = run(
-        "export",
+        "show",
         None,
         &source,
         &[
@@ -901,7 +901,7 @@ fn empty_claude_permission_policy_clears_old_rules_when_included() {
     )
     .unwrap();
     let exported = run(
-        "export",
+        "show",
         None,
         &source,
         &[
