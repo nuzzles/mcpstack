@@ -145,7 +145,10 @@ fn import_counts_changed_servers_and_distinguishes_preview_from_commit() {
 
 #[test]
 fn permission_only_import_reports_settings_changes_without_server_imports() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::Builder::new()
+        .prefix("import-Imported-")
+        .tempdir()
+        .unwrap();
     let config = dir.path().join("claude.json");
     let settings = dir.path().join("settings.json");
     let stack = dir.path().join("stack.yml");
@@ -177,8 +180,12 @@ fn permission_only_import_reports_settings_changes_without_server_imports() {
             output.contains("\"mcp__example__read\" (ask -> allow)"),
             "{output}"
         );
-        assert!(!output.contains("import"), "{output}");
-        assert!(!output.contains("Imported"), "{output}");
+        assert!(
+            !output
+                .lines()
+                .any(|line| line.starts_with("Would import ") || line.starts_with("Imported ")),
+            "{output}"
+        );
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original_config);
         if dry_run {
             assert!(output.ends_with("Would update MCP permission rules.\nDry run; no configuration files were changed.\n"), "{output}");
@@ -267,7 +274,14 @@ fn help_matches_each_client_and_describes_preview_approval() {
                 .output()
                 .unwrap(),
         );
-        assert!(help.contains("use -y for unattended previews"), "{help}");
+        assert!(
+            help.contains("use --non-interactive -y for unattended previews"),
+            "{help}"
+        );
+        assert!(
+            help.contains("missing secrets may still prompt even with -y"),
+            "{help}"
+        );
         assert!(help.contains("Summarize changes"), "{help}");
     }
 }

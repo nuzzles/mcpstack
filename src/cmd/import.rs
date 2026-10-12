@@ -8,7 +8,9 @@ use std::io::Write;
 pub struct Import {
     #[command(flatten)]
     selection: crate::integrations::selection::Selection,
-    /// Summarize changes and run approval prompts without writing files; use -y for unattended previews.
+    /// Summarize changes without writing files; use --non-interactive -y for unattended previews.
+    ///
+    /// Without --non-interactive, missing secrets may still prompt even with -y.
     #[arg(long)]
     dry_run: bool,
     /// Approve all selected server and permission changes without prompting.
