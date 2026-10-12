@@ -8,13 +8,13 @@ Never commit directly to `main`. Branch from `main` and open a pull request agai
 ### Branch Naming Convention
 
 All branches use `username/brief-description`: a lowercase GitHub handle and a
-lowercase kebab-case description. Agent branches use the `codex/` prefix.
+lowercase kebab-case description. Agent branches use a harness name prefix (e.g. `codex/`, `claude/` prefix).
 
 Examples:
 
-- `nuzzles/export-stack`
-- `nuzzles/preserve-codex-settings`
-- `codex/export-stack`
+- `nuzzles/my-new-feature`
+- `codex/refactor-api`
+- `claude/new-ui-design`
 
 ### Pull Requests
 
