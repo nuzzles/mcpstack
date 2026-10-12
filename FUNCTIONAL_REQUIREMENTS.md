@@ -71,9 +71,7 @@ to its entry in Current status at the bottom.\
 | --- | --- |
 | Done | List server names, transports, commands/endpoints, and available configuration state. [*](#listing-servers) |
 | Done | Select servers by name; reject unknown selections. [*](#server-selection) |
-| Unsupported | Diagnose missing, empty, malformed, and unsupported configs. |
 | Done | Switch between stack files, replacing the complete MCP server set. [*](#switching-stacks) |
-| Unsupported | Detect machine-specific paths and missing local prerequisites. |
 | Unsupported | Produce Git-friendly exports; require explicit overwrite of existing files. |
 | Unsupported | Preserve version pins and identify unpinned servers. |
 | Partial [*](#codex-import) | Keep discovery, validation, and planning free of writes and server execution. |
@@ -88,7 +86,6 @@ to its entry in Current status at the bottom.\
 | Unsupported | Define supported installation mechanisms; reject unsupported ones before writes. |
 | Unsupported | Verify servers through MCP connection and initialization. |
 | Unsupported | Bound verification time; report per-server and overall results. |
-| Unsupported | Diagnose program, credential, authentication, transport, and protocol failures. |
 | Unsupported | Clean up verification processes/connections without invoking application tools. |
 | Unsupported | Add secret resolution providers beyond environment variables. [*](#secrets) |
 | Partial [*](#secrets) | Keep secrets out of output, shared files, CLI arguments, and child-process logs. |
@@ -310,6 +307,10 @@ recognition and exposure are described under
 [Codex export](#codex-export). Additional secret providers remain Phase 2 work.
 
 ## Open decisions
+
+A standalone `doctor` command and general configuration/environment diagnostics
+are outside scope. Commands still validate their inputs and report actionable
+failures; installation prerequisite checks and MCP verification remain in scope.
 
 Additional command/flag syntax, client adapter support, additional
 secret providers, installation mechanisms, and backup retention/recovery.
