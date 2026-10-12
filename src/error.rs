@@ -80,6 +80,10 @@ pub enum AppError {
     StackWrite(#[source] crate::io::Error),
     #[error("{0}")]
     Stack(#[from] ValidationError),
+    #[error(
+        "Cannot resolve a stack path. Use UTF-8 paths and fully qualified drive paths instead of drive-relative paths."
+    )]
+    StackPath,
     #[error("{code}", code = ErrorCode::ConfigReadError)]
     ConfigRead(#[source] io::Error),
     #[error(
@@ -114,7 +118,7 @@ impl AppError {
             Self::Output(_) => ErrorCode::OutputError,
             Self::StackRead(_) => ErrorCode::StackReadError,
             Self::StackWrite(_) => ErrorCode::StackWriteError,
-            Self::Stack(_) => ErrorCode::InvalidStack,
+            Self::Stack(_) | Self::StackPath => ErrorCode::InvalidStack,
             Self::ConfigRead(_) | Self::ListConfig => ErrorCode::ConfigReadError,
             Self::ImportApprovalRequired
             | Self::UseApprovalRequired

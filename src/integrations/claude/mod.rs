@@ -869,7 +869,7 @@ fn preview(
         return Ok(());
     }
     preview_diff(output, path, file, &before, &after, colored)?;
-    summarize_changes(output, &before, &after, colored)?;
+    summarize_changes(output, path, &before, &after, colored)?;
     Ok(())
 }
 
@@ -935,6 +935,7 @@ fn preview_diff(
 
 fn summarize_changes(
     output: &mut impl Write,
+    path: &Path,
     before: &BTreeMap<String, Value>,
     after: &BTreeMap<String, Value>,
     colored: bool,
@@ -954,7 +955,7 @@ fn summarize_changes(
         .filter(|(name, value)| before.get(*name).is_some_and(|old| old != *value))
         .map(|(name, _)| name.clone())
         .collect();
-    super::write_change_summary(output, &added, &modified, &deleted, colored)?;
+    super::write_change_summary(output, path, &added, &modified, &deleted, colored)?;
     Ok(())
 }
 async fn snapshot(
@@ -1250,7 +1251,7 @@ impl ClientAdapter for Claude {
                     output,
                     "Preliminary changes; missing secrets will be requested for an exact comparison."
                 )?;
-                summarize_changes(output, &before, &preliminary, colored)?;
+                summarize_changes(output, &config_path, &before, &preliminary, colored)?;
             }
         }
         let incoming = prepared(
@@ -1282,7 +1283,7 @@ impl ClientAdapter for Claude {
             writeln!(output, "Permission rules would change.")?;
         }
         if all_changes != before {
-            summarize_changes(output, &before, &all_changes, colored)?;
+            summarize_changes(output, &config_path, &before, &all_changes, colored)?;
         }
         if !auto_approve && (non_interactive || !stdin().is_terminal() || !stderr().is_terminal()) {
             return Err(AppError::ImportApprovalRequired);
@@ -1325,7 +1326,7 @@ impl ClientAdapter for Claude {
             .is_some_and(|(settings, change)| settings.config != *change);
         if proposed != all_changes && proposed != before {
             writeln!(output, "Selected server changes:")?;
-            summarize_changes(output, &before, &proposed, colored)?;
+            summarize_changes(output, &config_path, &before, &proposed, colored)?;
         }
         if proposed == before && !permissions_changed {
             writeln!(
@@ -1388,7 +1389,7 @@ impl ClientAdapter for Claude {
                     output,
                     "Preliminary changes; missing secrets will be requested for an exact comparison."
                 )?;
-                summarize_changes(output, &before, &preliminary, colored)?;
+                summarize_changes(output, &config_path, &before, &preliminary, colored)?;
             }
         }
         let mut proposed = prepared(
@@ -1423,7 +1424,7 @@ impl ClientAdapter for Claude {
             writeln!(output, "Permission rules would change.")?;
         }
         if proposed != before {
-            summarize_changes(output, &before, &proposed, colored)?;
+            summarize_changes(output, &config_path, &before, &proposed, colored)?;
         }
         if dry_run {
             return Ok(());

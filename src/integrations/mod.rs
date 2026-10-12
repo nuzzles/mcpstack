@@ -3,6 +3,7 @@ mod claude;
 mod codex;
 mod diff_output;
 mod listing;
+mod paths;
 mod portable;
 pub(crate) mod reserved;
 mod secrets;
@@ -27,11 +28,17 @@ use crate::error::{AppError, ErrorCode};
 
 fn write_change_summary(
     output: &mut impl Write,
+    target: &Path,
     added: &BTreeSet<String>,
     modified: &BTreeSet<String>,
     deleted: &BTreeSet<String>,
     colored: bool,
 ) -> std::io::Result<()> {
+    writeln!(
+        output,
+        "Target config: {}",
+        std::path::absolute(target)?.display()
+    )?;
     writeln!(output, "MCP server changes:")?;
     for (marker, label, color, names) in [
         ("+", "Added", 32, added),

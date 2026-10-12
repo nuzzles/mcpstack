@@ -23,6 +23,7 @@ impl Selection {
             .map_err(crate::error::AppError::StackRead)?;
         let crate::schema::Stack::V1(mut stack) = crate::schema::Stack::from_yaml(&document)?;
         self.apply(&mut stack)?;
+        super::paths::resolve(&mut stack, file).await?;
         Ok(stack)
     }
 
