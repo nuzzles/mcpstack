@@ -5,9 +5,16 @@ and switch stacks, and share setups across teams.
 
 ## Harness Support
 
-| mcpstack | Codex | Claude Code | Claude Desktop | Cursor | Gemini CLI | OpenCode | VS Code/Copilot | Windsurf |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0.1.0 | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Harness | mcpstack 0.1.0 |
+| --- | --- |
+| Codex | ✅ |
+| Claude Code | ✅ |
+| Claude Desktop | ❌ |
+| Cursor | ❌ |
+| Gemini CLI | ❌ |
+| OpenCode | ❌ |
+| VS Code/Copilot | ❌ |
+| Windsurf | ❌ |
 
 ✅ Supported · 🚧 In progress · ❌ Not implemented
 

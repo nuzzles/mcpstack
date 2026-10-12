@@ -65,6 +65,7 @@ to its entry in Current status at the bottom.\
 | Implementation | Brief description |
 | --- | --- |
 | Done | Claude Code user-scope JSON list, import, show, export, diff, and stack switching. [*](#claude-support) |
+| Unsupported | Manage Claude Code project- and local-scope MCP configurations. |
 
 ### CLI
 
@@ -87,6 +88,7 @@ to its entry in Current status at the bottom.\
 | Done | Test secret redaction and configuration preservation on success and failure for supported workflows. [*](#stack-workflow-tests) |
 | Done | Document human and AI workflows, failure handling, switching, and repeat imports. [*](#documentation-site) |
 | Unsupported | Detect newer mcpstack releases, notify users when the installed CLI is out of date, and automatically update to the latest release. |
+| Unsupported | Import and export WebSocket MCP server definitions for harnesses that support them. |
 
 ## Notes
 
