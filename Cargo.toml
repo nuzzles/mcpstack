@@ -24,6 +24,7 @@ similar = "2.7"
 tempfile = "3"
 yaml_serde = "0.10"
 directories = "6"
+typed-path = "0.12.3"
 dialoguer = { version = "0.12", default-features = false, features = ["password"] }
 
 tracing = "0.1"

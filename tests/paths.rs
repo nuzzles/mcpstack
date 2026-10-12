@@ -259,3 +259,42 @@ fn windows_paths_use_native_separators_and_reject_drive_relative_paths() {
         assert_eq!(std::fs::read(&config).unwrap(), before);
     }
 }
+
+#[test]
+fn windows_absolute_paths_are_preserved_on_every_host() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let stack = root.join("stack.yml");
+    let paths = [
+        r"C:\tools\server.exe",
+        "C:/tools/server.exe",
+        r"\\host\share\server.exe",
+        "//host/share/server.exe",
+        r"\\?\C:\tools\server.exe",
+        r"\\?\UNC\host\share\server.exe",
+        r"\\.\device\server",
+    ];
+    let definitions: serde_json::Map<_, _> = paths
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            (
+                format!("server{index}"),
+                json!({"transport":{"type":"stdio","command":path}}),
+            )
+        })
+        .collect();
+    std::fs::write(
+        &stack,
+        json!({"schema_version":1,"servers":definitions}).to_string(),
+    )
+    .unwrap();
+    for client in ["codex", "claude"] {
+        let config = root.join(client);
+        success(run(client, "use", &root, &stack, &config, &["-y"]));
+        let servers = read_servers(client, &config);
+        for (index, path) in paths.iter().enumerate() {
+            assert_eq!(servers[format!("server{index}")]["command"], *path);
+        }
+    }
+}

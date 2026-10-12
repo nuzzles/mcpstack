@@ -1,5 +1,8 @@
 //! Resolve literal filesystem paths without inspecting or executing servers.
-use std::path::{Component, Path};
+use std::ffi::OsStr;
+use std::path::Path;
+
+use typed_path::Utf8WindowsPath;
 
 use crate::error::AppError;
 use crate::schema::v1::{ConfigValue, Transport};
@@ -37,24 +40,21 @@ pub(super) async fn resolve(stack: &mut StackV1, file: &Path) -> Result<(), AppE
 }
 
 fn resolve_value(value: &mut String, base: &Path, executable: bool) -> Result<(), AppError> {
+    if value.trim().is_empty() || value.contains("${") {
+        return Ok(());
+    }
     let path = Path::new(value.as_str());
-    // Leave absolute paths and client-side interpolation intact. Also recognize
-    // Windows absolute paths on other platforms rather than prefixing them.
-    let bytes = value.as_bytes();
-    let windows_absolute = value.starts_with("\\\\")
-        || (bytes.len() >= 3
-            && bytes[0].is_ascii_alphabetic()
-            && bytes[1] == b':'
-            && matches!(bytes[2], b'/' | b'\\'));
-    if value.trim().is_empty() || path.has_root() || windows_absolute || value.contains("${") {
+    // Parse Windows syntax on every host, including UNC and verbatim paths.
+    let windows = Utf8WindowsPath::new(value.as_str());
+    if path.has_root() || windows.is_absolute() {
         return Ok(());
     }
     // Drive-relative Windows paths depend on per-drive process state, so they
     // cannot be resolved relative to a stack directory deterministically.
-    if matches!(path.components().next(), Some(Component::Prefix(_))) {
+    if cfg!(windows) && windows.components().has_prefix() {
         return Err(AppError::StackPath);
     }
-    if executable && !value.chars().any(std::path::is_separator) && value != "." && value != ".." {
+    if executable && path.file_name() == Some(OsStr::new(value.as_str())) {
         return Ok(());
     }
     let resolved = std::path::absolute(base.join(path)).map_err(AppError::StackRead)?;
