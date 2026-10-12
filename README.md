@@ -3,6 +3,9 @@
 A Rust CLI for humans and agents to install multiple MCP servers, version-control
 and switch stacks, and share setups across teams.
 
+> [!NOTE]
+> mcpstack is in early development.
+
 ## Harness Support
 
 | Harness | mcpstack 0.1.0 | main (source) |
