@@ -62,6 +62,14 @@ pub enum AppError {
     ExportPath,
     #[error("Export destination must differ from the client configuration file.")]
     ExportSource,
+    #[error(
+        "Export destination already exists. Use --overwrite to replace it, or run interactively to confirm."
+    )]
+    ExportOverwriteRequired,
+    #[error(
+        "Overwrite confirmation was cancelled or could not be completed. No stack was exported."
+    )]
+    ExportApprovalCancelled,
     #[error("{code}", code = ErrorCode::LoggingError)]
     Logging,
     #[error("{code}", code = ErrorCode::OutputError)]
@@ -99,7 +107,10 @@ impl AppError {
         match self {
             Self::Logging => ErrorCode::LoggingError,
             Self::Arguments | Self::Selection(_) => ErrorCode::InvalidArgument,
-            Self::ExportPath | Self::ExportSource => ErrorCode::InvalidArgument,
+            Self::ExportPath | Self::ExportSource | Self::ExportOverwriteRequired => {
+                ErrorCode::InvalidArgument
+            }
+            Self::ExportApprovalCancelled => ErrorCode::ExportError,
             Self::Output(_) => ErrorCode::OutputError,
             Self::StackRead(_) => ErrorCode::StackReadError,
             Self::StackWrite(_) => ErrorCode::StackWriteError,

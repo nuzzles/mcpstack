@@ -7,6 +7,9 @@ fn run(client: &str, operation: &str, config: &Path, file: &Path, flags: &[&str]
     if matches!(operation, "export" | "import" | "diff" | "use") {
         command.arg(file);
     }
+    if operation == "export" {
+        command.arg("--overwrite");
+    }
     command
         .arg("--config")
         .arg(config)

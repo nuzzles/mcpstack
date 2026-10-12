@@ -145,6 +145,11 @@ impl Snapshot {
         }
     }
 
+    /// Whether the snapshot captured an existing file, including an empty one.
+    pub fn exists(&self) -> bool {
+        self.original.is_some()
+    }
+
     /// An absent file is represented as empty input for the caller's parser.
     pub fn contents(&self) -> &[u8] {
         self.original.as_deref().unwrap_or_default()

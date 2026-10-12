@@ -160,7 +160,7 @@ fn list_show_and_export_share_default_filters_and_individual_flags() {
                     .env_remove("MCPSTACK_COLOR")
                     .stdin(Stdio::null());
                 if operation == "export" {
-                    command.arg(&destination);
+                    command.arg(&destination).arg("--overwrite");
                 }
                 if let Some(flag) = flag {
                     command.arg(flag);

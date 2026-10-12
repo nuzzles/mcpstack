@@ -3,21 +3,32 @@ use crate::error::AppError;
 use crate::integrations::ClientAdapter;
 use crate::io;
 use clap::Args;
-use std::io::Write;
+use dialoguer::Confirm;
+use std::io::{IsTerminal, Write, stderr, stdin};
 use std::path::PathBuf;
 
 /// Export client server definitions as a YAML stack to a file.
 struct Export {
     file: PathBuf,
+    overwrite: bool,
     show: Show,
+}
+
+#[derive(Args)]
+struct Destination {
+    /// Destination YAML stack file.
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+    /// Replace an existing stack file without prompting.
+    #[arg(long)]
+    overwrite: bool,
 }
 
 /// Export Codex MCP servers to a YAML stack file.
 #[derive(Args)]
 pub struct CodexExport {
-    /// Destination YAML stack file.
-    #[arg(value_name = "FILE")]
-    file: PathBuf,
+    #[command(flatten)]
+    destination: Destination,
     #[command(flatten)]
     show: CodexShow,
 }
@@ -30,7 +41,8 @@ impl CodexExport {
         non_interactive: bool,
     ) -> Result<(), AppError> {
         Export {
-            file: self.file,
+            file: self.destination.file,
+            overwrite: self.destination.overwrite,
             show: self.show.into_show(),
         }
         .run(target, output, non_interactive)
@@ -41,9 +53,8 @@ impl CodexExport {
 /// Export Claude Code MCP servers to a YAML stack file.
 #[derive(Args)]
 pub struct ClaudeExport {
-    /// Destination YAML stack file.
-    #[arg(value_name = "FILE")]
-    file: PathBuf,
+    #[command(flatten)]
+    destination: Destination,
     #[command(flatten)]
     show: ClaudeShow,
 }
@@ -56,7 +67,8 @@ impl ClaudeExport {
         non_interactive: bool,
     ) -> Result<(), AppError> {
         Export {
-            file: self.file,
+            file: self.destination.file,
+            overwrite: self.destination.overwrite,
             show: self.show.into_show(),
         }
         .run(target, output, non_interactive)
@@ -90,11 +102,32 @@ impl Export {
         {
             return Err(AppError::ExportSource);
         }
+        // Keep the same snapshot through approval and generation so a newly
+        // created or changed destination cannot be silently overwritten.
+        let destination = io::Snapshot::read(&self.file)
+            .await
+            .map_err(AppError::StackWrite)?;
+        if destination.exists() && !self.overwrite {
+            if non_interactive || !stdin().is_terminal() || !stderr().is_terminal() {
+                return Err(AppError::ExportOverwriteRequired);
+            }
+            if !Confirm::new()
+                .with_prompt(format!("Overwrite existing stack file {:?}?", self.file))
+                .default(false)
+                .report(false)
+                .interact()
+                .map_err(|_| AppError::ExportApprovalCancelled)?
+            {
+                writeln!(
+                    output,
+                    "Export cancelled; existing stack file was not changed."
+                )?;
+                return Ok(());
+            }
+        }
         let mut yaml = Vec::new();
         self.show.run(target, &mut yaml, non_interactive).await?;
-        io::Snapshot::read(&self.file)
-            .await
-            .map_err(AppError::StackWrite)?
+        destination
             .replace(&yaml)
             .await
             .map_err(AppError::StackWrite)?;
