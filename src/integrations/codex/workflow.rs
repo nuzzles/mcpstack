@@ -356,6 +356,7 @@ pub(crate) async fn run_import(
                 .collect();
             super::super::write_change_summary(
                 output,
+                &path,
                 &added,
                 &modified,
                 &BTreeSet::new(),
@@ -405,7 +406,14 @@ pub(crate) async fn run_import(
         .filter(|(_, (before, _))| before.is_some())
         .map(|(name, _)| name.clone())
         .collect();
-    super::super::write_change_summary(output, &added, &modified, &BTreeSet::new(), colored)?;
+    super::super::write_change_summary(
+        output,
+        &path,
+        &added,
+        &modified,
+        &BTreeSet::new(),
+        colored,
+    )?;
     let proposed_count = additions.len();
     let approved = if auto_approve {
         additions
@@ -461,6 +469,7 @@ pub(crate) async fn run_import(
             .collect();
         super::super::write_change_summary(
             output,
+            &path,
             &selected_added,
             &selected_modified,
             &BTreeSet::new(),
@@ -541,10 +550,10 @@ pub(crate) async fn run_use(
     }
     let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
     let snapshot = Snapshot::read(&path).await?;
-    let document = fs::read_to_string(file)
-        .await
-        .map_err(AppError::StackRead)?;
-    let stack = Stack::from_yaml(&document)?;
+    let stack: Stack = crate::integrations::selection::Selection::default()
+        .read_stack(&file)
+        .await?
+        .into();
     let (preliminary, _, missing) =
         preliminary_definitions(&snapshot, &stack, include_permissions)?;
     if missing && snapshot.replacement_proposal(&preliminary)?.0 {
@@ -569,7 +578,7 @@ pub(crate) async fn run_use(
             .filter(|name| !preliminary.contains_key(*name))
             .cloned()
             .collect();
-        super::super::write_change_summary(output, &added, &modified, &deleted, colored)?;
+        super::super::write_change_summary(output, &path, &added, &modified, &deleted, colored)?;
     }
     let interactive = !non_interactive && stdin().is_terminal() && stderr().is_terminal();
     let mut resolver = SecretResolver {
@@ -625,7 +634,7 @@ pub(crate) async fn run_use(
         "Would switch to {} MCP server(s); all servers absent from the stack would be removed.",
         definitions.len()
     )?;
-    super::super::write_change_summary(output, &added, &modified, &deleted, colored)?;
+    super::super::write_change_summary(output, &path, &added, &modified, &deleted, colored)?;
     if dry_run {
         return Ok(());
     }

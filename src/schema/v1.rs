@@ -72,11 +72,28 @@ pub enum ConfigValue {
     Null(()),
 }
 
+/// Whether literal stdio paths belong to the stack or the client's runtime context.
+#[derive(Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathResolution {
+    #[default]
+    Stack,
+    Client,
+}
+
+impl PathResolution {
+    fn is_stack(&self) -> bool {
+        matches!(self, Self::Stack)
+    }
+}
+
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Transport {
     Stdio {
         command: String,
+        #[serde(default, skip_serializing_if = "PathResolution::is_stack")]
+        path_resolution: PathResolution,
         #[serde(default)]
         args: Vec<ValueSource>,
         #[serde(default, deserialize_with = "unique_map")]
@@ -109,6 +126,8 @@ pub enum Transport {
 enum TransportInput {
     Stdio {
         command: String,
+        #[serde(default)]
+        path_resolution: PathResolution,
         #[serde(default)]
         args: Vec<ValueSource>,
         #[serde(default, deserialize_with = "unique_map")]
@@ -168,12 +187,14 @@ impl<'de> Deserialize<'de> for Transport {
         Ok(match input {
             TransportInput::Stdio {
                 command,
+                path_resolution,
                 args,
                 env,
                 env_vars,
                 cwd,
             } => Self::Stdio {
                 command,
+                path_resolution,
                 args,
                 env,
                 env_vars,
@@ -357,6 +378,7 @@ impl Server {
                 env,
                 env_vars,
                 cwd,
+                ..
             } => {
                 if !nonempty_text(command) || cwd.as_ref().is_some_and(|path| !nonempty_text(path))
                 {

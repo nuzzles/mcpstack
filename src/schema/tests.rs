@@ -55,6 +55,30 @@ fn supported_fields_round_trip_without_resolving_references() {
 }
 
 #[test]
+fn stdio_path_resolution_is_explicit_and_validated() {
+    let mut value = document();
+    for mode in ["stack", "client"] {
+        value["servers"]["local"]["transport"]["path_resolution"] = json!(mode);
+        let stack = parse(&value).unwrap();
+        let serialized = serde_json::to_value(&stack).unwrap();
+        let marker = &serialized["servers"]["local"]["transport"]["path_resolution"];
+        if mode == "stack" {
+            assert!(marker.is_null()); // Default behavior need not add YAML noise.
+        } else {
+            assert_eq!(marker, "client");
+        }
+        assert!(parse(&serialized).is_ok());
+    }
+    for invalid in [json!("unknown"), json!(null), json!(false)] {
+        value["servers"]["local"]["transport"]["path_resolution"] = invalid;
+        assert_eq!(
+            parse(&value).err().unwrap(),
+            ValidationError::InvalidDocument
+        );
+    }
+}
+
+#[test]
 fn stacks_are_client_independent_and_reject_legacy_compatibility_fields() {
     let minimal = json!({"schema_version":1,"servers":{}});
     let stack = parse(&minimal).unwrap();

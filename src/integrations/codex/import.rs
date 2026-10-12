@@ -163,6 +163,7 @@ pub fn prepare(
                             env,
                             env_vars,
                             cwd,
+                            ..
                         } => {
                             definition.command = Some(command.clone());
                             definition.args = args
@@ -281,6 +282,7 @@ impl Definition {
             {
                 Transport::Stdio {
                     command: command.clone(),
+                    path_resolution: crate::schema::v1::PathResolution::Client,
                     args: self
                         .args
                         .iter()

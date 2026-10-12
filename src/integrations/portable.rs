@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use crate::schema::v1::{
-    ApprovalMode, EnvironmentReference, Permissions, PrefixedEnvironmentReference,
+    ApprovalMode, EnvironmentReference, PathResolution, Permissions, PrefixedEnvironmentReference,
     ResolvedEnvironmentReference, Settings, Transport, ValueSource,
 };
 use crate::schema::{Server, StackV1};
@@ -243,6 +243,7 @@ fn codex_transport(fields: &mut Map<String, Value>, name: &str) -> Result<Transp
                 .unwrap_or_default();
             Ok(Transport::Stdio {
                 command,
+                path_resolution: PathResolution::Client,
                 args,
                 env,
                 env_vars,
@@ -292,6 +293,7 @@ fn claude_transport(fields: &mut Map<String, Value>, name: &str) -> Result<Trans
     match (command, url, kind.as_deref()) {
         (Some(command), None, None | Some("stdio")) => Ok(Transport::Stdio {
             command,
+            path_resolution: PathResolution::Client,
             args: take_array(fields, "args", name, true)?,
             env: take_map(fields, "env", name, true)?,
             env_vars: Vec::new(),

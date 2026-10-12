@@ -56,6 +56,7 @@ pub(crate) async fn run(
             )?;
             super::super::write_change_summary(
                 output,
+                &path,
                 &added,
                 &modified,
                 &Default::default(),
@@ -112,7 +113,14 @@ pub(crate) async fn run(
         .collect();
     let secrets: Vec<_> = resolver.values.into_values().flatten().collect();
     show_diff(&snapshot, &path, &incoming, &secrets, output, colored)?;
-    super::super::write_change_summary(output, &added, &modified, &Default::default(), colored)?;
+    super::super::write_change_summary(
+        output,
+        &path,
+        &added,
+        &modified,
+        &Default::default(),
+        colored,
+    )?;
     Ok(())
 }
 

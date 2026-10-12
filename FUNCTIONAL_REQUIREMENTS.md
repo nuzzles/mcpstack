@@ -77,7 +77,7 @@ to its entry in Current status at the bottom.\
 | Partial [*](#codex-import) | Keep discovery, validation, and planning free of writes and server execution. |
 | Partial [*](#codex-import) | Preview additions, updates, removals, conflicts, and blockers. |
 | Partial [*](#codex-import) | Show planned writes, downloads, and commands with secrets redacted. |
-| Unsupported | Resolve relative paths from the stack location; identify the target config. |
+| Done | Resolve literal relative executable and working-directory paths from the stack location; identify the target config. [*](#stack-relative-paths) |
 | Unsupported | Apply a whole stack as one transaction. [*](#transactions) |
 | Unsupported | Optionally continue installing independent servers after failures. [*](#continue-on-failure) |
 | Partial [*](#codex-import) | Require explicit conflict resolution and validate prerequisites before writes. |
@@ -275,6 +275,44 @@ remain unchanged. The entire stack must still satisfy the stack schema.
 Unknown names or explicitly selected excluded names fail with `INVALID_ARGUMENT`
 (exit 2) and no partial output, exports, or backups. `use` does not accept
 `--server`; it continues to replace the whole server set.
+
+### Stack-relative paths
+
+Both clients' `import`, `use`, and `diff` resolve literal relative `command`
+paths and `cwd` values from the directory containing the input stack. Portable
+stdio transports and native configuration definitions share this behavior.
+For `stacks/work.yml`, `command: ./bin/server` points to `stacks/bin/server` and
+`cwd: workspace` points to `stacks/workspace`. Each field is relative to the stack
+directory; the command is not resolved relative to `cwd`.
+
+Bare executable names such as `npx`, `uvx`, and `docker` remain PATH lookups.
+In stack-relative mode, absolute/rooted paths remain unchanged. Relative executable paths must contain
+a platform path separator (or be `.`/`..`); use `/` in stacks shared between
+platforms. Windows also accepts `\\` separators and rejects drive-relative paths
+such as `C:server.exe`. Existing Windows drive-rooted and UNC paths are preserved.
+
+Only literal command/cwd fields are resolved. Arguments, environment values,
+URLs, secret references, and strings containing client-side `${...}` expansion
+are unchanged. There is no shell expansion or executable/prerequisite check.
+Claude still rejects `cwd` because its server definitions cannot represent it.
+
+The stack's containing directory is resolved to an absolute directory. A symlinked
+stack uses the directory containing the link, not the linked file's directory.
+Server paths need not exist and are not canonicalized; previews and writes use
+the same resolved values. Loading does not modify the source stack.
+
+Stdio transports accept `path_resolution: stack` (the default) or
+`path_resolution: client`. Both clients' show/export commands emit `client` to
+preserve the original command and cwd literally: relative paths retain the
+client's runtime semantics instead of being rebased to the exported stack's
+directory. This preserves export/import round trips without guessing a launch
+directory. The marker is stack metadata and is never written into client configs.
+Use the default `stack` behavior for paths bundled alongside an authored stack.
+
+The stack filename and `--config` argument themselves remain relative to the CLI's
+working directory. Change summaries show the absolute target config path directly
+above the added/modified/deleted summary and before approval prompts. Control
+characters in the displayed path are escaped so filenames cannot alter the terminal.
 
 ### Transactions
 
