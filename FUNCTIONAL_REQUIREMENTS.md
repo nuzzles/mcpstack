@@ -85,7 +85,7 @@ to its entry in Current status at the bottom.\
 | Done | Repeat imports and stack switches without duplicates or unnecessary side effects when the stack, resolved values, and target configuration are unchanged. [*](#codex-import) |
 | Done | Mask recognized credentials in shared exports by default, expose them only on explicit request, and redact them from previews and diagnostics. [*](#secrets) |
 | Done | Test secret redaction and configuration preservation on success and failure for supported workflows. [*](#stack-workflow-tests) |
-| Unsupported | Document human and AI workflows, failure handling, switching, and repeat imports. |
+| Done | Document human and AI workflows, failure handling, switching, and repeat imports. [*](#documentation-site) |
 
 ## Notes
 
@@ -419,9 +419,24 @@ Stack format v1 defines YAML, STDIO/HTTP/SSE/WebSocket, client-independent
 configuration and transport definitions, and environment reference syntax.
 
 Remote catalogs, team access controls, and automatic synchronization are later
-scope. Publishing and release/deployment automation require explicit authorization.
+scope. CLI publishing and release/deployment automation require explicit authorization.
+Documentation publishing to GitHub Pages is supported.
 
 ## Current status
+
+### Documentation site
+
+The mdBook site at `https://nuzzles.github.io/mcpstack/` is built from
+[`docs/src`](docs/src/SUMMARY.md) and follows `main`. It covers source installation,
+scratch-config examples, export/import/switch workflows, secrets, permission
+opt-in, compatibility, failures, recovery, and repeat operations. Each chapter
+also has a Markdown download. `llms.txt` indexes the agent-readable pages and
+`llms-full.txt` combines them. The CLI reference and `cli-schema.json` are generated
+from the executable during the same build.
+
+PRs build and validate the site, YAML examples, scratch workflows, local links,
+and anchors. Merged changes deploy through GitHub Pages; PRs cannot deploy.
+Contributor build instructions are in [`docs/README.md`](docs/README.md).
 
 ### Commands and help
 
