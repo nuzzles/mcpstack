@@ -1,15 +1,17 @@
+use clap::Args;
+
 /// Claude Code skips user-configured MCP servers with these built-in names.
-/// Keep the export filter shared so stacks exported from Codex can be used by
-/// Claude Code without carrying names it cannot load.
 pub(crate) fn is_reserved(name: &str) -> bool {
-    matches!(
-        name,
-        "workspace" | "claude-in-chrome" | "computer-use" | "Claude Preview" | "Claude Browser"
-    )
+    ServerFilter {
+        node_repl: true,
+        ..Default::default()
+    }
+    .skip(name)
 }
 
 #[derive(Clone, Copy, Default)]
-pub(crate) struct ExportFilter {
+pub struct ServerFilter {
+    pub all: bool,
     pub workspace: bool,
     pub claude_in_chrome: bool,
     pub computer_use: bool,
@@ -18,8 +20,11 @@ pub(crate) struct ExportFilter {
     pub node_repl: bool,
 }
 
-impl ExportFilter {
+impl ServerFilter {
     pub fn skip(self, name: &str) -> bool {
+        if self.all {
+            return false;
+        }
         match name {
             "workspace" => !self.workspace,
             "claude-in-chrome" => !self.claude_in_chrome,
@@ -28,6 +33,76 @@ impl ExportFilter {
             "Claude Browser" => !self.claude_browser,
             "node_repl" => !self.node_repl,
             _ => false,
+        }
+    }
+}
+
+/// The same client-specific flags and defaults drive list, show, and export.
+pub trait FilterArgs {
+    fn filter(&self) -> ServerFilter;
+}
+
+#[derive(Args)]
+struct CommonFilterArgs {
+    /// Include every normally skipped server.
+    #[arg(long)]
+    all: bool,
+    /// Include the otherwise skipped computer-use server.
+    #[arg(long)]
+    allow_computer_use: bool,
+}
+
+#[derive(Args)]
+pub struct CodexFilterArgs {
+    #[command(flatten)]
+    common: CommonFilterArgs,
+    /// Include the otherwise skipped node_repl server.
+    #[arg(long)]
+    allow_node_repl: bool,
+}
+
+impl FilterArgs for CodexFilterArgs {
+    fn filter(&self) -> ServerFilter {
+        ServerFilter {
+            all: self.common.all,
+            computer_use: self.common.allow_computer_use,
+            node_repl: self.allow_node_repl,
+            workspace: true,
+            claude_in_chrome: true,
+            claude_preview: true,
+            claude_browser: true,
+        }
+    }
+}
+
+#[derive(Args)]
+pub struct ClaudeFilterArgs {
+    #[command(flatten)]
+    common: CommonFilterArgs,
+    /// Include the otherwise skipped workspace server.
+    #[arg(long)]
+    allow_workspace: bool,
+    /// Include the otherwise skipped claude-in-chrome server.
+    #[arg(long)]
+    allow_claude_in_chrome: bool,
+    /// Include the otherwise skipped Claude Preview server.
+    #[arg(long)]
+    allow_claude_preview: bool,
+    /// Include the otherwise skipped Claude Browser server.
+    #[arg(long)]
+    allow_claude_browser: bool,
+}
+
+impl FilterArgs for ClaudeFilterArgs {
+    fn filter(&self) -> ServerFilter {
+        ServerFilter {
+            all: self.common.all,
+            computer_use: self.common.allow_computer_use,
+            workspace: self.allow_workspace,
+            claude_in_chrome: self.allow_claude_in_chrome,
+            claude_preview: self.allow_claude_preview,
+            claude_browser: self.allow_claude_browser,
+            node_repl: true,
         }
     }
 }

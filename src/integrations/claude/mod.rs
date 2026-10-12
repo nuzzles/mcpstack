@@ -1055,7 +1055,12 @@ async fn write_with_permissions(
     Ok(())
 }
 impl ClientAdapter for Claude {
-    async fn list(&self, config: Option<PathBuf>, output: &mut impl Write) -> Result<(), AppError> {
+    async fn list(
+        &self,
+        config: Option<PathBuf>,
+        filter: super::reserved::ServerFilter,
+        output: &mut impl Write,
+    ) -> Result<(), AppError> {
         let bytes = fs::read(path(config)?)
             .await
             .map_err(AppError::ConfigRead)?;
@@ -1068,7 +1073,7 @@ impl ClientAdapter for Claude {
             )
             .map_err(|_| AppError::ListConfig)?
         };
-        super::listing::write(output, &config, super::listing::Source::Claude)
+        super::listing::write(output, &config, super::listing::Source::Claude, filter)
     }
 
     async fn export(

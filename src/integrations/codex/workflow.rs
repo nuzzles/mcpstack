@@ -220,6 +220,7 @@ fn mode_text(mode: ApprovalMode) -> &'static str {
 
 pub(crate) async fn run_list(
     config: Option<PathBuf>,
+    filter: crate::integrations::reserved::ServerFilter,
     output: &mut impl Write,
 ) -> Result<(), AppError> {
     let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
@@ -232,12 +233,13 @@ pub(crate) async fn run_list(
         output,
         &config,
         crate::integrations::listing::Source::Codex,
+        filter,
     )
 }
 
 pub(crate) async fn run_export(
     config: Option<PathBuf>,
-    filter: crate::integrations::reserved::ExportFilter,
+    filter: crate::integrations::reserved::ServerFilter,
     include_permissions: bool,
     output: &mut impl Write,
     non_interactive: bool,

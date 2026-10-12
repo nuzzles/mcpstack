@@ -185,7 +185,7 @@ server and field name without printing field values.
 Codex export skips `computer-use` and `node_repl` by default. Claude Code export
 skips its built-in names `workspace`, `claude-in-chrome`, `computer-use`,
 `Claude Preview`, and `Claude Browser` by default. Each client exposes only its
-relevant `--allow-*` flags on `show` and `export`; `--all` includes every normally
+relevant `--allow-*` flags on `list`, `show`, and `export`; `--all` includes every normally
 skipped name. `--permissions-config` is available only for Claude Code export.
 The filter runs before server validation and leaves source configuration unchanged.
 Codex `http_headers` map to portable `headers`. `bearer_token_env_var` maps to
@@ -239,11 +239,14 @@ beyond Codex remain future work.
 `mcpstack codex list` and `mcpstack claude list` read the same default configuration
 paths as their adapters, or the file selected by `--config <path>`. They print a
 table sorted by server name with transport, configuration state, and command or
-endpoint. Listing includes names normally skipped by export. It does not prompt,
+endpoint. Listing shares the same default exclusions and client-specific
+`--allow-*` flags as show/export; `--all` includes every normally skipped name.
+The shared filter runs before server validation. It does not prompt,
 resolve secrets, write files or backups, run helpers, or contact MCP servers.
 
 Codex state is `enabled` (the default when absent) or `disabled`. Claude lists
 user-scope definitions as `configured`, and its reserved names as `ignored`.
+Output contains only the table, without an explanatory footer.
 Claude project and permission overrides are not evaluated; configuration state
 does not establish connection health. No synthetic per-server enabled flag is
 invented for Claude.
@@ -254,7 +257,7 @@ displayed. Names and commands escape terminal control characters. No new
 credential values are read from the environment. Listing validates its displayed
 fields without rejecting unrelated or newer settings. Invalid definitions fail
 with `CONFIG_READ_ERROR` and no partial table. A missing configuration fails;
-an empty configuration or server map reports `No MCP servers configured.`
+an empty configuration, server map, or filtered result reports `No MCP servers configured.`
 
 ### Transactions
 

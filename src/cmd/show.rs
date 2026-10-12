@@ -1,4 +1,5 @@
 use crate::error::AppError;
+use crate::integrations::reserved::{ClaudeFilterArgs, CodexFilterArgs, FilterArgs};
 use crate::integrations::{ClientAdapter, ExportArgs};
 use clap::Args;
 use std::io::Write;
@@ -37,19 +38,13 @@ impl Show {
 pub struct CodexShow {
     #[command(flatten)]
     show: Show,
-    /// Include the otherwise skipped computer-use server.
-    #[arg(long)]
-    allow_computer_use: bool,
-    /// Include the otherwise skipped node_repl server.
-    #[arg(long)]
-    allow_node_repl: bool,
+    #[command(flatten)]
+    filter: CodexFilterArgs,
 }
 
 impl CodexShow {
     pub(crate) fn into_show(mut self) -> Show {
-        self.show
-            .args
-            .for_codex(self.allow_computer_use, self.allow_node_repl);
+        self.show.args.server_filter = self.filter.filter();
         self.show
     }
 
@@ -71,33 +66,14 @@ pub struct ClaudeShow {
     /// Read Claude Code permission rules from this settings file.
     #[arg(long, value_name = "PATH")]
     permissions_config: Option<PathBuf>,
-    /// Include the otherwise skipped workspace server.
-    #[arg(long)]
-    allow_workspace: bool,
-    /// Include the otherwise skipped claude-in-chrome server.
-    #[arg(long)]
-    allow_claude_in_chrome: bool,
-    /// Include the otherwise skipped computer-use server.
-    #[arg(long)]
-    allow_computer_use: bool,
-    /// Include the otherwise skipped Claude Preview server.
-    #[arg(long)]
-    allow_claude_preview: bool,
-    /// Include the otherwise skipped Claude Browser server.
-    #[arg(long)]
-    allow_claude_browser: bool,
+    #[command(flatten)]
+    filter: ClaudeFilterArgs,
 }
 
 impl ClaudeShow {
     pub(crate) fn into_show(mut self) -> Show {
-        self.show.args.for_claude(
-            self.permissions_config,
-            self.allow_workspace,
-            self.allow_claude_in_chrome,
-            self.allow_computer_use,
-            self.allow_claude_preview,
-            self.allow_claude_browser,
-        );
+        self.show.args.permissions_config = self.permissions_config;
+        self.show.args.server_filter = self.filter.filter();
         self.show
     }
 

@@ -1,10 +1,16 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
 fn run(client: &str, config: &Path) -> Output {
+    run_with_flags(client, config, &[])
+}
+
+fn run_with_flags(client: &str, config: &Path, flags: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mcpstack"))
         .args([client, "list", "--config"])
         .arg(config)
+        .args(flags)
         .env_remove("RUST_LOG")
         .env_remove("MCPSTACK_COLOR")
         .env("PATH", "")
@@ -17,6 +23,153 @@ fn success(output: &Output) -> String {
     assert!(output.status.success(), "{output:?}");
     assert!(output.stderr.is_empty(), "{output:?}");
     String::from_utf8(output.stdout.clone()).unwrap()
+}
+
+#[test]
+fn list_show_and_export_share_default_filters_and_individual_flags() {
+    let names = [
+        "ordinary",
+        "computer-use",
+        "node_repl",
+        "workspace",
+        "claude-in-chrome",
+        "Claude Preview",
+        "Claude Browser",
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    for client in ["codex", "claude"] {
+        let config = dir.path().join(if client == "codex" {
+            "config.toml"
+        } else {
+            "claude.json"
+        });
+        let document = if client == "codex" {
+            names
+                .iter()
+                .map(|name| format!("[mcp_servers.{name:?}]\ncommand='tool'\n"))
+                .collect::<String>()
+        } else {
+            let servers: serde_json::Map<_, _> = names
+                .iter()
+                .map(|name| ((*name).into(), serde_json::json!({"command":"tool"})))
+                .collect();
+            serde_json::json!({"mcpServers":servers}).to_string()
+        };
+        std::fs::write(&config, &document).unwrap();
+        let default: BTreeSet<String> = if client == "codex" {
+            [
+                "ordinary",
+                "workspace",
+                "claude-in-chrome",
+                "Claude Preview",
+                "Claude Browser",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+        } else {
+            ["ordinary", "node_repl"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        };
+        let mut cases = vec![
+            (None, None),
+            (Some("--all"), None),
+            (Some("--allow-computer-use"), Some("computer-use")),
+        ];
+        if client == "codex" {
+            cases.push((Some("--allow-node-repl"), Some("node_repl")));
+        } else {
+            cases.extend([
+                (Some("--allow-workspace"), Some("workspace")),
+                (Some("--allow-claude-in-chrome"), Some("claude-in-chrome")),
+                (Some("--allow-claude-preview"), Some("Claude Preview")),
+                (Some("--allow-claude-browser"), Some("Claude Browser")),
+            ]);
+        }
+        for (flag, included) in cases {
+            let mut expected = default.clone();
+            if flag == Some("--all") {
+                expected = names.into_iter().map(str::to_owned).collect();
+            }
+            if let Some(name) = included {
+                expected.insert(name.to_owned());
+            }
+            for operation in ["list", "show", "export"] {
+                let destination = dir.path().join("stack.yml");
+                let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
+                command
+                    .args([client, operation, "--config"])
+                    .arg(&config)
+                    .env_remove("RUST_LOG")
+                    .env_remove("MCPSTACK_COLOR")
+                    .stdin(Stdio::null());
+                if operation == "export" {
+                    command.arg(&destination);
+                }
+                if let Some(flag) = flag {
+                    command.arg(flag);
+                }
+                let output = success(&command.output().unwrap());
+                let actual: BTreeSet<String> = if operation == "list" {
+                    output
+                        .lines()
+                        .skip(1)
+                        .map(|line| line.split("  ").next().unwrap().to_owned())
+                        .collect()
+                } else {
+                    let yaml = if operation == "show" {
+                        output
+                    } else {
+                        std::fs::read_to_string(&destination).unwrap()
+                    };
+                    let stack: serde_json::Value = yaml_serde::from_str(&yaml).unwrap();
+                    stack["servers"]
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .cloned()
+                        .collect()
+                };
+                assert_eq!(actual, expected, "{client} {operation} {flag:?}");
+            }
+        }
+        assert_eq!(std::fs::read_to_string(config).unwrap(), document);
+    }
+}
+
+#[test]
+fn list_filters_before_validation_and_rejects_other_clients_flags() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config");
+    for (client, document, foreign_flag) in [
+        (
+            "codex",
+            "mcp_servers.computer-use='fixture-secret'",
+            "--allow-workspace",
+        ),
+        (
+            "claude",
+            "{\"mcpServers\":{\"computer-use\":\"fixture-secret\"}}",
+            "--allow-node-repl",
+        ),
+    ] {
+        std::fs::write(&config, document).unwrap();
+        assert_eq!(
+            success(&run(client, &config)),
+            "No MCP servers configured.\n"
+        );
+        for flag in ["--all", "--allow-computer-use"] {
+            let output = run_with_flags(client, &config, &[flag]);
+            assert_eq!(output.status.code(), Some(5));
+            assert!(output.stdout.is_empty());
+            assert!(!String::from_utf8_lossy(&output.stderr).contains("fixture-secret"));
+        }
+        let output = run_with_flags(client, &config, &[foreign_flag]);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+    }
 }
 
 #[test]
@@ -40,7 +193,7 @@ command = 'node'
 command = 'computer'
 "#;
     std::fs::write(&config, original).unwrap();
-    let output = success(&run("codex", &config));
+    let output = success(&run_with_flags("codex", &config, &["--all"]));
     let lines: Vec<_> = output
         .lines()
         .map(|line| line.split_whitespace().collect::<Vec<_>>())
@@ -66,7 +219,10 @@ command = 'computer'
     ] {
         assert!(!output.contains(secret), "{output}");
     }
-    assert_eq!(success(&run("codex", &config)), output);
+    assert_eq!(
+        success(&run_with_flags("codex", &config, &["--all"])),
+        output
+    );
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
 }
@@ -87,10 +243,9 @@ fn claude_lists_user_scope_transports_and_reserved_names_without_claiming_enable
         }
     }).to_string();
     std::fs::write(&config, &original).unwrap();
-    let output = success(&run("claude", &config));
+    let output = success(&run_with_flags("claude", &config, &["--all"]));
     let lines: Vec<_> = output
         .lines()
-        .take(6)
         .map(|line| line.split_whitespace().collect::<Vec<_>>())
         .collect();
     assert_eq!(
@@ -120,7 +275,9 @@ fn claude_lists_user_scope_transports_and_reserved_names_without_claiming_enable
             "mcpstack-nonexistent-fixture"
         ]
     );
-    assert!(output.contains("project and permission overrides are not evaluated"));
+    assert_eq!(lines.len(), 6);
+    assert!(!output.contains("Configured:"));
+    assert!(!output.contains("permission"));
     for value in ["secret", "project-only", "theme"] {
         assert!(!output.contains(value), "{output}");
     }

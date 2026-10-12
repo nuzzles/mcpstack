@@ -17,6 +17,7 @@ pub(super) fn write(
     output: &mut impl Write,
     config: &Value,
     source: Source,
+    filter: super::reserved::ServerFilter,
 ) -> Result<(), AppError> {
     let root = config.as_object().ok_or(AppError::ListConfig)?;
     let key = match source {
@@ -34,6 +35,7 @@ pub(super) fn write(
     // Prepare every row before writing, so invalid entries produce no partial list.
     let rows = definitions
         .into_iter()
+        .filter(|(name, _)| !filter.skip(name))
         .map(|(name, value)| row(name, value, source))
         .collect::<Result<Vec<_>, _>>()?;
     if rows.is_empty() {
@@ -55,12 +57,6 @@ pub(super) fn write(
     write_row(output, &headers.map(str::to_owned), &widths)?;
     for row in &rows {
         write_row(output, row, &widths)?;
-    }
-    if matches!(source, Source::Claude) {
-        writeln!(
-            output,
-            "\nConfigured: user-scope definition; project and permission overrides are not evaluated."
-        )?;
     }
     Ok(())
 }
