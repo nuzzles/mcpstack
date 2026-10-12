@@ -21,6 +21,7 @@ pub(super) fn styles() -> Styles {
 impl Cli {
     pub fn parse_args() -> Result<Self, clap::Error> {
         let args: Vec<_> = std::env::args_os().collect();
+        // Keep usage stable across platforms and avoid echoing a custom argv[0].
         let mut command = Self::command().bin_name("mcpstack");
         let color = diagnostic_color(&command, &args);
         command = command.color(color);

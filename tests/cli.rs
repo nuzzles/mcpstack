@@ -153,13 +153,8 @@ fn client_commands_require_an_operation_and_reject_legacy_syntax() {
         let output = run(&["codex", operation, "--help"]);
         assert!(output.status.success());
         let help = String::from_utf8(output.stdout).unwrap();
-        let executable = std::path::Path::new(env!("CARGO_BIN_EXE_mcpstack"))
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap();
         assert!(
-            help.contains(&format!("Usage: {executable} codex {operation}")),
+            help.contains(&format!("Usage: mcpstack codex {operation}")),
             "Unexpected help for {operation}: {help}"
         );
         assert!(!help.contains("--client"));
