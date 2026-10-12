@@ -7,6 +7,8 @@ use crate::schema::{SCHEMA_VERSION, Server, StackV1, v1::ConfigValue};
 /// Diagnostics deliberately omit parser contents, field values.
 #[derive(Debug, Error)]
 pub enum ExportError {
+    #[error(transparent)]
+    Selection(#[from] crate::integrations::selection::Error),
     #[error("Unable to parse Codex configuration as supported TOML data.")]
     Config,
     #[error("Codex mcp_servers and each server entry must be tables.")]
@@ -53,8 +55,12 @@ pub fn export_with_filter(
 ) -> Result<StackV1, ExportError> {
     let config: toml::Value = toml::from_str(document).map_err(|_| ExportError::Config)?;
     let servers = match config.get("mcp_servers") {
-        None => serde_json::Map::new(),
+        None => {
+            filter.validate(std::iter::empty())?;
+            serde_json::Map::new()
+        }
         Some(toml::Value::Table(table)) => {
+            filter.validate(table.keys().map(String::as_str))?;
             let mut table = table.clone();
             let reserved: Vec<_> = table
                 .keys()

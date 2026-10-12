@@ -70,7 +70,7 @@ to its entry in Current status at the bottom.\
 | Implementation | Brief description |
 | --- | --- |
 | Done | List server names, transports, commands/endpoints, and available configuration state. [*](#listing-servers) |
-| Unsupported | Select servers by name; reject unknown selections. |
+| Done | Select servers by name; reject unknown selections. [*](#server-selection) |
 | Unsupported | Diagnose missing, empty, malformed, and unsupported configs. |
 | Done | Switch between stack files, replacing the complete MCP server set. [*](#switching-stacks) |
 | Unsupported | Detect machine-specific paths and missing local prerequisites. |
@@ -258,6 +258,26 @@ credential values are read from the environment. Listing validates its displayed
 fields without rejecting unrelated or newer settings. Invalid definitions fail
 with `CONFIG_READ_ERROR` and no partial table. A missing configuration fails;
 an empty configuration, server map, or filtered result reports `No MCP servers configured.`
+
+### Server selection
+
+Both clients accept repeatable `--server <NAME>` on `list`, `show`, `export`,
+`import`, and `diff`. Names match exactly and case-sensitively; repeating a name
+does not duplicate it. With no selection, commands retain their existing behavior.
+For example: `mcpstack codex export work.yml --server github --server linear` or
+`mcpstack claude import work.yml --server github`.
+
+List/show/export select from the source config before validating server fields
+or prompting for credentials. Default exclusions still apply: explicitly selecting
+a skipped name requires its `--allow-*` flag or `--all`. `--all` enables skipped
+names but does not expand an explicit selection.
+
+Import/diff select from the stack before adapter conversion, secret resolution,
+and permission planning. Unselected target servers and their permission rules
+remain unchanged. The entire stack must still satisfy the stack schema.
+Unknown names or explicitly selected excluded names fail with `INVALID_ARGUMENT`
+(exit 2) and no partial output, exports, or backups. `use` does not accept
+`--server`; it continues to replace the whole server set.
 
 ### Transactions
 

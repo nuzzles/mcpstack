@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::io::{IsTerminal, Write, stderr, stdin};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use tokio::fs;
 
 use serde_json::Value as Json;
 use toml_edit::{Item, Value};
@@ -19,6 +18,7 @@ use super::{Error, default_config};
 pub(crate) async fn run(
     file: PathBuf,
     config: Option<PathBuf>,
+    selection: crate::integrations::selection::Selection,
     include_permissions: bool,
     output: &mut impl Write,
     non_interactive: bool,
@@ -26,10 +26,7 @@ pub(crate) async fn run(
 ) -> Result<(), AppError> {
     let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
     let snapshot = Snapshot::read(&path).await?;
-    let document = fs::read_to_string(file)
-        .await
-        .map_err(AppError::StackRead)?;
-    let stack = Stack::from_yaml(&document)?;
+    let stack: Stack = selection.read_stack(&file).await?.into();
     let (preliminary, preliminary_secrets, missing) =
         super::workflow::preliminary_definitions(&snapshot, &stack, include_permissions)?;
     if missing {
