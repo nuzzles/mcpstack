@@ -435,7 +435,8 @@ also has a Markdown download. `llms.txt` indexes the agent-readable pages and
 from the executable during the same build. The generated reference and agent
 indexes identify the executable's version.
 
-Section 2, Compatibility, has Claude Code and Codex subsections covering supported
+Section 1, Installation, covers prerequisites, source installation, and a scratch
+preview. Section 2, Compatibility, has Claude Code and Codex subsections covering supported
 scopes, configuration paths, commands, and compatibility limits. Section 3,
 Commands, includes a concise subsection for every operation, with shared examples
 and links to both harnesses' generated help files. Pages keep full option listings

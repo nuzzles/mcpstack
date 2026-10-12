@@ -2,7 +2,7 @@
 
 [Overview](index.md)
 
-- [Getting started](getting-started.md)
+- [Installation](getting-started.md)
   - [Everyday workflows](workflows.md)
   - [Secrets and permissions](secrets-and-permissions.md)
   - [Failures and recovery](recovery.md)

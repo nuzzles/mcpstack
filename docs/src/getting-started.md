@@ -1,6 +1,4 @@
-# Getting started
-
-## Install
+# Installation
 
 Requires [Rust 1.98+](https://www.rust-lang.org/tools/install).
 
