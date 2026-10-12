@@ -87,13 +87,12 @@ to its entry in Current status at the bottom.\
 | Done | Mask recognized credentials in shared exports by default, expose them only on explicit request, and redact them from previews and diagnostics. [*](#secrets) |
 | Done | Test secret redaction and configuration preservation on success and failure for supported workflows. [*](#stack-workflow-tests) |
 | Done | Document human and AI workflows, failure handling, switching, and repeat imports. [*](#documentation-site) |
-| Unsupported | Import and export WebSocket MCP server definitions for harnesses that support them. |
+| Unsupported | Import and export Claude Code WebSocket MCP server definitions. [*](#websocket-support) |
 
 ## Initial release
 
 | Implementation | Brief description |
 | --- | --- |
-| Unsupported | Claude Desktop MCP server list, import, show, export, diff, and stack switching. |
 | Done | Detect newer stable releases, notify users when the CLI is out of date, and install updates with `mcpstack update` after approval. [*](#updates) |
 
 ## Notes
@@ -432,6 +431,19 @@ scope. CLI publishing and release/deployment automation require explicit authori
 Documentation publishing to GitHub Pages is supported.
 
 ## Current status
+
+### WebSocket support
+
+Stack v1 accepts `transport: {type: websocket, url: 'wss://...'}` and validates
+WebSocket URL schemes. Adapter support is not implemented: mcpstack's Claude Code
+adapter rejects native `type: ws` entries and portable WebSocket stacks; its Codex
+adapter rejects WebSocket stacks too.
+
+[Claude Code supports WebSocket MCP](https://code.claude.com/docs/en/mcp#option-4-add-a-remote-websocket-server)
+through native `type: ws` definitions, so its adapter still needs that mapping,
+redaction, and round-trip coverage. [Codex documents STDIO and Streamable HTTP](https://developers.openai.com/codex/mcp)
+as its supported MCP transports. WebSocket remains future work, outside the
+initial-release requirements.
 
 ### Updates
 

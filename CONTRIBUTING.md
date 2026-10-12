@@ -58,6 +58,21 @@ Keep commands predictable for humans and agents. Preserve unrelated client
 settings, never log secrets, and test meaningful behavior as it is implemented.
 Do not commit real client configurations or credentials as fixtures.
 
+## Releases
+
+Publish manually from a clean `main` after its CI passes. `Cargo.toml` is the
+version source. Review package contents and verify the crate before publishing:
+
+```sh
+cargo package --locked --list
+cargo publish --locked --dry-run
+```
+
+After approval, run `cargo publish --locked`. Verify that the published version
+installs with `cargo install mcpstack --locked --version <VERSION> --root <TEMP_DIR>`
+and reports that version with `--version`. Create the matching `v<VERSION>` Git
+tag and GitHub release. There is no automatic package publishing.
+
 ## Cross-platform diagnostics and discovery
 
 Keep errors in shared code platform-neutral and actionable on macOS, Linux, and

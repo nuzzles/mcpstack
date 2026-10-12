@@ -1,18 +1,40 @@
 use super::*;
+use std::io::ErrorKind;
 use std::net::TcpListener;
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 fn server(status: &str, body: &str) -> (String, JoinHandle<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     let worker = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        // A client can time out before connecting. Never let fixture cleanup
+        // wait forever for a connection that will no longer arrive.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "mock registry received no connection"
+                    );
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("mock registry accept failed: {error}"),
+            }
+        };
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(2)))
             .unwrap();
         let mut request = vec![0; 8192];
         let size = stream.read(&mut request).unwrap();
@@ -94,20 +116,23 @@ async fn no_release_differs_from_unavailable_or_invalid_registry() {
 }
 
 #[tokio::test]
-async fn limits_body_size_and_total_request_time() {
+async fn limits_response_body_size() {
     let (url, worker) = server("200 OK", &" ".repeat(MAX_RESPONSE_BYTES + 1));
     assert!(fetch_latest(&url, Duration::from_secs(2)).await.is_err());
     worker.join().unwrap();
+}
+
+#[tokio::test]
+async fn request_timeout_finishes_even_when_server_never_accepts() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
-    let worker = thread::spawn(move || {
-        let (_stream, _) = listener.accept().unwrap();
-        thread::sleep(Duration::from_millis(150));
-    });
-    let started = std::time::Instant::now();
+    // The listening socket can complete a TCP handshake, but never responds.
+    // No accept worker is needed: client timeout can happen before connection,
+    // especially while native certificates are loading on macOS.
+    let started = Instant::now();
     assert!(fetch_latest(&url, Duration::from_millis(50)).await.is_err());
     assert!(started.elapsed() < Duration::from_secs(1));
-    worker.join().unwrap();
+    drop(listener);
 }
 
 #[tokio::test]
