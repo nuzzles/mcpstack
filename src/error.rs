@@ -72,6 +72,10 @@ pub enum AppError {
     Stack(#[from] ValidationError),
     #[error("{code}", code = ErrorCode::ConfigReadError)]
     ConfigRead(#[source] io::Error),
+    #[error(
+        "Cannot list MCP servers: invalid configuration or server definition. Check the server table, transport, command/URL, and enabled field."
+    )]
+    ListConfig,
     #[error("{0}")]
     Integration(#[from] crate::integrations::Error),
     #[error(
@@ -98,7 +102,7 @@ impl AppError {
             Self::StackRead(_) => ErrorCode::StackReadError,
             Self::StackWrite(_) => ErrorCode::StackWriteError,
             Self::Stack(_) => ErrorCode::InvalidStack,
-            Self::ConfigRead(_) => ErrorCode::ConfigReadError,
+            Self::ConfigRead(_) | Self::ListConfig => ErrorCode::ConfigReadError,
             Self::ImportApprovalRequired
             | Self::UseApprovalRequired
             | Self::ImportApprovalCancelled => ErrorCode::ImportError,

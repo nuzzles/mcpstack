@@ -2,6 +2,7 @@
 mod claude;
 mod codex;
 mod diff_output;
+mod listing;
 mod portable;
 mod reserved;
 mod secrets;
@@ -17,6 +18,7 @@ use crate::cmd::{
     diff::Diff,
     export::{ClaudeExport, CodexExport},
     import::Import,
+    list::List,
     show::{ClaudeShow, CodexShow},
     r#use::Use,
 };
@@ -58,6 +60,7 @@ pub const EXAMPLES: &[&str] = &[
     "mcpstack --help",
     "mcpstack validate --help",
     "mcpstack codex --help",
+    "mcpstack codex list --help",
     "mcpstack codex use --help",
     "mcpstack codex use work.yml --dry-run",
     "mcpstack codex show --help",
@@ -65,6 +68,7 @@ pub const EXAMPLES: &[&str] = &[
     "mcpstack codex import --help",
     "mcpstack codex diff --help",
     "mcpstack claude --help",
+    "mcpstack claude list --help",
     "mcpstack claude show --help",
     "mcpstack claude export --help",
 ];
@@ -176,6 +180,7 @@ pub struct CodexCommands {
 
 #[derive(Subcommand)]
 enum CodexOperation {
+    List(List),
     Use(Use),
     Import(Import),
     Show(CodexShow),
@@ -192,6 +197,7 @@ pub struct ClaudeCommands {
 
 #[derive(Subcommand)]
 enum ClaudeOperation {
+    List(List),
     Use(Use),
     Import(Import),
     Show(ClaudeShow),
@@ -208,6 +214,7 @@ impl Client {
     ) -> Result<(), AppError> {
         match self {
             Self::Codex(commands) => match commands.operation {
+                CodexOperation::List(args) => args.run(&Codex, output).await,
                 CodexOperation::Use(args) => {
                     args.run(&Codex, output, non_interactive, colored).await
                 }
@@ -221,6 +228,7 @@ impl Client {
                 }
             },
             Self::Claude(commands) => match commands.operation {
+                ClaudeOperation::List(args) => args.run(&Claude, output).await,
                 ClaudeOperation::Use(args) => {
                     args.run(&Claude, output, non_interactive, colored).await
                 }
@@ -238,6 +246,8 @@ impl Client {
 }
 
 pub trait ClientAdapter {
+    async fn list(&self, config: Option<PathBuf>, output: &mut impl Write) -> Result<(), AppError>;
+
     async fn show(
         &self,
         args: ExportArgs,
@@ -287,6 +297,10 @@ pub struct Codex;
 pub struct Claude;
 
 impl ClientAdapter for Codex {
+    async fn list(&self, config: Option<PathBuf>, output: &mut impl Write) -> Result<(), AppError> {
+        codex::workflow::run_list(config, output).await
+    }
+
     async fn export(
         &self,
         args: ExportArgs,

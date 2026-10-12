@@ -41,7 +41,7 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
         .find(|command| command["name"] == "codex")
         .unwrap();
     let operations = codex["commands"].as_array().unwrap();
-    for name in ["use", "import", "show", "export", "diff"] {
+    for name in ["list", "use", "import", "show", "export", "diff"] {
         assert!(operations.iter().any(|operation| operation["name"] == name));
         assert!(!commands.iter().any(|command| command["name"] == name));
     }
@@ -149,7 +149,7 @@ fn client_commands_require_an_operation_and_reject_legacy_syntax() {
         assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
         assert!(output.stdout.is_empty(), "{args:?}");
     }
-    for operation in ["use", "import", "show", "export", "diff"] {
+    for operation in ["list", "use", "import", "show", "export", "diff"] {
         let output = run(&["codex", operation, "--help"]);
         assert!(output.status.success());
         let help = String::from_utf8(output.stdout).unwrap();

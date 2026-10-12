@@ -1055,6 +1055,22 @@ async fn write_with_permissions(
     Ok(())
 }
 impl ClientAdapter for Claude {
+    async fn list(&self, config: Option<PathBuf>, output: &mut impl Write) -> Result<(), AppError> {
+        let bytes = fs::read(path(config)?)
+            .await
+            .map_err(AppError::ConfigRead)?;
+        let config = if bytes.is_empty() {
+            Value::Object(Map::new())
+        } else {
+            // ConfigValue rejects duplicate keys, including nested definitions.
+            serde_json::to_value(
+                serde_json::from_slice::<ConfigValue>(&bytes).map_err(|_| AppError::ListConfig)?,
+            )
+            .map_err(|_| AppError::ListConfig)?
+        };
+        super::listing::write(output, &config, super::listing::Source::Claude)
+    }
+
     async fn export(
         &self,
         args: ExportArgs,

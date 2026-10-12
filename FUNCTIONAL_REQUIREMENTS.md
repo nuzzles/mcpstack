@@ -69,7 +69,7 @@ to its entry in Current status at the bottom.\
 
 | Implementation | Brief description |
 | --- | --- |
-| Unsupported | List server names, transports, commands/endpoints, and enabled state. |
+| Done | List server names, transports, commands/endpoints, and available configuration state. [*](#listing-servers) |
 | Unsupported | Select servers by name; reject unknown selections. |
 | Unsupported | Diagnose missing, empty, malformed, and unsupported configs. |
 | Done | Switch between stack files, replacing the complete MCP server set. [*](#switching-stacks) |
@@ -234,6 +234,28 @@ empty stack clears every server. Switching changes configuration only; it does
 not install or start server software. Stack names/aliases and client adapters
 beyond Codex remain future work.
 
+### Listing servers
+
+`mcpstack codex list` and `mcpstack claude list` read the same default configuration
+paths as their adapters, or the file selected by `--config <path>`. They print a
+table sorted by server name with transport, configuration state, and command or
+endpoint. Listing includes names normally skipped by export. It does not prompt,
+resolve secrets, write files or backups, run helpers, or contact MCP servers.
+
+Codex state is `enabled` (the default when absent) or `disabled`. Claude lists
+user-scope definitions as `configured`, and its reserved names as `ignored`.
+Claude project and permission overrides are not evaluated; configuration state
+does not establish connection health. No synthetic per-server enabled flag is
+invented for Claude.
+
+Only the executable is shown for stdio, without arguments or environment values.
+HTTP/SSE endpoints omit URL user info, queries, and fragments; headers are never
+displayed. Names and commands escape terminal control characters. No new
+credential values are read from the environment. Listing validates its displayed
+fields without rejecting unrelated or newer settings. Invalid definitions fail
+with `CONFIG_READ_ERROR` and no partial table. A missing configuration fails;
+an empty configuration or server map reports `No MCP servers configured.`
+
 ### Transactions
 
 [*] Validate and prepare the whole stack before committing configuration changes.
@@ -279,12 +301,12 @@ scope. Publishing and release/deployment automation require explicit authorizati
 ### Commands and help
 
 Client operations are grouped under `mcpstack <client> <operation>`. Codex exposes
-`use`, `import`, `show`, `export`, and `diff`; `validate` and `--schema` stay at the top
-level. Claude Code exposes the same five operations under `claude`. The parent
+`list`, `use`, `import`, `show`, `export`, and `diff`; `validate` and `--schema` stay at the top
+level. Claude Code exposes the same six operations under `claude`. The parent
 command selects the target, so there is no `--client` option.
 The previous operation-first syntax is no longer accepted.
 
-Help, version, `--schema`, `validate <file>`, `codex show`, `codex export <file>`,
+Help, version, `--schema`, `validate <file>`, `codex list`, `claude list`, `codex show`, `codex export <file>`,
 `codex diff <file>`, `codex import <file>`, `codex use <file>`, and runnable examples are implemented.
 CLI integration tests verify help/version output, the generated argument schema,
 runnable examples, and rejection of invalid arguments.
@@ -330,7 +352,7 @@ and unrelated settings, so the displayed patch is not independently applicable.
 
 ### Output formats
 
-Help, version, and validation results use text output;
+Help, version, server inventories, and validation results use text output;
 `--schema` emits JSON; `codex show` emits YAML on stdout, while `codex export <file>`
 writes the same YAML to the named file. `diff` emits a redacted unified diff;
 import and use dry-runs summarize added, modified, and deleted servers.
