@@ -407,6 +407,7 @@ fn prepare(
                         env,
                         env_vars,
                         cwd,
+                        ..
                     } => {
                         if !env_vars.is_empty() || cwd.is_some() {
                             return Err(Error::Unsupported);

@@ -5,7 +5,7 @@ use std::path::Path;
 use typed_path::Utf8WindowsPath;
 
 use crate::error::AppError;
-use crate::schema::v1::{ConfigValue, Transport};
+use crate::schema::v1::{ConfigValue, PathResolution, Transport};
 use crate::schema::{Server, StackV1};
 
 pub(super) async fn resolve(stack: &mut StackV1, file: &Path) -> Result<(), AppError> {
@@ -18,7 +18,13 @@ pub(super) async fn resolve(stack: &mut StackV1, file: &Path) -> Result<(), AppE
     for server in stack.servers.values_mut() {
         match server {
             Server::Portable {
-                transport: Transport::Stdio { command, cwd, .. },
+                transport:
+                    Transport::Stdio {
+                        command,
+                        cwd,
+                        path_resolution: PathResolution::Stack,
+                        ..
+                    },
                 ..
             } => {
                 resolve_value(command, &base, true)?;

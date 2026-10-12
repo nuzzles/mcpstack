@@ -96,7 +96,10 @@ fn stack_paths_and_previews_are_independent_of_invocation_directory() {
                     flags,
                 ));
                 assert_eq!(preview_a, preview_b);
-                let target = format!("Target config: {}\nMCP server changes:", config.display());
+                let target = format!(
+                    "Target config: {}\nMCP server changes:",
+                    config.to_string_lossy().escape_debug()
+                );
                 assert!(preview_a.contains(&target), "{preview_a}");
                 assert_eq!(std::fs::read_to_string(&config).unwrap(), empty);
             }
@@ -295,6 +298,126 @@ fn windows_absolute_paths_are_preserved_on_every_host() {
         let servers = read_servers(client, &config);
         for (index, path) in paths.iter().enumerate() {
             assert_eq!(servers[format!("server{index}")]["command"], *path);
+        }
+    }
+}
+
+#[test]
+fn exported_relative_paths_round_trip_without_rebasing() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let bundle = root.join("bundle");
+    let moved = root.join("moved");
+    let other = root.join("other");
+    for path in [&bundle, &moved, &other] {
+        std::fs::create_dir(path).unwrap();
+    }
+    for client in ["codex", "claude"] {
+        let config = root.join(format!("{client}.config"));
+        let mut servers = json!({
+            "relative": {"command":"./bin/server", "args":["./argument.js"]},
+            "parent": {"command":"../shared/server"},
+            "bare": {"command":"npx"}
+        });
+        if client == "codex" {
+            servers["absolute_cwd"] = json!({"command":"./bin/server", "cwd":root.join("app")});
+            servers["relative_cwd"] = json!({"command":"./bin/server", "cwd":"./workspace"});
+        } else {
+            for server in servers.as_object_mut().unwrap().values_mut() {
+                server["type"] = json!("stdio");
+            }
+        }
+        let original = if client == "codex" {
+            toml::to_string(&json!({"mcp_servers":servers})).unwrap()
+        } else {
+            serde_json::to_string_pretty(&json!({"mcpServers":servers})).unwrap()
+        };
+        std::fs::write(&config, &original).unwrap();
+        let stack = bundle.join(format!("{client}.yml"));
+        success(run(client, "export", &root, &stack, &config, &[]));
+        let yaml = std::fs::read_to_string(&stack).unwrap();
+        assert!(yaml.contains("path_resolution: client"), "{yaml}");
+        // Relocation and a different invoking directory must not change native paths.
+        let relocated = moved.join(format!("{client}.yml"));
+        std::fs::rename(&stack, &relocated).unwrap();
+        for operation in ["diff", "import", "use"] {
+            let flags: &[&str] = if operation == "diff" {
+                &[]
+            } else {
+                &["--dry-run", "-y"]
+            };
+            let preview = success(run(client, operation, &other, &relocated, &config, flags));
+            assert!(!preview.contains("@@"), "{preview}");
+            assert!(!preview.contains("~ Modified:"), "{preview}");
+            if operation != "diff" {
+                success(run(client, operation, &other, &relocated, &config, &["-y"]));
+            }
+            assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+        }
+        // The marker also survives show redirected to a stack, and applies on either client.
+        let shown = success(
+            Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+                .args([
+                    "--non-interactive",
+                    client,
+                    "show",
+                    "--server",
+                    "relative",
+                    "--config",
+                ])
+                .arg(&config)
+                .output()
+                .unwrap(),
+        );
+        std::fs::write(&relocated, shown).unwrap();
+        for target in ["codex", "claude"] {
+            let destination = root.join(format!("{client}-to-{target}.config"));
+            success(run(
+                target,
+                "use",
+                &other,
+                &relocated,
+                &destination,
+                &["-y"],
+            ));
+            let restored = read_servers(target, &destination);
+            assert_eq!(restored["relative"]["command"], "./bin/server");
+            assert_eq!(restored["relative"]["args"], json!(["./argument.js"]));
+            assert!(restored["relative"].get("path_resolution").is_none());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn target_summary_escapes_control_characters_in_filenames() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let stack = root.join("stack.yml");
+    std::fs::write(
+        &stack,
+        "schema_version: 1\nservers:\n  example:\n    config: {command: tool}\n",
+    )
+    .unwrap();
+    for client in ["codex", "claude"] {
+        let config = root.join(format!("{client}\x1b[2J\nforged-summary\r\t.config"));
+        for operation in ["import", "use"] {
+            let preview = success(run(
+                client,
+                operation,
+                &root,
+                &stack,
+                &config,
+                &["--dry-run", "-y"],
+            ));
+            let expected = format!(
+                "Target config: {}\nMCP server changes:",
+                config.to_string_lossy().escape_debug()
+            );
+            assert!(preview.contains(&expected), "{preview:?}");
+            assert!(!preview.contains(['\x1b', '\r', '\t']), "{preview:?}");
+            assert!(!preview.contains("\nforged-summary"), "{preview:?}");
+            assert!(!config.exists());
         }
     }
 }

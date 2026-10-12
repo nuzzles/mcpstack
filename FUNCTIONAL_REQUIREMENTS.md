@@ -286,7 +286,7 @@ For `stacks/work.yml`, `command: ./bin/server` points to `stacks/bin/server` and
 directory; the command is not resolved relative to `cwd`.
 
 Bare executable names such as `npx`, `uvx`, and `docker` remain PATH lookups.
-Absolute/rooted paths remain unchanged. Relative executable paths must contain
+In stack-relative mode, absolute/rooted paths remain unchanged. Relative executable paths must contain
 a platform path separator (or be `.`/`..`); use `/` in stacks shared between
 platforms. Windows also accepts `\\` separators and rejects drive-relative paths
 such as `C:server.exe`. Existing Windows drive-rooted and UNC paths are preserved.
@@ -299,12 +299,20 @@ Claude still rejects `cwd` because its server definitions cannot represent it.
 The stack's containing directory is resolved to an absolute directory. A symlinked
 stack uses the directory containing the link, not the linked file's directory.
 Server paths need not exist and are not canonicalized; previews and writes use
-the same resolved values. Loading does not modify the source stack. Exports
-continue to preserve configured paths rather than rewriting them.
+the same resolved values. Loading does not modify the source stack.
+
+Stdio transports accept `path_resolution: stack` (the default) or
+`path_resolution: client`. Both clients' show/export commands emit `client` to
+preserve the original command and cwd literally: relative paths retain the
+client's runtime semantics instead of being rebased to the exported stack's
+directory. This preserves export/import round trips without guessing a launch
+directory. The marker is stack metadata and is never written into client configs.
+Use the default `stack` behavior for paths bundled alongside an authored stack.
 
 The stack filename and `--config` argument themselves remain relative to the CLI's
 working directory. Change summaries show the absolute target config path directly
-above the added/modified/deleted summary and before approval prompts.
+above the added/modified/deleted summary and before approval prompts. Control
+characters in the displayed path are escaped so filenames cannot alter the terminal.
 
 ### Transactions
 

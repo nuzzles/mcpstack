@@ -37,7 +37,9 @@ fn write_change_summary(
     writeln!(
         output,
         "Target config: {}",
-        std::path::absolute(target)?.display()
+        std::path::absolute(target)?
+            .to_string_lossy()
+            .escape_debug()
     )?;
     writeln!(output, "MCP server changes:")?;
     for (marker, label, color, names) in [
