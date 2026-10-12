@@ -60,13 +60,11 @@ pub(super) fn normalize(
                 }
             }
             if let Some(value) = fields.remove("enabled_tools") {
-                settings.enabled_tools = Some(
-                    serde_json::from_value(value).map_err(|_| format!("{name:?}.enabled_tools"))?,
-                );
-            }
-            if let Some(value) = fields.remove("disabled_tools") {
-                settings.disabled_tools = serde_json::from_value(value)
-                    .map_err(|_| format!("{name:?}.disabled_tools"))?;
+                let tools =
+                    serde_json::from_value(value).map_err(|_| format!("{name:?}.enabled_tools"))?;
+                if include_permissions {
+                    settings.enabled_tools = Some(tools);
+                }
             }
             settings
         } else {
@@ -132,22 +130,16 @@ fn codex_permissions(
             }
         }
     }
-    if include {
-        // Disabled tools are permission denials in the shared model. Without
-        // opt-in they retain their existing representation in server settings.
-        if let Some(value) = fields.remove("disabled_tools") {
-            policy.deny =
-                serde_json::from_value(value).map_err(|_| format!("{name:?}.disabled_tools"))?;
-            if policy.deny.iter().any(|tool| tool.contains('*')) {
-                return Err(format!(
-                    "{name:?}.disabled_tools: literal tool names containing '*' cannot be represented"
-                ));
-            }
+    if let Some(value) = fields.remove("disabled_tools") {
+        policy.deny =
+            serde_json::from_value(value).map_err(|_| format!("{name:?}.disabled_tools"))?;
+        if include && policy.deny.iter().any(|tool| tool.contains('*')) {
+            return Err(format!(
+                "{name:?}.disabled_tools: literal tool names containing '*' cannot be represented"
+            ));
         }
-        Ok(Some(policy))
-    } else {
-        Ok(None)
     }
+    if include { Ok(Some(policy)) } else { Ok(None) }
 }
 
 fn approval_mode(value: &Value) -> Option<ApprovalMode> {

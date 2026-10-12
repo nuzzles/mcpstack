@@ -185,9 +185,32 @@ pub(super) fn retain_target_policy(
                 })
             );
         if !restoring_permissions {
-            for field in ["default_tools_approval_mode", "tools", "disabled_tools"] {
+            for field in [
+                "default_tools_approval_mode",
+                "enabled_tools",
+                "disabled_tools",
+            ] {
                 if let Some(value) = current.get(field) {
                     definition.entry(field).or_insert_with(|| value.clone());
+                }
+            }
+            if let Some(current_tools) = current.get("tools") {
+                let incoming = definition
+                    .entry("tools")
+                    .or_insert_with(|| current_tools.clone());
+                if let (Some(current_tools), Some(incoming)) =
+                    (current_tools.as_table(), incoming.as_table_mut())
+                {
+                    for (tool, current) in current_tools {
+                        if let Some(mode) = current.get("approval_mode") {
+                            let entry = incoming.entry(tool).or_insert_with(|| current.clone());
+                            if let Some(fields) = entry.as_table_mut() {
+                                fields
+                                    .entry("approval_mode")
+                                    .or_insert_with(|| mode.clone());
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -305,7 +328,7 @@ pub(crate) async fn run_import(
     let selected_stack = if selection.is_empty() {
         None
     } else {
-        Some(selection.read_stack(&file).await?)
+        Some(selection.read_stack(&file, include_permissions).await?)
     };
     let interactive = !non_interactive && stdin().is_terminal() && stderr().is_terminal();
     if !auto_approve && !interactive {
@@ -313,7 +336,7 @@ pub(crate) async fn run_import(
     }
     let stack: Stack = match selected_stack {
         Some(stack) => stack,
-        None => selection.read_stack(&file).await?,
+        None => selection.read_stack(&file, include_permissions).await?,
     }
     .into();
     let (preliminary, _, missing) =
@@ -532,7 +555,7 @@ pub(crate) async fn run_use(
     let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
     let snapshot = Snapshot::read(&path).await?;
     let stack: Stack = crate::integrations::selection::Selection::default()
-        .read_stack(&file)
+        .read_stack(&file, include_permissions)
         .await?
         .into();
     let (preliminary, _, missing) =

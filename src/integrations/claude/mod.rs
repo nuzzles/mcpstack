@@ -1066,6 +1066,9 @@ impl ClientAdapter for Claude {
         };
         let (_, _, config) = snapshot(args.config, Some(&filter)).await?;
         let mut values = servers(&config);
+        if include_permissions {
+            permissions::validate_names(values.keys().map(String::as_str))?;
+        }
         values.retain(|name, _| !filter.skip(name));
         let mut stack = as_stack(values)?;
         if !expose_secrets {
@@ -1142,8 +1145,19 @@ impl ClientAdapter for Claude {
             None
         };
         let (config_path, file, config) = snapshot(args.config, None).await?;
-        let stack = args.selection.read_stack(&args.file).await?;
+        let stack = args
+            .selection
+            .read_stack(&args.file, args.include_permissions)
+            .await?;
         let before = servers(&config);
+        if args.include_permissions {
+            permissions::validate_names(
+                before
+                    .keys()
+                    .chain(stack.servers.keys())
+                    .map(String::as_str),
+            )?;
+        }
         let (preview_values, missing) = prepared_preview(&stack)?;
         if missing {
             let mut preliminary = before.clone();
@@ -1200,8 +1214,19 @@ impl ClientAdapter for Claude {
             None
         };
         let (config_path, file, config) = snapshot(args.config, None).await?;
-        let stack = args.selection.read_stack(&args.file).await?;
+        let stack = args
+            .selection
+            .read_stack(&args.file, args.include_permissions)
+            .await?;
         let before = servers(&config);
+        if args.include_permissions {
+            permissions::validate_names(
+                before
+                    .keys()
+                    .chain(stack.servers.keys())
+                    .map(String::as_str),
+            )?;
+        }
         let (preview_values, missing) = prepared_preview(&stack)?;
         if missing {
             let mut preliminary = before.clone();
@@ -1358,8 +1383,19 @@ impl ClientAdapter for Claude {
             None
         };
         let (config_path, file, config) = snapshot(args.config, None).await?;
-        let stack = args.selection.read_stack(&args.file).await?;
+        let stack = args
+            .selection
+            .read_stack(&args.file, args.include_permissions)
+            .await?;
         let before = servers(&config);
+        if args.include_permissions {
+            permissions::validate_names(
+                before
+                    .keys()
+                    .chain(stack.servers.keys())
+                    .map(String::as_str),
+            )?;
+        }
         let (mut preliminary, missing) = prepared_preview(&stack)?;
         if missing {
             preserve_equivalent_servers(&before, &mut preliminary);

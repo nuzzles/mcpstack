@@ -113,7 +113,7 @@ impl ExportArgs {
     }
 
     fn includes_permissions(&self) -> bool {
-        self.server_filter.all || self.include_permissions
+        self.include_permissions
     }
     fn filter(&self) -> reserved::ServerFilter {
         self.server_filter.clone()

@@ -718,11 +718,14 @@ fn codex_export_includes_approval_only_when_requested() {
     assert_eq!(stack["servers"]["obsidian"]["transport"]["type"], "http");
     assert!(stack["servers"]["obsidian"].get("config").is_none());
     assert!(stack["servers"]["obsidian"].get("permissions").is_none());
-    for flag in ["--include-permissions", "--all"] {
+    for flags in [
+        vec!["--include-permissions"],
+        vec!["--all", "--include-permissions"],
+    ] {
         let exported = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
             .args(["--non-interactive", "codex", "show", "--config"])
             .arg(&codex)
-            .arg(flag)
+            .args(flags)
             .env_remove("RUST_LOG")
             .stdin(Stdio::null())
             .output()

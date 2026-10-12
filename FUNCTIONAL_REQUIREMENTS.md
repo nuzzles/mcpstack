@@ -195,11 +195,14 @@ user-managed environment variable. Duplicate header names fail instead of
 overwriting either value. Claude Code's reserved server names also fail before
 writes. Claude Code cannot apply per-server Codex startup timeouts.
 Both exporters emit portable `transport` entries. Permission export is opt-in
-with `--include-permissions`; `show --all` and `export --all` also include
-permissions. Both adapters convert native policies to the same
+only with `--include-permissions`; `--all` changes server selection only.
+Both adapters convert native policies to the same
 [shared permission format](#shared-permissions). Import, use, and diff ignore
-permission metadata unless passed `--include-permissions`. Conversions that
-cannot preserve the policy fail before backups or writes. Claude settings are read and written in
+permission metadata and tool allow/deny filters unless passed `--include-permissions`.
+Without that flag, existing target permissions and filters are preserved, including
+when using older stacks with filters in `settings` or native `config` entries.
+Conversions that cannot preserve the policy fail before backups or writes.
+Claude settings are read and written in
 `settings.json` (or the file selected by `--permissions-config`), with backups
 for changed settings. Project, managed, and rules outside the chosen settings
 file are outside this export scope. Other unmappable source fields fail export
@@ -235,8 +238,9 @@ decisions when included; omitted metadata leaves existing approval policy alone.
 
 Codex translates `allow`/`ask` to `approve`/`prompt`, retains `auto`/`writes`, and
 stores exact denials as `disabled_tools`. Its exporter moves those denials into
-permission metadata when requested. Claude adds native server prefixes only
-when writing its `allow`, `ask`, and `deny` arrays. Semantically equivalent native
+permission metadata when requested. Enabled-tool filters remain in `settings`,
+but are exported and applied only with the same explicit opt-in. Claude adds native
+server prefixes only when writing its `allow`, `ask`, and `deny` arrays. Semantically equivalent native
 spellings, such as a bare server rule and its all-tools wildcard, can normalize.
 Lossless restoration concerns permission decisions, not JSON/TOML layout or spelling.
 
@@ -244,7 +248,10 @@ Both native models can be exported and restored using this shared representation
 The target must support every decision being restored: Claude rejects `auto`,
 `writes`, and default-ask policies with allow overrides; Codex rejects partial
 tool patterns, wildcard denials, and overlapping approval decisions it cannot
-retain. No unsupported decision is silently discarded or weakened. Existing
+retain. Claude rejects permission export and application when server names overlap
+at a `__` separator, such as `a` and `a__b`, including existing or unselected
+servers. Rename one server before handling those permissions.
+No unsupported decision is silently discarded or weakened. Existing
 transport/settings compatibility checks still apply.
 
 This changes the unpublished v1 permission format. Legacy `source: claude` and
@@ -522,7 +529,8 @@ color controls, permission summaries before approval, normalization versus no-op
 changes, and malformed inputs without writes.
 Shared permission tests cover all Codex approval modes, Claude patterns and
 overlapping rules, native and cross-client round trips, explicit empty policies,
-opt-in preservation, legacy-format rejection, and failures without partial writes.
+strict opt-in (including `--all` and legacy tool filters), ambiguous Claude server
+names, legacy-format rejection, and failures without partial writes.
 Other platforms reject import safely.
 
 ### Codex export

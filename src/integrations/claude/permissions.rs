@@ -13,6 +13,26 @@ use crate::io;
 use crate::schema::v1::{ApprovalMode, ConfigValue, Permissions};
 use crate::schema::{Server, StackV1};
 
+/// Claude's native rules cannot disambiguate a server prefix from a tool
+/// name containing the same separator. Reject overlapping namespaces before
+/// exporting or applying any policy, including against unselected servers.
+pub(super) fn validate_names<'a>(names: impl Iterator<Item = &'a str>) -> Result<(), Error> {
+    let names: BTreeSet<_> = names.collect();
+    for name in &names {
+        if names.iter().any(|other| {
+            other
+                .strip_prefix(name)
+                .is_some_and(|suffix| suffix.starts_with("__"))
+        }) {
+            return Err(Error::Permissions(
+                (*name).into(),
+                "another server name starts with this name followed by '__'; rename one server to avoid ambiguous permission rules",
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn path(explicit: Option<PathBuf>, config: Option<&PathBuf>) -> Result<PathBuf, Error> {
     if let Some(path) = explicit {
         return Ok(path);

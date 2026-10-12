@@ -269,9 +269,9 @@ pub struct Settings {
     pub startup_timeout_sec: Option<f64>,
     #[serde(default)]
     pub tool_timeout_sec: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_tools: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disabled_tools: Vec<String>,
 }
 
@@ -322,6 +322,46 @@ where
 use super::{SCHEMA_VERSION, ValidationError};
 
 impl StackV1 {
+    /// Omit captured policies and legacy native tool filters unless opted in.
+    /// Non-permission tool settings, such as output limits, remain portable.
+    pub fn exclude_permissions(&mut self) {
+        for server in self.servers.values_mut() {
+            match server {
+                Server::Portable {
+                    settings,
+                    permissions,
+                    ..
+                } => {
+                    *permissions = None;
+                    settings.enabled_tools = None;
+                    settings.disabled_tools.clear();
+                }
+                Server::Configuration { config } => {
+                    for key in [
+                        "default_tools_approval_mode",
+                        "enabled_tools",
+                        "disabled_tools",
+                    ] {
+                        config.remove(key);
+                    }
+                    if let Some(ConfigValue::Object(tools)) = config.get_mut("tools") {
+                        tools.retain(|_, tool| {
+                            if let ConfigValue::Object(fields) = tool {
+                                fields.remove("approval_mode");
+                                !fields.is_empty()
+                            } else {
+                                true
+                            }
+                        });
+                        if tools.is_empty() {
+                            config.remove("tools");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn validate(&self) -> Result<(), ValidationError> {
         if self.schema_version != SCHEMA_VERSION {
             return Err(ValidationError::UnsupportedVersion);

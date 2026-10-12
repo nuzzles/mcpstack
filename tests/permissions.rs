@@ -243,7 +243,7 @@ fn empty_policy_clears_codex_permissions_only_with_explicit_opt_in() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.toml");
     let stack = dir.path().join("stack.yml");
-    let original = "[mcp_servers.example]\ncommand='tool'\ndefault_tools_approval_mode='prompt'\ndisabled_tools=['delete']\n[mcp_servers.example.tools.read]\napproval_mode='approve'\n";
+    let original = "[mcp_servers.example]\ncommand='tool'\nenabled_tools=['read']\ndefault_tools_approval_mode='prompt'\ndisabled_tools=['delete']\n[mcp_servers.example.tools.read]\napproval_mode='approve'\n";
     std::fs::write(&config, original).unwrap();
     std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {}\n").unwrap();
     let ignored = run("codex", "use", &config, Some(&stack), &["-y"]);
@@ -252,7 +252,12 @@ fn empty_policy_clears_codex_permissions_only_with_explicit_opt_in() {
     apply("codex", &config, &stack);
     let value = toml(&config);
     let server = value["mcp_servers"]["example"].as_table().unwrap();
-    for field in ["tools", "default_tools_approval_mode", "disabled_tools"] {
+    for field in [
+        "tools",
+        "default_tools_approval_mode",
+        "enabled_tools",
+        "disabled_tools",
+    ] {
         assert!(!server.contains_key(field), "{value}");
     }
 }
@@ -274,4 +279,298 @@ fn legacy_source_tags_and_qualified_rules_are_rejected() {
             .unwrap();
         assert!(!output.status.success(), "{output:?}");
     }
+}
+
+#[test]
+fn permission_export_requires_explicit_opt_in_even_with_all_servers() {
+    for client in ["codex", "claude"] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(if client == "codex" {
+            "config.toml"
+        } else {
+            "claude.json"
+        });
+        let original = if client == "codex" {
+            "[mcp_servers.example]\ncommand='tool'\nenabled_tools=['read']\ndisabled_tools=['delete']\ndefault_tools_approval_mode='prompt'\n[mcp_servers.example.tools.read]\napproval_mode='approve'\n[mcp_servers.computer-use]\ncommand='computer'\n"
+        } else {
+            r#"{"mcpServers":{"example":{"command":"tool"},"computer-use":{"command":"computer"}}}"#
+        };
+        std::fs::write(&config, original).unwrap();
+        let settings = dir.path().join("settings.json");
+        let rules =
+            r#"{"permissions":{"allow":["mcp__example__read"],"deny":["mcp__example__delete"]}}"#;
+        std::fs::write(&settings, rules).unwrap();
+        for operation in ["show", "export"] {
+            for (index, flags) in [
+                vec![],
+                vec!["--all"],
+                vec!["--include-permissions"],
+                vec!["--all", "--include-permissions"],
+            ]
+            .iter()
+            .enumerate()
+            {
+                let file = dir.path().join(format!("{operation}-{index}.yml"));
+                let result = run(
+                    client,
+                    operation,
+                    &config,
+                    (operation == "export").then_some(file.as_path()),
+                    flags,
+                );
+                assert!(
+                    result.status.success(),
+                    "{client} {operation} {flags:?}: {result:?}"
+                );
+                let bytes = if operation == "export" {
+                    std::fs::read(&file).unwrap()
+                } else {
+                    result.stdout
+                };
+                let stack: serde_json::Value = yaml_serde::from_slice(&bytes).unwrap();
+                let server = &stack["servers"]["example"];
+                let include = flags.contains(&"--include-permissions");
+                assert_eq!(server.get("permissions").is_some(), include, "{stack}");
+                assert_eq!(
+                    stack["servers"].get("computer-use").is_some(),
+                    flags.contains(&"--all")
+                );
+                assert!(
+                    server["settings"].get("disabled_tools").is_none(),
+                    "{stack}"
+                );
+                assert_eq!(
+                    server["settings"].get("enabled_tools").is_some(),
+                    client == "codex" && include,
+                    "{stack}"
+                );
+                if client == "codex" && include {
+                    assert_eq!(
+                        server["settings"]["enabled_tools"],
+                        serde_json::json!(["read"])
+                    );
+                    assert_eq!(server["permissions"]["deny"], serde_json::json!(["delete"]));
+                }
+                assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+                assert_eq!(std::fs::read_to_string(&settings).unwrap(), rules);
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn codex_opt_out_preserves_policy_for_legacy_and_portable_stacks() {
+    let definitions = [
+        "transport: {type: stdio, command: tool}\n    settings: {enabled_tools: [incoming], disabled_tools: [incoming_deny]}\n    permissions: {default_mode: allow, allow: [incoming]}",
+        "config:\n      command: tool\n      enabled_tools: [incoming]\n      disabled_tools: [incoming_deny]\n      default_tools_approval_mode: approve\n      tools:\n        read: {approval_mode: approve, output_token_limit: 2000}\n        incoming: {approval_mode: approve}",
+    ];
+    for (native, definition) in definitions.iter().enumerate() {
+        for existing in [false, true] {
+            for (operation, flags) in [
+                ("diff", vec![]),
+                ("import", vec!["-y", "--dry-run"]),
+                ("use", vec!["--dry-run"]),
+                ("import", vec!["-y"]),
+                ("use", vec!["-y"]),
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let config = dir.path().join("config.toml");
+                let stack = dir.path().join("stack.yml");
+                let original = "[mcp_servers.example]\ncommand='old-tool'\nenabled_tools=['read']\ndisabled_tools=['delete']\ndefault_tools_approval_mode='prompt'\n[mcp_servers.example.tools.read]\napproval_mode='prompt'\noutput_token_limit=1000\n[mcp_servers.example.tools.write]\napproval_mode='prompt'\n";
+                if existing {
+                    std::fs::write(&config, original).unwrap();
+                }
+                std::fs::write(
+                    &stack,
+                    format!("schema_version: 1\nservers:\n  example:\n    {definition}\n"),
+                )
+                .unwrap();
+                let result = run("codex", operation, &config, Some(&stack), &flags);
+                assert!(result.status.success(), "{operation} {flags:?}: {result:?}");
+                let text = String::from_utf8(result.stdout).unwrap();
+                assert!(!text.contains("incoming"), "{text}");
+                if operation == "diff" || flags.contains(&"--dry-run") {
+                    assert_eq!(config.exists(), existing);
+                    if existing {
+                        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+                    }
+                    assert_eq!(
+                        std::fs::read_dir(dir.path()).unwrap().count(),
+                        if existing { 2 } else { 1 }
+                    );
+                    continue;
+                }
+                let value = toml(&config);
+                let server = &value["mcp_servers"]["example"];
+                assert_eq!(server["command"].as_str(), Some("tool"));
+                if existing {
+                    let before: toml::Value = toml::from_str(original).unwrap();
+                    for field in [
+                        "enabled_tools",
+                        "disabled_tools",
+                        "default_tools_approval_mode",
+                    ] {
+                        assert_eq!(server[field], before["mcp_servers"]["example"][field]);
+                    }
+                    for tool in ["read", "write"] {
+                        assert_eq!(
+                            server["tools"][tool]["approval_mode"].as_str(),
+                            Some("prompt")
+                        );
+                    }
+                } else {
+                    for field in [
+                        "enabled_tools",
+                        "disabled_tools",
+                        "default_tools_approval_mode",
+                    ] {
+                        assert!(server.get(field).is_none(), "{value}");
+                    }
+                    assert!(
+                        server
+                            .get("tools")
+                            .and_then(|tools| tools.get("read"))
+                            .and_then(|tool| tool.get("approval_mode"))
+                            .is_none()
+                    );
+                }
+                if native == 1 {
+                    assert_eq!(
+                        server["tools"]["read"]["output_token_limit"].as_integer(),
+                        Some(2000)
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn claude_opt_out_ignores_legacy_filters_and_keeps_settings() {
+    for definition in [
+        "transport: {type: stdio, command: tool}\n    settings: {enabled_tools: [read], disabled_tools: [delete]}\n    permissions: {default_mode: auto}",
+        "config: {command: tool, enabled_tools: [read], disabled_tools: [delete], default_tools_approval_mode: auto, tools: {read: {approval_mode: approve}}}",
+    ] {
+        for operation in ["diff", "import", "use"] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = dir.path().join("claude.json");
+            let settings = dir.path().join("settings.json");
+            let stack = dir.path().join("stack.yml");
+            let original = r#"{"permissions":{"deny":["mcp__example__write"]}}"#;
+            std::fs::write(&settings, original).unwrap();
+            std::fs::write(
+                &stack,
+                format!("schema_version: 1\nservers:\n  example:\n    {definition}\n"),
+            )
+            .unwrap();
+            let flags: &[&str] = if operation == "diff" { &[] } else { &["-y"] };
+            let result = run("claude", operation, &config, Some(&stack), flags);
+            assert!(result.status.success(), "{operation}: {result:?}");
+            assert_eq!(std::fs::read_to_string(&settings).unwrap(), original);
+            assert!(!dir.path().join("settings.json.~1~").exists());
+            if operation != "diff" {
+                let value = json(&config);
+                let server = &value["mcpServers"]["example"];
+                assert_eq!(server["command"], "tool");
+                assert!(
+                    server
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .all(|key| matches!(key.as_str(), "command" | "type"))
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn claude_rejects_ambiguous_permission_names_without_writes() {
+    for existing in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let codex = dir.path().join("source.toml");
+        let config = dir.path().join("claude.json");
+        let settings = dir.path().join("settings.json");
+        let stack = dir.path().join("stack.yml");
+        // Generate the problematic shared stack through the public Codex exporter.
+        std::fs::write(&codex, "[mcp_servers.a]\ncommand='tool'\ndisabled_tools=['b__delete']\n[mcp_servers.a__b]\ncommand='tool'\n").unwrap();
+        let exported = run("codex", "show", &codex, None, &["--include-permissions"]);
+        assert!(exported.status.success(), "{exported:?}");
+        std::fs::write(&stack, exported.stdout).unwrap();
+        let original = r#"{"mcpServers":{"a__b":{"command":"old-tool"}}}"#;
+        let rules = r#"{"permissions":{"deny":["mcp__a__b__delete"]}}"#;
+        if existing {
+            std::fs::write(&config, original).unwrap();
+            std::fs::write(&settings, rules).unwrap();
+        }
+        let count = std::fs::read_dir(dir.path()).unwrap().count();
+        for operation in ["diff", "import", "use"] {
+            for dry in [false, true] {
+                let mut flags = vec!["--include-permissions"];
+                if operation != "diff" {
+                    flags.push("-y");
+                    if dry {
+                        flags.push("--dry-run");
+                    }
+                }
+                // Selection cannot evade collisions with an existing target server.
+                if existing && operation != "use" {
+                    flags.extend(["--server", "a"]);
+                }
+                let result = run("claude", operation, &config, Some(&stack), &flags);
+                assert!(
+                    !result.status.success(),
+                    "{operation} {flags:?}: {result:?}"
+                );
+                assert!(
+                    String::from_utf8_lossy(&result.stderr).contains("ambiguous permission rules"),
+                    "{result:?}"
+                );
+                assert!(result.stdout.is_empty(), "{result:?}");
+                assert_eq!(config.exists(), existing);
+                assert_eq!(settings.exists(), existing);
+                if existing {
+                    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+                    assert_eq!(std::fs::read_to_string(&settings).unwrap(), rules);
+                }
+                assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), count);
+            }
+        }
+    }
+}
+
+#[test]
+fn claude_permission_export_checks_unselected_server_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let settings = dir.path().join("settings.json");
+    // Include a name between the colliding names in sort order.
+    std::fs::write(&config, r#"{"mcpServers":{"a":{"command":"tool"},"a-":{"command":"tool"},"a__b":{"command":"tool"}}}"#).unwrap();
+    std::fs::write(
+        &settings,
+        r#"{"permissions":{"deny":["mcp__a__b__delete"]}}"#,
+    )
+    .unwrap();
+    for operation in ["show", "export"] {
+        let file = dir.path().join("stack.yml");
+        let flags = ["--include-permissions", "--server", "a"];
+        let result = run(
+            "claude",
+            operation,
+            &config,
+            (operation == "export").then_some(file.as_path()),
+            &flags,
+        );
+        assert!(!result.status.success(), "{result:?}");
+        assert!(String::from_utf8_lossy(&result.stderr).contains("ambiguous permission rules"));
+        assert!(result.stdout.is_empty());
+        assert!(!file.exists());
+    }
+    let result = run("claude", "show", &config, None, &["--all"]);
+    assert!(result.status.success(), "{result:?}");
+    let value: serde_json::Value = yaml_serde::from_slice(&result.stdout).unwrap();
+    assert_eq!(value["servers"].as_object().unwrap().len(), 3);
+    assert!(value["servers"]["a"].get("permissions").is_none());
 }
