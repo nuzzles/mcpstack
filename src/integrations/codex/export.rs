@@ -277,6 +277,8 @@ fn secret_key(key: &str) -> bool {
 // and ordinary commands (including get-token) are not themselves credentials.
 fn helper_has_credentials(command: &str) -> bool {
     let mut start = None;
+    let mut quote = None;
+    let mut escaped = false;
     for (end, character) in command
         .char_indices()
         .chain(std::iter::once((command.len(), '\0')))
@@ -285,15 +287,171 @@ fn helper_has_credentials(command: &str) -> bool {
             start.get_or_insert(end);
         } else if let Some(begin) = start.take() {
             let word = &command[begin..end];
-            let after = command[end..].trim_start_matches([' ', '\t', '\r', '\n', '\'', '"', '\\']);
+            let after = trim_helper_closing_quotes(&command[end..]).trim_start();
+            let value = if let Some(value) = after.strip_prefix([':', '=']) {
+                Some(value)
+            } else if word.starts_with('-') {
+                Some(after)
+            } else {
+                None
+            };
             if secret_key(word.trim_start_matches('-'))
-                && (word.starts_with('-') || matches!(after.chars().next(), Some(':' | '=')))
+                && value.is_some_and(|value| {
+                    !helper_runtime_value(value, quote, after.starts_with(':'))
+                })
             {
                 return true;
             }
         }
+        if escaped {
+            escaped = false;
+        } else if character == '\\' && quote != Some('\'') {
+            escaped = true;
+        } else if Some(character) == quote {
+            quote = None;
+        } else if quote.is_none() && matches!(character, '\'' | '"') {
+            quote = Some(character);
+        }
     }
     false
+}
+
+// Inspect common shell references without expanding or running anything. An
+// exemption applies only to this credential value, never to the whole command:
+// other literal credentials (including inside substitutions) are still scanned.
+fn helper_runtime_value(value: &str, enclosing_quote: Option<char>, header_value: bool) -> bool {
+    let value = value.trim_start();
+    let opening_quote = value
+        .strip_prefix('\\')
+        .unwrap_or(value)
+        .chars()
+        .next()
+        .filter(|c| matches!(c, '\'' | '"'));
+    // Single-quoted shell arguments do not expand runtime credentials.
+    if opening_quote == Some('\'') {
+        return false;
+    }
+    let closing_quote = opening_quote.or(enclosing_quote);
+    let value = trim_helper_quotes(value);
+    let value = value
+        .strip_prefix("Bearer ")
+        .or_else(|| value.strip_prefix("Basic "))
+        .map(trim_helper_quotes)
+        .unwrap_or(value);
+    let end = if let Some(variable) = value.strip_prefix("${") {
+        variable
+            .find('}')
+            .filter(|end| helper_variable(&variable[..*end]))
+            .map(|end| end + 3)
+    } else if value.starts_with("$(") {
+        helper_substitution_end(value)
+    } else if let Some(command) = value.strip_prefix('`') {
+        command.find('`').map(|end| end + 2)
+    } else if let Some(variable) = value
+        .strip_prefix("$env:")
+        .or_else(|| value.strip_prefix('$'))
+    {
+        let length = variable
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            .count();
+        helper_variable(&variable[..length]).then_some(value.len() - variable.len() + length)
+    } else if value.starts_with('%') || value.starts_with('!') {
+        let variable = &value[1..];
+        variable
+            .find(char::from(value.as_bytes()[0]))
+            .filter(|end| helper_variable(&variable[..*end]))
+            .map(|end| end + 2)
+    } else {
+        None
+    };
+    let Some(end) = end else {
+        return false;
+    };
+    let remainder = &value[end..];
+    if closing_quote.is_some_and(|quote| {
+        !remainder.starts_with(quote)
+            && !remainder
+                .strip_prefix('\\')
+                .is_some_and(|s| s.starts_with(quote))
+    }) {
+        return false;
+    }
+    // A literal suffix concatenated to a reference can itself contain a secret.
+    // Quotes may close a shell word or a JSON string, but do not end a word by themselves.
+    let trimmed = trim_helper_closing_quotes(remainder);
+    trimmed.is_empty()
+        || trimmed.starts_with(|c: char| c.is_whitespace() || ";|&".contains(c))
+        || (header_value
+            && trimmed.len() < remainder.len()
+            && trimmed.starts_with([',', ')', '}', ']']))
+}
+
+fn helper_variable(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn trim_helper_quotes(mut value: &str) -> &str {
+    loop {
+        let trimmed = trim_helper_closing_quotes(value.trim_start());
+        if trimmed == value {
+            return value;
+        }
+        value = trimmed;
+    }
+}
+
+fn trim_helper_closing_quotes(mut value: &str) -> &str {
+    loop {
+        if let Some(rest) = value.strip_prefix('"').or_else(|| value.strip_prefix('\'')) {
+            value = rest;
+        } else if let Some(rest) = value
+            .strip_prefix("\\\"")
+            .or_else(|| value.strip_prefix("\\'"))
+        {
+            value = rest;
+        } else {
+            return value;
+        }
+    }
+}
+
+fn helper_substitution_end(value: &str) -> Option<usize> {
+    let mut depth = 0;
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, c) in value.char_indices().skip(1) {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if c == '\\' && quote != Some('\'') {
+            escaped = true;
+            continue;
+        }
+        if let Some(current) = quote {
+            if c == current {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' => quote = Some(c),
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn protect(
@@ -405,6 +563,48 @@ fn contains_unsupported_value(value: &toml::Value) -> bool {
 mod tests {
     use super::*;
     use crate::exporters::to_yaml;
+
+    #[test]
+    fn helper_runtime_values_do_not_hide_literal_credentials_elsewhere() {
+        for command in [
+            r#"auth --token "$TOKEN" --profile work"#,
+            r#"auth --token="${TOKEN}""#,
+            "TOKEN=$(get-token) auth",
+            r#"auth --token "$(get-token --profile work)""#,
+            r#"auth --token "$(get-token "$(profile)")""#,
+            "auth --token `get-token`",
+            "auth --token %TOKEN%",
+            "auth --token !TOKEN!",
+            "auth --token $env:TOKEN",
+            r#"auth -H "Authorization: Bearer ${TOKEN}""#,
+            r#"echo '{"Authorization": "Bearer '"$(get-token)"'"}'"#,
+        ] {
+            assert!(
+                !helper_has_credentials(command),
+                "runtime-only command was masked: {command}"
+            );
+        }
+        for command in [
+            r#"auth --token "$TOKEN" --password literal-fixture-secret"#,
+            r#"auth --token "$(get-token --password literal-fixture-secret)""#,
+            r#"auth --token "${TOKEN}literal-fixture-secret""#,
+            r#"auth --token "${TOKEN}"literal-fixture-secret"#,
+            r#"auth --token "${TOKEN} literal-fixture-secret""#,
+            r#"auth --token ${TOKEN}]literal-fixture-secret"#,
+            r#"auth --token "${TOKEN}",literal-fixture-secret"#,
+            r#"auth --token "${TOKEN:-literal-fixture-secret}""#,
+            r#"auth -H "Authorization: Bearer ${TOKEN} literal-fixture-secret""#,
+            r#"echo '{"Authorization":"Bearer literal-fixture-secret"}'; auth --token "$TOKEN""#,
+            r#"auth --token '\$TOKEN'"#,
+            r#"auth --token "\$TOKEN""#,
+            "auth --token %TOKEN%literal-fixture-secret",
+        ] {
+            assert!(
+                helper_has_credentials(command),
+                "literal credential was exposed: {command}"
+            );
+        }
+    }
 
     const CONFIG: &str = r#"
 model = "unrelated"

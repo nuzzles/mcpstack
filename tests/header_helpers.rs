@@ -29,6 +29,7 @@ fn run(
         .args(flags)
         .env_remove("RUST_LOG")
         .env_remove("MCPSTACK_HELPER_COMMAND")
+        .env_remove("MCPSTACK_HELPER_MISSING_HEADER")
         .env("MCPSTACK_HELPER_RUNTIME_TOKEN", "runtime-fixture-secret")
         .envs(variables.iter().copied())
         .stdin(Stdio::null())
@@ -446,5 +447,114 @@ fn native_helper_references_restore_commands_for_both_targets() {
             command
         );
         assert!(!marker.exists());
+    }
+}
+
+#[test]
+fn explicitly_masked_helpers_redact_new_and_replaced_values_in_all_diff_stages() {
+    let dir = tempfile::tempdir().unwrap();
+    let stack = dir.path().join("stack.yml");
+    let command = "get-headers new-positional-fixture-secret";
+    for harness in ["claude", "codex"] {
+        let config = dir.path().join(format!("{harness}.config"));
+        for native in [false, true] {
+            let server = if native {
+                let mut config = json!({"url":"https://example.com/mcp", helper_key(harness): {"$env":"MCPSTACK_HELPER_COMMAND"}});
+                if harness == "claude" {
+                    config["type"] = json!("http");
+                }
+                json!({"config":config})
+            } else {
+                json!({"transport":{"type":"http","url":"https://example.com/mcp", "headers_helper":{"value_env":"MCPSTACK_HELPER_COMMAND"}}})
+            };
+            fs::write(
+                &stack,
+                json!({"schema_version":1,"servers":{"events":server}}).to_string(),
+            )
+            .unwrap();
+            for existing in [false, true] {
+                write_config(
+                    &config,
+                    harness,
+                    if existing {
+                        json!({"events":self::server("get-headers old-positional-fixture-secret", harness)})
+                    } else {
+                        json!({})
+                    },
+                );
+                let before = fs::read(&config).unwrap();
+                for variables in [vec![], vec![("MCPSTACK_HELPER_COMMAND", command)]] {
+                    let output = run(harness, "diff", Some(&stack), &config, &[], &variables);
+                    assert_eq!(output.status.success(), !variables.is_empty(), "{output:?}");
+                    let text = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    assert!(!text.contains("new-positional-fixture-secret"), "{text}");
+                    assert!(!text.contains("old-positional-fixture-secret"), "{text}");
+                    assert!(text.contains("<redacted"), "{text}");
+                    assert_eq!(fs::read(&config).unwrap(), before);
+                }
+            }
+        }
+        // A preliminary preview can contain both resolved and missing secrets.
+        write_config(&config, harness, json!({}));
+        fs::write(
+            &stack,
+            json!({"schema_version":1,"servers":{"events":{"transport":{
+                "type":"http","url":"https://example.com/mcp",
+                "headers_helper":{"value_env":"MCPSTACK_HELPER_COMMAND"},
+                "headers":{"X-Other":{"value_env":"MCPSTACK_HELPER_MISSING_HEADER"}}
+            }}}})
+            .to_string(),
+        )
+        .unwrap();
+        let output = run(
+            harness,
+            "diff",
+            Some(&stack),
+            &config,
+            &[],
+            &[("MCPSTACK_HELPER_COMMAND", command)],
+        );
+        assert!(!output.status.success());
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains("Preliminary"));
+        assert!(!text.contains("new-positional-fixture-secret"), "{text}");
+        assert!(text.contains("<redacted>"), "{text}");
+    }
+}
+
+#[test]
+fn runtime_helper_credentials_round_trip_without_new_import_time_secrets() {
+    let dir = tempfile::tempdir().unwrap();
+    let stack = dir.path().join("stack.yml");
+    let commands = [
+        r#"auth-tool --token "${RUNTIME_TOKEN}" --profile work"#,
+        "TOKEN=$(get-token) auth-tool",
+        r#"auth-tool --token "$(get-token)""#,
+        r#"echo "{\"Authorization\":\"Bearer ${RUNTIME_TOKEN}\"}""#,
+        r#"echo '{"Authorization": "Bearer '"$(get-token)"'"}'"#,
+    ];
+    for harness in ["claude", "codex"] {
+        let source = dir.path().join(format!("{harness}.source"));
+        let target = dir.path().join(format!("{harness}.target"));
+        for command in commands {
+            write_config(&source, harness, json!({"events":server(command,harness)}));
+            let shown = success(run(harness, "show", None, &source, &[], &[]));
+            let value: Value = yaml_serde::from_str(&shown).unwrap();
+            assert_eq!(
+                value["servers"]["events"]["transport"]["headers_helper"],
+                command
+            );
+            fs::write(&stack, shown).unwrap();
+            write_config(&target, harness, json!({}));
+            success(run(harness, "use", Some(&stack), &target, &["-y"], &[]));
+            assert_eq!(
+                read_servers(&target, harness)["events"][helper_key(harness)],
+                command
+            );
+        }
     }
 }

@@ -460,9 +460,10 @@ Static headers and runtime bearer bindings may coexist with a helper. Claude's
 helper headers override static headers; Codex's explicit bearer tokens and stored
 OAuth credentials take precedence over helper Authorization headers.
 
-Recognized credential flags, assignments, and JSON/header names inside commands
-cause the whole command to be masked as a `value_env` reference on export and in
-previews. Ordinary script paths and commands stay literal. Detection is heuristic;
+Recognized literal credentials in flags, assignments, and JSON/header values cause
+the whole command to be masked as a `value_env` reference on export and in previews.
+Common runtime references and command substitutions stay literal. Explicit secret
+references stay redacted in previews regardless of command syntax. Detection is heuristic;
 arbitrary embedded secrets still require review. Native masked helpers use `$env`.
 Invalid definitions and unsupported STDIO/remote-execution helpers fail before
 writes. Round-trip tests cover preservation, native precedence inputs, redaction,

@@ -11,7 +11,7 @@ use tokio::fs;
 
 use crate::error::{AppError, ErrorCode};
 use crate::exporters::to_yaml;
-use crate::integrations::secrets::SecretResolver;
+use crate::integrations::secrets::{SecretResolver, redact_resolved};
 use crate::integrations::{Claude, ClientAdapter, ExportArgs, StackArgs};
 use crate::integrations::{
     write_dry_run, write_import_result, write_no_changes, write_switch_plan, write_switch_result,
@@ -531,11 +531,13 @@ fn prepare(
     }
     Ok(values)
 }
-fn prepared(
-    stack: &StackV1,
-    dry_run: bool,
-    interactive: bool,
-) -> Result<BTreeMap<String, Value>, AppError> {
+struct Prepared {
+    definitions: BTreeMap<String, Value>,
+    secrets: Vec<String>,
+    missing: bool,
+}
+
+fn prepared(stack: &StackV1, dry_run: bool, interactive: bool) -> Result<Prepared, AppError> {
     let mut resolver = SecretResolver {
         dry_run,
         interactive,
@@ -548,9 +550,13 @@ fn prepared(
     if resolver.cancelled {
         return Err(AppError::ImportApprovalCancelled);
     }
-    result.map_err(Into::into)
+    Ok(Prepared {
+        definitions: result?,
+        secrets: resolver.values.into_values().flatten().collect(),
+        missing: resolver.missing_used,
+    })
 }
-fn prepared_preview(stack: &StackV1) -> Result<(BTreeMap<String, Value>, bool), AppError> {
+fn prepared_preview(stack: &StackV1) -> Result<Prepared, AppError> {
     let mut resolver = SecretResolver {
         dry_run: true,
         interactive: false,
@@ -559,8 +565,11 @@ fn prepared_preview(stack: &StackV1) -> Result<(BTreeMap<String, Value>, bool), 
         values: BTreeMap::new(),
         cancelled: false,
     };
-    let values = prepare(stack, &mut resolver)?;
-    Ok((values, resolver.missing_used))
+    Ok(Prepared {
+        definitions: prepare(stack, &mut resolver)?,
+        secrets: resolver.values.into_values().flatten().collect(),
+        missing: resolver.missing_used,
+    })
 }
 fn as_stack(values: BTreeMap<String, Value>) -> Result<StackV1, AppError> {
     let document = serde_json::json!({"schema_version":SCHEMA_VERSION,"servers":values.iter().map(|(k,v)| (k.clone(),serde_json::json!({"config":v}))).collect::<Map<_,_>>()});
@@ -604,7 +613,7 @@ fn mark_changed_secrets(
     before_mask: &mut Value,
     after_mask: &mut Value,
 ) {
-    if is_masked(after_mask) {
+    if is_masked(after_mask) || after_mask.as_str() == Some("<redacted>") {
         if !is_masked(before_mask) {
             *before_mask = Value::String("<redacted>".into());
         }
@@ -917,12 +926,13 @@ fn preview(
     file: &io::Snapshot,
     before: BTreeMap<String, Value>,
     after: BTreeMap<String, Value>,
+    secrets: &[String],
     colored: bool,
 ) -> Result<(), AppError> {
     if before == after {
         return Ok(());
     }
-    preview_diff(output, path, file, &before, &after, colored)?;
+    preview_diff(output, path, file, &before, &after, secrets, colored)?;
     summarize_changes(output, path, &before, &after, colored)?;
     Ok(())
 }
@@ -933,10 +943,14 @@ fn preview_diff(
     file: &io::Snapshot,
     before: &BTreeMap<String, Value>,
     after: &BTreeMap<String, Value>,
+    secrets: &[String],
     colored: bool,
 ) -> Result<(), AppError> {
     let mut before_mask = mask(before.clone())?;
     let mut after_mask = mask(after.clone())?;
+    for masked in before_mask.values_mut().chain(after_mask.values_mut()) {
+        redact_resolved(masked, secrets);
+    }
     for (name, after_value) in after {
         if let (Some(before_value), Some(before_mask), Some(after_mask)) = (
             before.get(name),
@@ -1208,10 +1222,10 @@ impl ClientAdapter for Claude {
                     .map(String::as_str),
             )?;
         }
-        let (preview_values, missing) = prepared_preview(&stack)?;
-        if missing {
+        let preliminary_input = prepared_preview(&stack)?;
+        if preliminary_input.missing {
             let mut preliminary = before.clone();
-            preliminary.extend(preview_values);
+            preliminary.extend(preliminary_input.definitions);
             preserve_equivalent_servers(&before, &mut preliminary);
             if preliminary != before {
                 writeln!(
@@ -1224,6 +1238,7 @@ impl ClientAdapter for Claude {
                     &file,
                     before.clone(),
                     preliminary,
+                    &preliminary_input.secrets,
                     colored,
                 )?;
             }
@@ -1235,7 +1250,7 @@ impl ClientAdapter for Claude {
         )?;
         let mut proposed = servers(&config);
         let before = proposed.clone();
-        proposed.extend(incoming);
+        proposed.extend(incoming.definitions);
         preserve_equivalent_servers(&before, &mut proposed);
         let servers_changed = before != proposed;
         let mut permissions_changed = false;
@@ -1253,7 +1268,15 @@ impl ClientAdapter for Claude {
             write_no_changes(output, &config_path, false)?;
             return Ok(());
         }
-        preview(output, &config_path, &file, before, proposed, colored)?;
+        preview(
+            output,
+            &config_path,
+            &file,
+            before,
+            proposed,
+            &incoming.secrets,
+            colored,
+        )?;
         if let (Some(path), Some((settings, proposed))) = (permission_path, permission_preview) {
             settings.preview(&proposed, &path, output, colored)?;
         }
@@ -1290,10 +1313,10 @@ impl ClientAdapter for Claude {
                     .map(String::as_str),
             )?;
         }
-        let (preview_values, missing) = prepared_preview(&stack)?;
-        if missing {
+        let preliminary_input = prepared_preview(&stack)?;
+        if preliminary_input.missing {
             let mut preliminary = before.clone();
-            preliminary.extend(preview_values);
+            preliminary.extend(preliminary_input.definitions);
             preserve_equivalent_servers(&before, &mut preliminary);
             if preliminary != before {
                 writeln!(
@@ -1310,7 +1333,8 @@ impl ClientAdapter for Claude {
                 && !non_interactive
                 && stdin().is_terminal()
                 && stderr().is_terminal(),
-        )?;
+        )?
+        .definitions;
         let mut all_changes = before.clone();
         all_changes.extend(incoming.clone());
         preserve_equivalent_servers(&before, &mut all_changes);
@@ -1480,8 +1504,9 @@ impl ClientAdapter for Claude {
                     .map(String::as_str),
             )?;
         }
-        let (mut preliminary, missing) = prepared_preview(&stack)?;
-        if missing {
+        let preliminary_input = prepared_preview(&stack)?;
+        let mut preliminary = preliminary_input.definitions;
+        if preliminary_input.missing {
             preserve_equivalent_servers(&before, &mut preliminary);
             if preliminary != before {
                 writeln!(
@@ -1498,7 +1523,8 @@ impl ClientAdapter for Claude {
                 && !non_interactive
                 && stdin().is_terminal()
                 && stderr().is_terminal(),
-        )?;
+        )?
+        .definitions;
         preserve_equivalent_servers(&before, &mut proposed);
         let permission_change = if let Some(path) = &permission_path {
             let settings = permissions::Snapshot::read(path).await?;
