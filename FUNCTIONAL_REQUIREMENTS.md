@@ -69,6 +69,7 @@ to its entry in Current status at the bottom.\
 
 | Implementation | Brief description |
 | --- | --- |
+| Partial [*](#human-and-agent-readable-output) | Make all CLI output readable and understandable to both humans and AI agents. |
 | Done | List server names, transports, commands/endpoints, and available configuration state. [*](#listing-servers) |
 | Done | Select servers by name; reject unknown selections. [*](#server-selection) |
 | Done | Switch between stack files, replacing the complete MCP server set. [*](#switching-stacks) |
@@ -443,6 +444,16 @@ backups. With `--include-permissions`, import and use show the target settings
 path and added, modified, and deleted MCP rules before approval, including in
 dry runs. Modified rules show their old and new `allow`/`ask`/`deny` memberships.
 Import refreshes the permission summary when server approvals narrow the plan.
+
+### Human and agent readable output
+
+All output, including help, prompts, previews, results, diagnostics, and logs,
+must be understandable to both humans and AI agents. Use clear, consistent labels
+and enough context to identify targets, actions, outcomes, and next steps when
+needed. Preserve meaning in plain text without relying on color or terminal UI.
+
+Existing summaries, diffs, structured exports, CLI schema, and error codes support
+this requirement. A complete output consistency audit remains before marking it Done.
 
 ### Cross-platform integration tests
 
