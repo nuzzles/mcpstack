@@ -1,5 +1,7 @@
 # Codex
 
+Supports STDIO and HTTP.
+
 ```sh
 mcpstack codex list
 ```

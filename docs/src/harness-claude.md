@@ -1,5 +1,7 @@
 # Claude Code
 
+Supports STDIO, HTTP, and SSE in user configuration.
+
 ```sh
 mcpstack claude list
 ```

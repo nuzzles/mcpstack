@@ -123,6 +123,18 @@ def main():
     shutil.copytree(SOURCE / "src", STAGING / "src")
     shutil.copytree(SOURCE / "theme", STAGING / "theme")
     shutil.copyfile(SOURCE / "book.toml", STAGING / "book.toml")
+    support = re.search(
+        r"^## Harness Support\n(.*?)(?=^## |\Z)",
+        (ROOT / "README.md").read_text(encoding="utf-8"),
+        re.M | re.S,
+    )
+    compatibility = STAGING / "src/compatibility.md"
+    template = compatibility.read_text(encoding="utf-8")
+    if support is None or template.count("<!-- harness-support -->") != 1:
+        raise ValueError("Expected README Harness Support section and one harness-support marker")
+    compatibility.write_text(
+        template.replace("<!-- harness-support -->", support[1].strip()), encoding="utf-8"
+    )
     schema = json.loads(run(str(binary), "--schema", env=env, capture_output=True).stdout)
     cli_version = schema["cli_version"]
     revision = run("git", "rev-parse", "HEAD", cwd=ROOT, capture_output=True).stdout.strip()
