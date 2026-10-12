@@ -675,7 +675,10 @@ fn validation_preserves_files_and_does_not_resolve_secrets_or_start_servers() {
     assert!(output.stderr.is_empty());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "Valid stack (schema 1, 1 servers).\n"
+        format!(
+            "Stack file: {}\nValid stack (schema 1, 1 server(s)).\n",
+            fixture.file.to_string_lossy().escape_debug()
+        )
     );
     assert_eq!(std::fs::read_to_string(&fixture.file).unwrap(), document);
     assert_eq!(
@@ -770,7 +773,13 @@ fn native_validation_preserves_inputs_without_executing_helpers() {
     let output = fixture.validate();
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout).unwrap();
-    assert_eq!(text, "Valid stack (schema 1, 1 servers).\n");
+    assert_eq!(
+        text,
+        format!(
+            "Stack file: {}\nValid stack (schema 1, 1 server(s)).\n",
+            fixture.file.to_string_lossy().escape_debug()
+        )
+    );
     assert!(!text.contains("MCPSTACK_MISSING_TEST_TOKEN"));
     assert_eq!(std::fs::read_to_string(&fixture.file).unwrap(), document);
     assert_eq!(
@@ -1715,17 +1724,8 @@ fn masked_import_rejects_missing_values_without_interactive_input() {
         let diagnostics = String::from_utf8_lossy(&output.stderr);
         assert!(diagnostics.contains("WARN"));
         assert!(diagnostics.contains("MCPSTACK_MASKED_SECRET"));
-        if flag == "--dry-run" {
-            assert!(
-                diagnostics
-                    .lines()
-                    .next()
-                    .unwrap()
-                    .contains("Dry run; no changes will be committed.")
-            );
-        } else {
-            assert!(!diagnostics.contains("Dry run;"));
-        }
+        // A failed operation must not report a successful dry-run result.
+        assert!(!diagnostics.contains("Dry run;"));
         assert_eq!(output.status.code(), Some(10));
         assert!(diagnostics.contains("interactive import"));
         let preview = String::from_utf8_lossy(&output.stdout);
@@ -2085,7 +2085,7 @@ fn diff_hunk_positions_match_original_and_imported_files() {
     assert!(dry.status.success(), "{dry:?}");
     assert!(String::from_utf8_lossy(&dry.stdout).contains("  ~ Modified: \"first\", \"last\""));
     assert!(!String::from_utf8_lossy(&dry.stdout).contains("@@"));
-    assert!(String::from_utf8_lossy(&dry.stdout).contains("Would import 2 server(s)."));
+    assert!(String::from_utf8_lossy(&dry.stdout).contains("Would import 2 MCP server(s);"));
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     assert!(!config.with_extension("toml.~1~").exists());
     let applied = invoke(&["codex", "import", "-y"]);

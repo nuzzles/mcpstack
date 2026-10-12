@@ -16,14 +16,21 @@ pub struct Validate {
 
 impl Validate {
     pub async fn run(self, output: &mut impl Write) -> Result<(), AppError> {
-        let document = fs::read_to_string(self.file)
+        let document = fs::read_to_string(&self.file)
             .await
             .map_err(AppError::StackRead)?;
         let stack = Stack::from_yaml(&document)?;
         let Stack::V1(stack) = stack;
         writeln!(
             output,
-            "Valid stack (schema {}, {} servers).",
+            "Stack file: {}",
+            std::path::absolute(&self.file)?
+                .to_string_lossy()
+                .escape_debug()
+        )?;
+        writeln!(
+            output,
+            "Valid stack (schema {}, {} server(s)).",
             stack.schema_version,
             stack.servers.len()
         )?;

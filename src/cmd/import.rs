@@ -8,10 +8,10 @@ use std::io::Write;
 pub struct Import {
     #[command(flatten)]
     selection: crate::integrations::selection::Selection,
-    /// Run import prompts, then show the diff for approved changes without writing files.
+    /// Summarize changes and run approval prompts without writing files; use -y for unattended previews.
     #[arg(long)]
     dry_run: bool,
-    /// Approve all server additions and replacements without prompting.
+    /// Approve all selected server and permission changes without prompting.
     #[arg(short = 'y', long)]
     auto_approve: bool,
     #[command(flatten)]

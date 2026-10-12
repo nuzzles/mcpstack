@@ -11,6 +11,7 @@ use super::import::prepare;
 use super::workflow::warn_runtime_bindings;
 use crate::error::AppError;
 use crate::integrations::secrets::SecretResolver;
+use crate::integrations::write_no_changes;
 use crate::schema::Stack;
 
 use super::{Error, default_config};
@@ -93,10 +94,7 @@ pub(crate) async fn run(
     }
     let changes = snapshot.preview(&definitions)?;
     if changes.is_empty() {
-        writeln!(
-            output,
-            "No changes; existing identical entries were unchanged."
-        )?;
+        write_no_changes(output, &path, false)?;
         return Ok(());
     }
     let incoming = changes
