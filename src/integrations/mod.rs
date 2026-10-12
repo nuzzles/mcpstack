@@ -13,7 +13,13 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Subcommand};
 use thiserror::Error;
 
-use crate::cmd::{diff::Diff, export::Export, import::Import, show::Show, r#use::Use};
+use crate::cmd::{
+    diff::Diff,
+    export::{ClaudeExport, CodexExport},
+    import::Import,
+    show::{ClaudeShow, CodexShow},
+    r#use::Use,
+};
 use crate::error::{AppError, ErrorCode};
 
 fn write_change_summary(
@@ -71,33 +77,53 @@ pub struct ExportArgs {
     /// Include per-server MCP tool permissions when available.
     #[arg(long)]
     include_permissions: bool,
-    /// Read Claude Code permission rules from this settings file.
-    #[arg(long, value_name = "PATH")]
+    #[arg(skip)]
     permissions_config: Option<PathBuf>,
     /// Include every server normally skipped by the export filter.
     #[arg(long)]
     all: bool,
-    /// Include the otherwise skipped workspace server.
-    #[arg(long)]
+    #[arg(skip)]
     allow_workspace: bool,
-    /// Include the otherwise skipped claude-in-chrome server.
-    #[arg(long)]
+    #[arg(skip)]
     allow_claude_in_chrome: bool,
-    /// Include the otherwise skipped computer-use server.
-    #[arg(long)]
+    #[arg(skip)]
     allow_computer_use: bool,
-    /// Include the otherwise skipped Claude Preview server.
-    #[arg(long)]
+    #[arg(skip)]
     allow_claude_preview: bool,
-    /// Include the otherwise skipped Claude Browser server.
-    #[arg(long)]
+    #[arg(skip)]
     allow_claude_browser: bool,
-    /// Include the otherwise skipped node_repl server.
-    #[arg(long)]
+    #[arg(skip)]
     allow_node_repl: bool,
 }
 
 impl ExportArgs {
+    pub(crate) fn for_codex(&mut self, computer_use: bool, node_repl: bool) {
+        self.allow_workspace = true;
+        self.allow_claude_in_chrome = true;
+        self.allow_computer_use = computer_use;
+        self.allow_claude_preview = true;
+        self.allow_claude_browser = true;
+        self.allow_node_repl = node_repl;
+    }
+
+    pub(crate) fn for_claude(
+        &mut self,
+        permissions_config: Option<PathBuf>,
+        workspace: bool,
+        claude_in_chrome: bool,
+        computer_use: bool,
+        claude_preview: bool,
+        claude_browser: bool,
+    ) {
+        self.permissions_config = permissions_config;
+        self.allow_workspace = workspace;
+        self.allow_claude_in_chrome = claude_in_chrome;
+        self.allow_computer_use = computer_use;
+        self.allow_claude_preview = claude_preview;
+        self.allow_claude_browser = claude_browser;
+        self.allow_node_repl = true;
+    }
+
     pub(crate) fn config_path(&self) -> Option<&Path> {
         self.config.as_deref()
     }
@@ -136,23 +162,38 @@ pub struct StackArgs {
 #[derive(Subcommand)]
 pub enum Client {
     /// Manage MCP servers in Codex configuration.
-    Codex(ClientCommands),
+    Codex(CodexCommands),
     /// Manage MCP servers in Claude Code user configuration.
-    Claude(ClientCommands),
+    Claude(ClaudeCommands),
 }
 
 #[derive(Args)]
-pub struct ClientCommands {
+pub struct CodexCommands {
     #[command(subcommand)]
-    operation: Operation,
+    operation: CodexOperation,
 }
 
 #[derive(Subcommand)]
-enum Operation {
+enum CodexOperation {
     Use(Use),
     Import(Import),
-    Show(Show),
-    Export(Export),
+    Show(CodexShow),
+    Export(CodexExport),
+    Diff(Diff),
+}
+
+#[derive(Args)]
+pub struct ClaudeCommands {
+    #[command(subcommand)]
+    operation: ClaudeOperation,
+}
+
+#[derive(Subcommand)]
+enum ClaudeOperation {
+    Use(Use),
+    Import(Import),
+    Show(ClaudeShow),
+    Export(ClaudeExport),
     Diff(Diff),
 }
 
@@ -164,29 +205,33 @@ impl Client {
         colored: bool,
     ) -> Result<(), AppError> {
         match self {
-            Self::Codex(commands) => {
-                run_commands(&Codex, commands, output, non_interactive, colored).await
-            }
-            Self::Claude(commands) => {
-                run_commands(&Claude, commands, output, non_interactive, colored).await
-            }
+            Self::Codex(commands) => match commands.operation {
+                CodexOperation::Use(args) => {
+                    args.run(&Codex, output, non_interactive, colored).await
+                }
+                CodexOperation::Import(args) => {
+                    args.run(&Codex, output, non_interactive, colored).await
+                }
+                CodexOperation::Show(args) => args.run(&Codex, output, non_interactive).await,
+                CodexOperation::Export(args) => args.run(&Codex, output, non_interactive).await,
+                CodexOperation::Diff(args) => {
+                    args.run(&Codex, output, non_interactive, colored).await
+                }
+            },
+            Self::Claude(commands) => match commands.operation {
+                ClaudeOperation::Use(args) => {
+                    args.run(&Claude, output, non_interactive, colored).await
+                }
+                ClaudeOperation::Import(args) => {
+                    args.run(&Claude, output, non_interactive, colored).await
+                }
+                ClaudeOperation::Show(args) => args.run(&Claude, output, non_interactive).await,
+                ClaudeOperation::Export(args) => args.run(&Claude, output, non_interactive).await,
+                ClaudeOperation::Diff(args) => {
+                    args.run(&Claude, output, non_interactive, colored).await
+                }
+            },
         }
-    }
-}
-
-async fn run_commands(
-    adapter: &impl ClientAdapter,
-    commands: ClientCommands,
-    output: &mut impl Write,
-    non_interactive: bool,
-    colored: bool,
-) -> Result<(), AppError> {
-    match commands.operation {
-        Operation::Use(args) => args.run(adapter, output, non_interactive, colored).await,
-        Operation::Import(args) => args.run(adapter, output, non_interactive, colored).await,
-        Operation::Show(args) => args.run(adapter, output, non_interactive).await,
-        Operation::Export(args) => args.run(adapter, output, non_interactive).await,
-        Operation::Diff(args) => args.run(adapter, output, non_interactive, colored).await,
     }
 }
 

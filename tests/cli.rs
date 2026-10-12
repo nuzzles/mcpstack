@@ -333,6 +333,80 @@ fn invalid_arguments_use_stderr_without_echoing_values() {
     }
 }
 
+#[test]
+fn show_and_export_only_advertise_source_specific_options() {
+    for operation in ["show", "export"] {
+        let codex = String::from_utf8(run(&["codex", operation, "--help"]).stdout).unwrap();
+        let claude = String::from_utf8(run(&["claude", operation, "--help"]).stdout).unwrap();
+        for flag in ["--allow-computer-use", "--all", "--include-permissions"] {
+            assert!(codex.contains(flag), "{operation}: {flag}");
+            assert!(claude.contains(flag), "{operation}: {flag}");
+        }
+        assert!(codex.contains("--allow-node-repl"));
+        assert!(!claude.contains("--allow-node-repl"));
+        for flag in [
+            "--allow-workspace",
+            "--allow-claude-in-chrome",
+            "--allow-claude-preview",
+            "--allow-claude-browser",
+            "--permissions-config",
+        ] {
+            assert!(claude.contains(flag), "{operation}: {flag}");
+            assert!(!codex.contains(flag), "{operation}: {flag}");
+        }
+        for (client, flag) in [
+            ("codex", "--allow-workspace"),
+            ("claude", "--allow-node-repl"),
+        ] {
+            let output = if operation == "export" {
+                run(&[client, operation, "stack.yml", flag])
+            } else {
+                run(&[client, operation, flag])
+            };
+            assert_eq!(output.status.code(), Some(2));
+        }
+    }
+}
+
+#[test]
+fn codex_show_keeps_claude_only_names_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    std::fs::write(&config, "[mcp_servers.workspace]\ncommand='tool'\n[mcp_servers.claude-in-chrome]\ncommand='tool'\n[mcp_servers.computer-use]\ncommand='tool'\n[mcp_servers.node_repl]\ncommand='tool'\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args(["codex", "show", "--config"])
+        .arg(&config)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stack: Value = yaml_serde::from_slice(&output.stdout).unwrap();
+    let servers = stack["servers"].as_object().unwrap();
+    assert!(servers.contains_key("workspace"));
+    assert!(servers.contains_key("claude-in-chrome"));
+    assert!(!servers.contains_key("computer-use"));
+    assert!(!servers.contains_key("node_repl"));
+}
+
+#[test]
+fn missing_export_file_uses_clap_diagnostic_without_echoing_other_values() {
+    let output = run(&["codex", "export", "--config", "fixture-secret"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    assert!(diagnostic.contains("INVALID_ARGUMENT"));
+    assert!(diagnostic.contains("error:"));
+    assert!(diagnostic.contains("<FILE>"));
+    assert!(diagnostic.contains("--help"));
+    assert!(!diagnostic.contains("fixture-secret"));
+
+    let colored = run(&["--color", "always", "codex", "export"]);
+    assert_eq!(colored.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&colored.stderr).contains("\u{1b}["));
+    let plain = run(&["--no-color", "--color", "always", "codex", "export"]);
+    assert_eq!(plain.status.code(), Some(2));
+    assert!(!String::from_utf8_lossy(&plain.stderr).contains("\u{1b}["));
+}
+
 #[cfg(unix)]
 #[test]
 fn advertised_error_codes_match_process_failures() {

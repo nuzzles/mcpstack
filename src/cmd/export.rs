@@ -1,4 +1,4 @@
-use crate::cmd::show::Show;
+use crate::cmd::show::{ClaudeShow, CodexShow, Show};
 use crate::error::AppError;
 use crate::integrations::ClientAdapter;
 use crate::io;
@@ -7,13 +7,61 @@ use std::io::Write;
 use std::path::PathBuf;
 
 /// Export client server definitions as a YAML stack to a file.
+struct Export {
+    file: PathBuf,
+    show: Show,
+}
+
+/// Export Codex MCP servers to a YAML stack file.
 #[derive(Args)]
-pub struct Export {
+pub struct CodexExport {
     /// Destination YAML stack file.
     #[arg(value_name = "FILE")]
     file: PathBuf,
     #[command(flatten)]
-    show: Show,
+    show: CodexShow,
+}
+
+impl CodexExport {
+    pub async fn run(
+        self,
+        target: &impl ClientAdapter,
+        output: &mut impl Write,
+        non_interactive: bool,
+    ) -> Result<(), AppError> {
+        Export {
+            file: self.file,
+            show: self.show.into_show(),
+        }
+        .run(target, output, non_interactive)
+        .await
+    }
+}
+
+/// Export Claude Code MCP servers to a YAML stack file.
+#[derive(Args)]
+pub struct ClaudeExport {
+    /// Destination YAML stack file.
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+    #[command(flatten)]
+    show: ClaudeShow,
+}
+
+impl ClaudeExport {
+    pub async fn run(
+        self,
+        target: &impl ClientAdapter,
+        output: &mut impl Write,
+        non_interactive: bool,
+    ) -> Result<(), AppError> {
+        Export {
+            file: self.file,
+            show: self.show.into_show(),
+        }
+        .run(target, output, non_interactive)
+        .await
+    }
 }
 
 impl Export {
