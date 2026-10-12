@@ -1,0 +1,23 @@
+[book]
+title = "mcpstack"
+description = "Manage, share, and switch MCP server configurations across clients. Documentation for humans and agents."
+language = "en"
+src = "src"
+
+[build]
+create-missing = false
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+theme = "theme"
+additional-css = ["theme/custom.css"]
+git-repository-url = "https://github.com/nuzzles/mcpstack"
+edit-url-template = "https://github.com/nuzzles/mcpstack/edit/main/docs/{path}"
+site-url = "/mcpstack/"
+
+[output.html.search]
+use-boolean-and = true
+
+[output.html.playground]
+runnable = false

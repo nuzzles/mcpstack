@@ -65,6 +65,7 @@ to its entry in Current status at the bottom.\
 | Implementation | Brief description |
 | --- | --- |
 | Done | Claude Code user-scope JSON list, import, show, export, diff, and stack switching. [*](#claude-support) |
+| Unsupported | Manage Claude Code project- and local-scope MCP configurations. |
 
 ### CLI
 
@@ -85,7 +86,9 @@ to its entry in Current status at the bottom.\
 | Done | Repeat imports and stack switches without duplicates or unnecessary side effects when the stack, resolved values, and target configuration are unchanged. [*](#codex-import) |
 | Done | Mask recognized credentials in shared exports by default, expose them only on explicit request, and redact them from previews and diagnostics. [*](#secrets) |
 | Done | Test secret redaction and configuration preservation on success and failure for supported workflows. [*](#stack-workflow-tests) |
-| Unsupported | Document human and AI workflows, failure handling, switching, and repeat imports. |
+| Done | Document human and AI workflows, failure handling, switching, and repeat imports. [*](#documentation-site) |
+| Unsupported | Detect newer mcpstack releases, notify users when the installed CLI is out of date, and automatically update to the latest release. |
+| Unsupported | Import and export WebSocket MCP server definitions for harnesses that support them. |
 
 ## Notes
 
@@ -120,8 +123,8 @@ represent the fields before writing; removing the label does not make every
 client-specific option universally supported. Codex and Claude Code have
 adapters. Transport definitions provide the explicit shared transport form.
 
-This changes the unpublished v1 format: remove `client: codex` (or another client
-label) from existing items and retain their `config` data. Legacy client labels
+To migrate legacy stacks, remove `client: codex` (or another client label) from
+existing items and retain their `config` data. Legacy client labels
 are rejected rather than silently ignored.
 
 ### Phase 1 boundaries
@@ -256,8 +259,8 @@ servers. Rename one server before handling those permissions.
 No unsupported decision is silently discarded or weakened. Existing
 transport/settings compatibility checks still apply.
 
-This changes the unpublished v1 permission format. Legacy `source: claude` and
-`source: codex` policies, and native-qualified permission rules, are rejected.
+Legacy `source: claude` and `source: codex` policies, and native-qualified
+permission rules, are rejected.
 Re-export native configurations with `--include-permissions` to migrate them.
 
 ### Switching stacks
@@ -419,9 +422,34 @@ Stack format v1 defines YAML, STDIO/HTTP/SSE/WebSocket, client-independent
 configuration and transport definitions, and environment reference syntax.
 
 Remote catalogs, team access controls, and automatic synchronization are later
-scope. Publishing and release/deployment automation require explicit authorization.
+scope. CLI publishing and release/deployment automation require explicit authorization.
+Documentation publishing to GitHub Pages is supported.
 
 ## Current status
+
+### Documentation site
+
+The mdBook site at `https://nuzzles.github.io/mcpstack/` is built from
+[`docs/src`](docs/src/SUMMARY.md) and documents mcpstack 0.1.0. It covers source installation,
+scratch-config examples, export/import/switch workflows, secrets, permission
+opt-in, compatibility, failures, recovery, and repeat operations. Each chapter
+also has a Markdown download. `llms.txt` indexes the agent-readable pages and
+`llms-full.txt` combines them. The CLI reference and `cli-schema.json` are generated
+from the executable during the same build. The generated reference and agent
+indexes identify the executable's version.
+
+Section 1, Installation, has From source and Crates.io subsections for 0.1.0.
+Section 2, Compatibility, has Claude Code and Codex subsections covering supported
+scopes, configuration paths, commands, and compatibility limits. Section 3,
+Commands, includes a concise subsection for every operation, with shared examples
+and links to both harnesses' generated help files. Pages keep full option listings
+in downloadable text; the CLI schema retains complete machine-readable metadata.
+Section 4, References, groups workflows (including the scratch preview), secrets
+and permissions, recovery, agent guidance, and the stack format.
+
+PRs build and validate the site, YAML examples, scratch workflows, local links,
+and anchors. Merged changes deploy through GitHub Pages; PRs cannot deploy.
+Contributor build instructions are in [`docs/README.md`](docs/README.md).
 
 ### Commands and help
 

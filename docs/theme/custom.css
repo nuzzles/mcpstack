@@ -1,0 +1,49 @@
+/* Keep mdBook's accessible navigation, search, and theme controls. */
+:root {
+    --content-max-width: 760px;
+}
+.light {
+    --bg: #fafbf9;
+    --fg: #202d29;
+    --sidebar-bg: #f0f3ef;
+    --sidebar-fg: #394941;
+    --sidebar-active: #06734f;
+    --links: #06734f;
+    --quote-bg: #eef5ef;
+    --quote-border: #75a88a;
+}
+.navy, .coal, .ayu {
+    --links: #86dab2;
+    --sidebar-active: #86dab2;
+}
+.content main {
+    line-height: 1.5;
+    padding-bottom: 2rem;
+}
+.content h2 {
+    margin-top: 2rem;
+}
+.content table {
+    display: block;
+    overflow-x: auto;
+    margin: 1rem 0;
+}
+.content table th, .content table td {
+    padding: 0.5rem 0.8rem;
+    text-align: left;
+}
+.page-tools {
+    display: flex;
+    justify-content: flex-end;
+    font-size: 1.3rem;
+    margin: 0.5rem 0;
+}
+.page-tools a {
+    text-decoration: none;
+}
+.page-tools a:hover, .page-tools a:focus-visible {
+    text-decoration: underline;
+}
+@media (max-width: 600px) {
+    .content main { padding-inline: 0.4rem; }
+}

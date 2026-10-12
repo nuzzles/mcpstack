@@ -7,3 +7,4 @@
 *.local.json
 .DS_Store
 *.yml
+!/.github/workflows/docs.yml

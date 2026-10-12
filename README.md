@@ -1,16 +1,23 @@
-# mcpstack
+# <img src="docs/theme/favicon.svg" width="32" height="32" alt=""> mcpstack
 
 A Rust CLI for humans and agents to install multiple MCP servers, version-control
 and switch stacks, and share setups across teams.
 
-> [!WARNING]
-> mcpstack is in early development. See [FUNCTIONAL_REQUIREMENTS.md](FUNCTIONAL_REQUIREMENTS.md) for the feature checklist.
+> [!NOTE]
+> mcpstack is in early development.
 
 ## Harness Support
 
-| mcpstack | Codex | Claude Code | Claude Desktop | Cursor | Gemini CLI | OpenCode | VS Code/Copilot | Windsurf |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0.0.0 (unpublished) | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Harness | mcpstack 0.1.0 | main (source) |
+| --- | --- | --- |
+| Codex | ✅ | ✅ |
+| Claude Code | ✅ | ✅ |
+| Claude Desktop | ❌ | ❌ |
+| Cursor | ❌ | ❌ |
+| Gemini CLI | ❌ | ❌ |
+| OpenCode | ❌ | ❌ |
+| VS Code/Copilot | ❌ | ❌ |
+| Windsurf | ❌ | ❌ |
 
 ✅ Supported · 🚧 In progress · ❌ Not implemented
 
@@ -26,7 +33,7 @@ This crate's [Minimum Supported Rust Version (MSRV)][MSRV] is currently **1.98**
 
 | mcpstack | Minimum Rust version |
 | --- | --- |
-| 0.0.0 (unpublished) | 1.98 |
+| 0.1.0 | 1.98 |
 
 See [CONTRIBUTING.md](CONTRIBUTING.md#changing-the-msrv) for how to change
 the MSRV.
