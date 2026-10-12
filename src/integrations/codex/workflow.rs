@@ -222,6 +222,7 @@ pub(crate) async fn run_list(
     config: Option<PathBuf>,
     filter: crate::integrations::reserved::ServerFilter,
     output: &mut impl Write,
+    colored: bool,
 ) -> Result<(), AppError> {
     let path = config.or_else(default_config).ok_or(Error::ConfigPath)?;
     let document = fs::read_to_string(path)
@@ -234,6 +235,7 @@ pub(crate) async fn run_list(
         &config,
         crate::integrations::listing::Source::Codex,
         filter,
+        colored,
     )
 }
 

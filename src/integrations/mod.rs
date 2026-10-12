@@ -167,7 +167,7 @@ impl Client {
     ) -> Result<(), AppError> {
         match self {
             Self::Codex(commands) => match commands.operation {
-                CodexOperation::List(args) => args.run(&Codex, output).await,
+                CodexOperation::List(args) => args.run(&Codex, output, colored).await,
                 CodexOperation::Use(args) => {
                     args.run(&Codex, output, non_interactive, colored).await
                 }
@@ -181,7 +181,7 @@ impl Client {
                 }
             },
             Self::Claude(commands) => match commands.operation {
-                ClaudeOperation::List(args) => args.run(&Claude, output).await,
+                ClaudeOperation::List(args) => args.run(&Claude, output, colored).await,
                 ClaudeOperation::Use(args) => {
                     args.run(&Claude, output, non_interactive, colored).await
                 }
@@ -204,6 +204,7 @@ pub trait ClientAdapter {
         config: Option<PathBuf>,
         filter: reserved::ServerFilter,
         output: &mut impl Write,
+        colored: bool,
     ) -> Result<(), AppError>;
 
     async fn show(
@@ -260,8 +261,9 @@ impl ClientAdapter for Codex {
         config: Option<PathBuf>,
         filter: reserved::ServerFilter,
         output: &mut impl Write,
+        colored: bool,
     ) -> Result<(), AppError> {
-        codex::workflow::run_list(config, filter, output).await
+        codex::workflow::run_list(config, filter, output, colored).await
     }
 
     async fn export(

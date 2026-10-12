@@ -26,6 +26,60 @@ fn success(output: &Output) -> String {
 }
 
 #[test]
+fn list_colors_preserve_alignment_and_honor_global_controls() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config");
+    for (client, document, states) in [
+        (
+            "codex",
+            "[mcp_servers.alpha]\ncommand='tool'\n[mcp_servers.longer_name]\nurl='https://example.com/mcp'\nenabled=false",
+            ["\x1b[32menabled\x1b[0m", "\x1b[33mdisabled\x1b[0m"],
+        ),
+        (
+            "claude",
+            r#"{"mcpServers":{"alpha":{"command":"tool"},"computer-use":{"type":"http","url":"https://example.com/mcp"}}}"#,
+            ["\x1b[36mconfigured\x1b[0m", "\x1b[33mignored\x1b[0m"],
+        ),
+    ] {
+        std::fs::write(&config, document).unwrap();
+        let run_color = |flags: &[&str], env_color: &str, no_color: &str| {
+            success(
+                &Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+                    .args([client, "list", "--all", "--config"])
+                    .arg(&config)
+                    .args(flags)
+                    .env_remove("RUST_LOG")
+                    .env("MCPSTACK_COLOR", env_color)
+                    .env("NO_COLOR", no_color)
+                    .stdin(Stdio::null())
+                    .output()
+                    .unwrap(),
+            )
+        };
+        let plain = run_color(&[], "auto", "");
+        assert!(!plain.contains('\x1b'));
+        let colored = run_color(&["--color", "always"], "auto", "");
+        for heading in ["NAME", "TRANSPORT", "STATE", "COMMAND / ENDPOINT", "alpha"] {
+            assert!(colored.contains(&format!("\x1b[1m{heading}\x1b[0m")));
+        }
+        for state in states {
+            assert!(colored.contains(state));
+        }
+        let mut stripped = colored.clone();
+        for sequence in ["\x1b[1m", "\x1b[32m", "\x1b[33m", "\x1b[36m", "\x1b[0m"] {
+            stripped = stripped.replace(sequence, "");
+        }
+        assert_eq!(stripped, plain);
+        assert!(colored.contains("  tool\n"));
+        assert!(colored.contains("  https://example.com/mcp\n"));
+        assert_eq!(run_color(&[], "always", ""), colored);
+        assert_eq!(run_color(&["--color", "never"], "always", ""), plain);
+        assert_eq!(run_color(&["--no-color"], "always", ""), plain);
+        assert_eq!(run_color(&["--color", "always"], "auto", "1"), plain);
+    }
+}
+
+#[test]
 fn list_show_and_export_share_default_filters_and_individual_flags() {
     let names = [
         "ordinary",

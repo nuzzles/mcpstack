@@ -18,6 +18,7 @@ pub(super) fn write(
     config: &Value,
     source: Source,
     filter: super::reserved::ServerFilter,
+    colored: bool,
 ) -> Result<(), AppError> {
     let root = config.as_object().ok_or(AppError::ListConfig)?;
     let key = match source {
@@ -54,9 +55,9 @@ pub(super) fn write(
                 .unwrap()
         })
         .collect();
-    write_row(output, &headers.map(str::to_owned), &widths)?;
+    write_row(output, &headers.map(str::to_owned), &widths, colored, true)?;
     for row in &rows {
-        write_row(output, row, &widths)?;
+        write_row(output, row, &widths, colored, false)?;
     }
     Ok(())
 }
@@ -127,9 +128,31 @@ fn cell(value: &str) -> String {
     value.escape_debug().to_string()
 }
 
-fn write_row(output: &mut impl Write, row: &[String; 4], widths: &[usize]) -> std::io::Result<()> {
+fn write_row(
+    output: &mut impl Write,
+    row: &[String; 4],
+    widths: &[usize],
+    colored: bool,
+    header: bool,
+) -> std::io::Result<()> {
     for (index, value) in row.iter().enumerate() {
-        write!(output, "{value}")?;
+        let style = if header || index == 0 {
+            Some(1) // bold headings and server names
+        } else if index == 2 {
+            match value.as_str() {
+                "enabled" => Some(32),              // green
+                "disabled" | "ignored" => Some(33), // yellow
+                "configured" => Some(36),           // cyan
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(style) = style.filter(|_| colored) {
+            write!(output, "\x1b[{style}m{value}\x1b[0m")?;
+        } else {
+            write!(output, "{value}")?;
+        }
         if index < row.len() - 1 {
             write!(
                 output,

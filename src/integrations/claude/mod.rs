@@ -1060,6 +1060,7 @@ impl ClientAdapter for Claude {
         config: Option<PathBuf>,
         filter: super::reserved::ServerFilter,
         output: &mut impl Write,
+        colored: bool,
     ) -> Result<(), AppError> {
         let bytes = fs::read(path(config)?)
             .await
@@ -1073,7 +1074,13 @@ impl ClientAdapter for Claude {
             )
             .map_err(|_| AppError::ListConfig)?
         };
-        super::listing::write(output, &config, super::listing::Source::Claude, filter)
+        super::listing::write(
+            output,
+            &config,
+            super::listing::Source::Claude,
+            filter,
+            colored,
+        )
     }
 
     async fn export(

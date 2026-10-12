@@ -20,7 +20,7 @@ pub struct Logging {
     /// Override the tracing filter (also read from RUST_LOG).
     #[arg(long, global = true, env = "RUST_LOG", hide_env_values = true, conflicts_with_all = ["verbose", "quiet"])]
     log: Option<String>,
-    /// ANSI color mode for help, diagnostics, logs, and diffs.
+    /// ANSI color mode for help, diagnostics, logs, diffs, and lists.
     #[arg(long, global = true, env = "MCPSTACK_COLOR", hide_env_values = true, value_enum, default_value_t = ColorMode::Auto)]
     color: ColorMode,
     /// Disable ANSI colors; also honors nonempty NO_COLOR.
@@ -37,7 +37,7 @@ enum ColorMode {
 }
 
 impl Logging {
-    /// Diffs follow stdout's terminal state independently of stderr logging.
+    /// Output follows stdout's terminal state independently of stderr logging.
     pub fn output_ansi(&self) -> bool {
         self.ansi_for(stdout().is_terminal())
     }

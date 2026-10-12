@@ -21,7 +21,10 @@ impl<F: Args + FilterArgs> List<F> {
         self,
         target: &impl ClientAdapter,
         output: &mut impl Write,
+        colored: bool,
     ) -> Result<(), AppError> {
-        target.list(self.config, self.filter.filter(), output).await
+        target
+            .list(self.config, self.filter.filter(), output, colored)
+            .await
     }
 }
