@@ -815,6 +815,288 @@ fn claude_permission_rules_are_opt_in_and_restore_from_settings() {
 
 #[test]
 #[cfg(any(unix, windows))]
+fn permission_diff_shows_rule_moves_and_matches_written_settings() {
+    for pretty in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("claude.json");
+        let settings = dir.path().join("custom-settings.json");
+        let stack = dir.path().join("stack.yml");
+        let original_config = r#"{"mcpServers":{"example":{"command":"tool"}}}"#;
+        std::fs::write(&config, original_config).unwrap();
+        let value = serde_json::json!({
+            "env": {"TOKEN": "fixture-secret", "PIN": 123456},
+            "permissions": {
+                "allow": ["Bash(curl --token fixture-secret)", "mcp__example__old"],
+                "ask": ["mcp__example__read"],
+                "deny": ["mcp__example__delete"],
+                "additionalDirectories": ["private-path", "another-private-path"]
+            }
+        });
+        let original = if pretty {
+            format!("{}\n", serde_json::to_string_pretty(&value).unwrap())
+        } else {
+            serde_json::to_string(&value)
+                .unwrap()
+                .replace("fixture-secret", "fixture\\u002dsecret")
+        };
+        std::fs::write(&settings, &original).unwrap();
+        std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions:\n      source: claude\n      allow: [mcp__example__read]\n      ask: [mcp__example__write]\n      deny: []\n").unwrap();
+        let flags = [
+            "--include-permissions",
+            "--permissions-config",
+            settings.to_str().unwrap(),
+            "--color",
+            "never",
+        ];
+        let output = run("diff", Some(&stack), &config, &flags);
+        assert!(output.status.success(), "{output:?}");
+        let preview = String::from_utf8(output.stdout.clone()).unwrap();
+        assert!(
+            preview.contains(&format!(
+                "--- {}\n+++ {}\n",
+                settings.display(),
+                settings.display()
+            )),
+            "{preview}"
+        );
+        assert!(
+            !preview.contains(&format!("--- {}", config.display())),
+            "{preview}"
+        );
+        for rule in [
+            "mcp__example__old",
+            "mcp__example__read",
+            "mcp__example__delete",
+        ] {
+            assert!(
+                preview
+                    .lines()
+                    .any(|line| line.starts_with('-') && line.contains(rule)),
+                "{preview}"
+            );
+        }
+        for rule in ["mcp__example__read", "mcp__example__write"] {
+            assert!(
+                preview
+                    .lines()
+                    .any(|line| line.starts_with('+') && line.contains(rule)),
+                "{preview}"
+            );
+        }
+        for bucket in ["allow", "ask", "deny"] {
+            assert!(preview.contains(&format!("\"{bucket}\"")), "{preview}");
+        }
+        for secret in [
+            "fixture-secret",
+            "fixture\\u002dsecret",
+            "123456",
+            "private-path",
+            "Bash(curl",
+        ] {
+            assert!(!preview.contains(secret), "{preview}");
+            assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+        }
+        assert!(!preview.contains('\x1b'));
+        assert_eq!(
+            run("diff", Some(&stack), &config, &flags).stdout,
+            output.stdout
+        );
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), original);
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original_config);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+
+        let mut apply_flags = flags.to_vec();
+        apply_flags.push("-y");
+        let applied = run("import", Some(&stack), &config, &apply_flags);
+        assert!(applied.status.success(), "{applied:?}");
+        let written = std::fs::read_to_string(&settings).unwrap();
+        let actual: serde_json::Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(actual["env"], value["env"]);
+        assert_eq!(
+            actual["permissions"]["additionalDirectories"],
+            value["permissions"]["additionalDirectories"]
+        );
+        assert_eq!(
+            actual["permissions"]["allow"],
+            serde_json::json!(["Bash(curl --token fixture-secret)", "mcp__example__read"])
+        );
+        assert_eq!(
+            actual["permissions"]["ask"],
+            serde_json::json!(["mcp__example__write"])
+        );
+        assert_eq!(actual["permissions"]["deny"], serde_json::json!([]));
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original_config);
+        assert!(!dir.path().join("claude.json.~1~").exists());
+        assert_permission_diff_coordinates(&preview, &original, &written);
+        let repeated = run("diff", Some(&stack), &config, &flags);
+        assert!(repeated.status.success(), "{repeated:?}");
+        assert!(repeated.stdout.is_empty(), "{repeated:?}");
+    }
+}
+
+// Check that visible rules in each hunk point to the actual source/write lines,
+// even when redaction hides multiline settings or the source is minified.
+fn assert_permission_diff_coordinates(preview: &str, original: &str, written: &str) {
+    let before: Vec<_> = original.lines().collect();
+    let after: Vec<_> = written.lines().collect();
+    let (mut old, mut new) = (0, 0);
+    for line in preview.lines() {
+        if line.starts_with("@@ ") {
+            let mut ranges = line.split_whitespace().skip(1);
+            let start = |range: &str| {
+                range[1..]
+                    .split(',')
+                    .next()
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap()
+            };
+            old = start(ranges.next().unwrap());
+            new = start(ranges.next().unwrap());
+        } else if !line.starts_with("--- ") && !line.starts_with("+++ ") {
+            if line.contains("mcp__") {
+                // The fixture has no escapes in rule spellings. Minified lines
+                // contain omitted values, so compare each visible rule token.
+                for rule in line.split('"').filter(|s| s.starts_with("mcp__")) {
+                    if line.starts_with(['-', ' ']) {
+                        assert!(before[old - 1].contains(rule), "{line}");
+                    }
+                    if line.starts_with(['+', ' ']) {
+                        assert!(after[new - 1].contains(rule), "{line}");
+                    }
+                }
+            }
+            if line.starts_with(['-', ' ']) {
+                old += 1;
+            }
+            if line.starts_with(['+', ' ']) {
+                new += 1;
+            }
+        }
+    }
+}
+
+#[test]
+fn permission_diff_handles_missing_settings_and_color_without_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let settings = dir.path().join("missing/settings.json");
+    let stack = dir.path().join("stack.yml");
+    std::fs::write(&config, r#"{"mcpServers":{"example":{"command":"tool"}}}"#).unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {source: claude, allow: [mcp__example__read], ask: [mcp__example__write], deny: [mcp__example__delete]}\n").unwrap();
+    let execute = |flags: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["--non-interactive", "claude", "diff"])
+            .arg(&stack)
+            .arg("--config")
+            .arg(&config)
+            .args(["--include-permissions", "--permissions-config"])
+            .arg(&settings)
+            .args(flags)
+            .env_remove("MCPSTACK_COLOR")
+            .env_remove("NO_COLOR")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let plain = execute(&["--color", "never"]);
+    assert!(plain.status.success(), "{plain:?}");
+    let text = String::from_utf8(plain.stdout.clone()).unwrap();
+    assert!(text.contains("--- /dev/null\n"), "{text}");
+    assert!(
+        text.contains(&format!("+++ {}\n", settings.display())),
+        "{text}"
+    );
+    for bucket in ["allow", "ask", "deny"] {
+        assert!(text.contains(&format!("+    \"{bucket}\": [")), "{text}");
+    }
+    let colored = execute(&["--color", "always"]);
+    assert!(colored.status.success(), "{colored:?}");
+    let color_text = String::from_utf8(colored.stdout).unwrap();
+    assert!(
+        color_text.contains("\x1b[36m--- /dev/null\x1b[0m"),
+        "{color_text}"
+    );
+    assert!(color_text.contains("\x1b[32m+"), "{color_text}");
+    let stripped = ["\x1b[36m", "\x1b[32m", "\x1b[31m", "\x1b[0m"]
+        .iter()
+        .fold(color_text, |text, code| text.replace(code, ""));
+    assert_eq!(stripped, text);
+    assert_eq!(
+        execute(&["--color", "always", "--no-color"]).stdout,
+        plain.stdout
+    );
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    assert!(!settings.parent().unwrap().exists());
+}
+
+#[test]
+fn permission_diff_respects_opt_in_selection_and_codex_translation() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let settings = dir.path().join("settings.json");
+    let stack = dir.path().join("stack.yml");
+    std::fs::write(
+        &config,
+        r#"{"mcpServers":{"example":{"command":"tool"},"other":{"command":"tool"}}}"#,
+    )
+    .unwrap();
+    std::fs::write(&settings, "{}\n").unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {source: codex, default_mode: auto, tools: {read: approve, write: prompt}}\n  other:\n    transport: {type: stdio, command: tool}\n    permissions: {source: claude, deny: [mcp__other__*]}\n").unwrap();
+    let omitted = run("diff", Some(&stack), &config, &[]);
+    assert!(omitted.status.success(), "{omitted:?}");
+    assert!(omitted.stdout.is_empty(), "{omitted:?}");
+    let selected = run(
+        "diff",
+        Some(&stack),
+        &config,
+        &[
+            "--include-permissions",
+            "--server",
+            "example",
+            "--color",
+            "never",
+        ],
+    );
+    assert!(selected.status.success(), "{selected:?}");
+    let text = String::from_utf8(selected.stdout).unwrap();
+    assert!(text.contains("mcp__example__read"), "{text}");
+    assert!(text.contains("mcp__example__write"), "{text}");
+    assert!(!text.contains("mcp__example__*"), "{text}");
+    assert!(!text.contains("mcp__other"), "{text}");
+    assert!(
+        String::from_utf8_lossy(&selected.stderr).contains("Skipping Codex default approval mode")
+    );
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), "{}\n");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+}
+
+#[test]
+fn permission_diff_rejects_malformed_settings_without_exposing_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude.json");
+    let settings = dir.path().join("settings.json");
+    let stack = dir.path().join("stack.yml");
+    std::fs::write(&config, r#"{"mcpServers":{"example":{"command":"tool"}}}"#).unwrap();
+    std::fs::write(&stack, "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n    permissions: {source: claude, allow: [mcp__example]}\n").unwrap();
+    for invalid in [
+        r#"{"permissions":{"allow":["fixture-secret",123]}}"#,
+        r#"{"permissions":{"allow":"fixture-secret"}}"#,
+        "{invalid fixture-secret",
+    ] {
+        std::fs::write(&settings, invalid).unwrap();
+        let output = run("diff", Some(&stack), &config, &["--include-permissions"]);
+        assert!(!output.status.success(), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("fixture-secret"));
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), invalid);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+    }
+}
+
+#[test]
+#[cfg(any(unix, windows))]
 fn claude_prepares_both_files_before_writes_and_repeats_without_backups() {
     for operation in ["import", "use"] {
         let dir = tempfile::tempdir().unwrap();

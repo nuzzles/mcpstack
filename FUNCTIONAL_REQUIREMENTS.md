@@ -75,7 +75,7 @@ to its entry in Current status at the bottom.\
 | Done | Produce deterministic YAML exports; require confirmation or `--overwrite` for existing files. [*](#codex-export) |
 | Done | Keep discovery, validation, and planning free of file writes and server execution. [*](#codex-import) |
 | Done | Preview server additions, updates, and removals; require approval for replacements and report configuration validation errors before applying changes. [*](#codex-import) |
-| Partial [*](#output-formats) | Show planned configuration writes with secrets redacted. |
+| Done | Show planned configuration writes with secrets redacted. [*](#output-formats) |
 | Done | Resolve literal relative executable and working-directory paths from the stack location; identify the target config. [*](#stack-relative-paths) |
 | Done | Apply approved file/stack changes as one transaction, the only supported apply mode. [*](#transactions) |
 | Done | Require explicit conflict resolution and validate configuration before writes. [*](#codex-import) |
@@ -433,9 +433,13 @@ Diagnostics go to stderr without echoing argument values. Automation uses the
 noninteractive commands and stable exit statuses; structured JSON operation
 results are not required.
 
-Detailed server configuration diffs are implemented for both clients. Claude
-permission settings currently report only that rules would change; showing the
-specific allow, ask, and deny rule edits remains unfinished.
+Detailed server configuration diffs are implemented for both clients.
+`claude diff --include-permissions` also shows the planned `allow`, `ask`, and
+`deny` edits in a separate settings-file diff, including permission-only changes.
+It uses the same serialization as the settings write, preserving original and
+proposed file line numbers. Unrelated settings and non-MCP rules are omitted
+from the preview. No-op settings produce no diff; previews create no files or
+backups. Import and use retain their summary output and approval behavior.
 
 ### Cross-platform integration tests
 
@@ -457,6 +461,10 @@ resolution, backups, atomic writes, and failure preservation are covered on Unix
 and Windows. Windows tests also verify case-insensitive backup names and locked-file
 replacement failures. Long paths cover config creation, custom/numbered backups,
 replacement, and repeat imports.
+Claude permission preview tests cover rule additions, removals and moves,
+redaction in formatted/minified settings, file line numbers against actual writes,
+missing settings files, no-op results, server selection, Codex rule translation,
+color controls, and malformed inputs without writes.
 Other platforms reject import safely.
 
 ### Codex export

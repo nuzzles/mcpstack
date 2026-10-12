@@ -996,9 +996,11 @@ async fn write_with_permissions(
     let mut writes = vec![(file, bytes)];
     if let Some((snapshot, value)) = permission_change {
         let bytes = if snapshot.config != value {
-            let mut bytes = serde_json::to_vec_pretty(&value).map_err(|_| Error::Write)?;
-            bytes.push(b'\n');
-            Some(bytes)
+            Some(
+                serialized_config(&value)
+                    .map_err(|_| Error::Write)?
+                    .into_bytes(),
+            )
         } else {
             None
         };
@@ -1170,13 +1172,8 @@ impl ClientAdapter for Claude {
         if let Some(path) = permission_path {
             let settings = permissions::Snapshot::read(&path).await?;
             let names = stack.servers.keys().cloned().collect();
-            if settings.proposed(&stack, &names)? != settings.config {
-                writeln!(
-                    output,
-                    "Permission rules would change in {}.",
-                    path.display()
-                )?;
-            }
+            let proposed = settings.proposed(&stack, &names)?;
+            settings.preview(&proposed, &path, output, colored)?;
         }
         Ok(())
     }

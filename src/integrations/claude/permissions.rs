@@ -1,10 +1,13 @@
 //! MCP permission rules in Claude Code's separate settings file.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
 use super::Error;
+use crate::error::AppError;
+use crate::integrations::diff_output::write_diff;
 use crate::io;
 use crate::schema::v1::{ApprovalMode, ConfigValue, Permissions};
 use crate::schema::{Server, StackV1};
@@ -195,6 +198,105 @@ impl Snapshot {
         }
         Ok(proposed)
     }
+
+    pub fn preview(
+        &self,
+        proposed: &Value,
+        path: &Path,
+        output: &mut impl Write,
+        colored: bool,
+    ) -> Result<(), AppError> {
+        if *proposed == self.config {
+            return Ok(());
+        }
+        let original = std::str::from_utf8(self.file.contents()).map_err(|_| Error::Config)?;
+        // Use the same serialization as the write path, retaining physical line
+        // numbers on both sides even when unrelated settings are omitted.
+        let rendered = super::serialized_config(proposed)?;
+        let before = if original.is_empty() {
+            String::new()
+        } else {
+            redacted_settings(original, &self.config)?
+        };
+        let after = redacted_settings(&rendered, proposed)?;
+        let label: String = path
+            .to_string_lossy()
+            .chars()
+            .flat_map(|c| {
+                if c.is_control() {
+                    c.escape_default().collect::<Vec<_>>()
+                } else {
+                    vec![c]
+                }
+            })
+            .collect();
+        let diff = similar::TextDiff::from_lines(&before, &after)
+            .unified_diff()
+            .context_radius(3)
+            .header(
+                if original.is_empty() {
+                    "/dev/null"
+                } else {
+                    &label
+                },
+                &label,
+            )
+            .to_string();
+        writeln!(
+            output,
+            "Permission settings preview; unrelated settings and non-MCP rules are omitted."
+        )?;
+        write_diff(output, &diff, colored)?;
+        Ok(())
+    }
+}
+
+fn redacted_settings(source: &str, config: &Value) -> Result<String, Error> {
+    let mut private_rules = BTreeMap::new();
+    for bucket in ["allow", "ask", "deny"] {
+        for rule in rules(config, bucket)? {
+            if !rule.starts_with("mcp__") {
+                private_rules.insert(rule, "<unrelated permission rule omitted>".into());
+            }
+        }
+    }
+    redacted_fields(source, |name, value| {
+        if name != "permissions" {
+            return Ok(None);
+        }
+        redacted_fields(value, |name, value| {
+            Ok(matches!(name, "allow" | "ask" | "deny")
+                .then(|| super::redact_json_values(value, &private_rules)))
+        })
+        .map(Some)
+    })
+}
+
+/// Keep only chosen fields, preserving newlines in hidden fields so diff hunk
+/// coordinates still refer to the original and proposed settings files.
+fn redacted_fields(
+    source: &str,
+    render: impl Fn(&str, &str) -> Result<Option<String>, Error>,
+) -> Result<String, Error> {
+    let mut output = String::new();
+    let mut copied = 0;
+    for field in super::root_fields(source)? {
+        output.push_str(&source[copied..field.start]);
+        if let Some(value) = render(&field.name, &source[field.value_start..field.value_end])? {
+            output.push_str(&source[field.start..field.value_start]);
+            output.push_str(&value);
+        } else {
+            output.push_str("<unrelated setting omitted>");
+            output.extend(
+                source[field.start..field.value_end]
+                    .chars()
+                    .filter(|c| *c == '\n'),
+            );
+        }
+        copied = field.value_end;
+    }
+    output.push_str(&source[copied..]);
+    Ok(output)
 }
 
 fn representable(mode: ApprovalMode) -> bool {
