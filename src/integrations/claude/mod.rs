@@ -156,17 +156,15 @@ fn validate(definition: &Value) -> Result<(), Error> {
             }) {
                 return Err(Error::Config);
             }
-            if kind == "ws" {
-                // Apply the shared WebSocket URL/header rules to native entries
-                // as well, including after resolving masked header values.
-                let stack = as_stack(BTreeMap::from([("server".into(), definition.clone())]))
-                    .map_err(|_| Error::Config)?;
-                super::portable::normalize(stack, super::portable::Source::Claude, false)
-                    .map_err(|_| Error::Config)?;
-            }
         }
         _ => return Err(Error::Unsupported),
     }
+    // Validate native fields and resolved literals with the same semantic rules
+    // as portable stacks, before previews, credential masking, or writes.
+    let stack = as_stack(BTreeMap::from([("server".into(), definition.clone())]))
+        .map_err(|_| Error::Config)?;
+    super::portable::normalize(stack, super::portable::Source::Claude, false)
+        .map_err(|_| Error::Config)?;
     Ok(())
 }
 fn servers(config: &Value) -> BTreeMap<String, Value> {
@@ -240,15 +238,20 @@ fn resolve(value: &ConfigValue, resolver: &mut SecretResolver) -> Result<Value, 
         ConfigValue::Null(_) => return Err(Error::Unsupported),
     })
 }
-fn source(value: &ValueSource, resolver: &mut SecretResolver) -> Result<String, Error> {
+fn source(
+    value: &ValueSource,
+    resolver: &mut SecretResolver,
+    server: &str,
+) -> Result<String, Error> {
     match value {
         ValueSource::Literal(v) => Ok(v.clone()),
-        ValueSource::Environment(r) => resolver.resolve(&r.env).ok_or(Error::Secret),
+        ValueSource::Environment(r) => environment_reference(&r.env, server),
         ValueSource::ResolvedEnvironment(r) => resolver.resolve(&r.value_env).ok_or(Error::Secret),
-        ValueSource::PrefixedEnvironment(r) => resolver
-            .resolve(&r.env)
-            .map(|v| format!("{}{v}", r.prefix))
-            .ok_or(Error::Secret),
+        ValueSource::PrefixedEnvironment(r) => Ok(format!(
+            "{}{}",
+            r.prefix,
+            environment_reference(&r.env, server)?
+        )),
     }
 }
 fn environment_reference(name: &str, server: &str) -> Result<String, Error> {
@@ -446,7 +449,7 @@ fn prepare(
                                 "args".into(),
                                 serde_json::json!(
                                     args.iter()
-                                        .map(|v| source(v, resolver))
+                                        .map(|v| source(v, resolver, name))
                                         .collect::<Result<Vec<_>, _>>()?
                                 ),
                             );
@@ -456,7 +459,7 @@ fn prepare(
                                 "env".into(),
                                 serde_json::json!(
                                     env.iter()
-                                        .map(|(k, v)| Ok((k.clone(), source(v, resolver)?)))
+                                        .map(|(k, v)| Ok((k.clone(), source(v, resolver, name)?)))
                                         .collect::<Result<BTreeMap<_, _>, Error>>()?
                                 ),
                             );
@@ -486,20 +489,7 @@ fn prepare(
                         };
                         let mut mapped_headers = Map::new();
                         for (header, value) in headers {
-                            let text = match value {
-                                ValueSource::Literal(value) => value.clone(),
-                                ValueSource::Environment(reference) => {
-                                    environment_reference(&reference.env, name)?
-                                }
-                                ValueSource::ResolvedEnvironment(reference) => resolver
-                                    .resolve(&reference.value_env)
-                                    .ok_or(Error::Secret)?,
-                                ValueSource::PrefixedEnvironment(reference) => format!(
-                                    "{}{}",
-                                    reference.prefix,
-                                    environment_reference(&reference.env, name)?
-                                ),
-                            };
+                            let text = source(value, resolver, name)?;
                             add_header(&mut mapped_headers, header, Value::String(text), name)?;
                         }
                         let mut definition = serde_json::json!({"type":kind,"url":url});
@@ -980,7 +970,7 @@ fn preview_diff(
         redact_preview_text(original, &before_private)?
     };
     let after_text = redact_preview_text(&proposed, &after_private)?;
-    let label = path.to_string_lossy();
+    let label = super::diff_output::path_label(path);
     let diff = similar::TextDiff::from_lines(&before_text, &after_text)
         .unified_diff()
         .context_radius(0)

@@ -11,6 +11,7 @@ mcpstack codex import work.yaml --non-interactive -y
 Apply only after authorization. Use the installed binary's schema, explicit `--config`
 paths when needed, and identical flags for preview/apply. For stack switches, preview
 with `use --dry-run`; it shows removals that `diff` does not.
+Schema `requires` lists companion argument IDs needed when an option is supplied.
 
 | Output | Format |
 | --- | --- |

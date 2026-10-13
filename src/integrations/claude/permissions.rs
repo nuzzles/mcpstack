@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 
 use super::Error;
 use crate::error::AppError;
-use crate::integrations::diff_output::write_diff;
+use crate::integrations::diff_output::{path_label, write_diff};
 use crate::integrations::write_change_rows;
 use crate::io;
 use crate::schema::v1::{ApprovalMode, ConfigValue, Permissions};
@@ -204,17 +204,7 @@ impl Snapshot {
             redacted_settings(original, &self.config)?
         };
         let after = redacted_settings(&rendered, proposed)?;
-        let label: String = path
-            .to_string_lossy()
-            .chars()
-            .flat_map(|c| {
-                if c.is_control() {
-                    c.escape_default().collect::<Vec<_>>()
-                } else {
-                    vec![c]
-                }
-            })
-            .collect();
+        let label = path_label(path);
         let diff = similar::TextDiff::from_lines(&before, &after)
             .unified_diff()
             .context_radius(3)

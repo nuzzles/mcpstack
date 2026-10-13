@@ -4,6 +4,29 @@ use serde::Serialize;
 use serde_json::Value;
 use strum::IntoEnumIterator;
 
+// Clap does not expose `Arg::requires` through reflection. Store the same IDs
+// alongside the parser rule using its typed argument-extension API.
+#[derive(Clone, Debug)]
+struct Requirements(Vec<clap::Id>);
+
+impl clap::builder::ArgExt for Requirements {}
+
+pub(crate) trait RequiresWithSchema {
+    fn requires_with_schema(self, ids: impl IntoIterator<Item = &'static str>) -> Self;
+}
+
+impl RequiresWithSchema for Arg {
+    fn requires_with_schema(self, ids: impl IntoIterator<Item = &'static str>) -> Self {
+        let ids: Vec<_> = ids.into_iter().map(clap::Id::from).collect();
+        let mut requirements = self
+            .get::<Requirements>()
+            .cloned()
+            .unwrap_or_else(|| Requirements(Vec::new()));
+        requirements.0.extend(ids.iter().cloned());
+        self.requires_all(ids).add(requirements)
+    }
+}
+
 #[derive(Serialize)]
 pub struct CliSchema {
     schema_version: u32,
@@ -48,6 +71,8 @@ struct ArgumentSchema {
     min_values: usize,
     max_values: Option<usize>,
     conflicts_with: Vec<String>,
+    /// IDs of companion arguments required when this argument is supplied.
+    requires: Vec<String>,
 }
 
 // FIXME: Replace the custom CLI description with upstream JSON export when available.
@@ -178,12 +203,68 @@ fn describe_arg(command: &Command, arg: &Arg) -> ArgumentSchema {
         min_values: range.min_values(),
         max_values: (range.max_values() != usize::MAX).then_some(range.max_values()),
         conflicts_with,
+        requires: arg
+            .get::<Requirements>()
+            .map(|requirements| {
+                let mut ids: Vec<_> = requirements.0.iter().map(ToString::to_string).collect();
+                ids.sort();
+                ids.dedup();
+                ids
+            })
+            .unwrap_or_default(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn companion_arguments_share_parser_rules_and_schema_metadata() {
+        let command = Command::new("fixture")
+            .arg(
+                Arg::new("config")
+                    .long("config")
+                    .requires_with_schema(["permissions", "target"]),
+            )
+            .arg(
+                Arg::new("permissions")
+                    .long("permissions")
+                    .action(ArgAction::SetTrue),
+            )
+            .arg(Arg::new("target").long("target"));
+        let schema = serde_json::to_value(describe(command.clone())).unwrap();
+        let options = schema["command"]["options"].as_array().unwrap();
+        let config = options.iter().find(|arg| arg["name"] == "config").unwrap();
+        assert_eq!(
+            config["requires"],
+            serde_json::json!(["permissions", "target"])
+        );
+        for args in [
+            vec!["fixture", "--config", "settings.json"],
+            vec!["fixture", "--config", "settings.json", "--permissions"],
+            vec!["fixture", "--config", "settings.json", "--target", "claude"],
+        ] {
+            let error = command.clone().try_get_matches_from(args).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::MissingRequiredArgument
+            );
+        }
+        assert!(command.clone().try_get_matches_from(["fixture"]).is_ok());
+        assert!(
+            command
+                .try_get_matches_from([
+                    "fixture",
+                    "--config",
+                    "settings.json",
+                    "--permissions",
+                    "--target",
+                    "claude"
+                ])
+                .is_ok()
+        );
+    }
 
     #[test]
     fn command_metadata_survives_schema_export() {

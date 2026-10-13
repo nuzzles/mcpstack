@@ -401,20 +401,28 @@ fn target_summary_escapes_control_characters_in_filenames() {
     .unwrap();
     for client in ["codex", "claude"] {
         let config = root.join(format!("{client}\x1b[2J\nforged-summary\r\t.config"));
-        for operation in ["import", "use"] {
+        for operation in ["diff", "import", "use"] {
             let preview = success(run(
                 client,
                 operation,
                 &root,
                 &stack,
                 &config,
-                &["--dry-run", "-y"],
+                if operation == "diff" {
+                    &["--no-color"]
+                } else {
+                    &["--dry-run", "-y"]
+                },
             ));
             let expected = format!(
                 "Target config: {}\nMCP server changes:",
                 config.to_string_lossy().escape_debug()
             );
             assert!(preview.contains(&expected), "{preview:?}");
+            if operation == "diff" {
+                let label = config.to_string_lossy().escape_debug().to_string();
+                assert!(preview.contains(&format!("+++ {label}\n")), "{preview:?}");
+            }
             assert!(!preview.contains(['\x1b', '\r', '\t']), "{preview:?}");
             assert!(!preview.contains("\nforged-summary"), "{preview:?}");
             assert!(!config.exists());
