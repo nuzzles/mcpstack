@@ -4,8 +4,8 @@
 [![docs.rs](https://docs.rs/mcpstack/badge.svg)](https://docs.rs/mcpstack)
 [![CI](https://github.com/nuzzles/mcpstack/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nuzzles/mcpstack/actions/workflows/ci.yml)
 
-A Rust CLI for humans and agents to install multiple MCP servers, version-control
-and switch stacks, and share setups across teams.
+A CLI for humans and agents to manage, share, and switch MCP server
+configurations.
 
 [Documentation](https://nuzzles.github.io/mcpstack/)
 
