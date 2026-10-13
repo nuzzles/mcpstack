@@ -12,6 +12,14 @@ and switch stacks, and share setups across teams.
 > [!NOTE]
 > mcpstack is in early development.
 
+## Agent Skill
+
+Install the skill for your coding agent:
+
+```sh
+npx skills add https://nuzzles.github.io/mcpstack
+```
+
 ## Harness Support
 
 | Harness | mcpstack 0.1.0 | main (source) |
