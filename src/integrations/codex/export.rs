@@ -106,13 +106,6 @@ pub fn export_with_filter(
     let mut stack: StackV1 = serde_json::from_value(document).map_err(|_| ExportError::Stack)?;
     stack.validate().map_err(|_| ExportError::Stack)?;
     let mut names = BTreeSet::new();
-    for server in stack.servers.values() {
-        if let Server::Configuration { config, .. } = server {
-            for value in config.values() {
-                collect_references(value, &mut names);
-            }
-        }
-    }
     let mut total = 0;
     visit_credentials(&mut stack, &mut names, &mut |_| {
         total += 1;
@@ -147,6 +140,42 @@ pub(crate) fn visit_credentials(
     names: &mut BTreeSet<String>,
     expose: &mut impl FnMut(&str) -> Result<bool, ExportError>,
 ) -> Result<(), ExportError> {
+    // Reserve bindings across the entire selection before masking any server.
+    // Runtime credentials must never satisfy another field's generated reference.
+    // Fold reservation names to uppercase on every platform so exported stacks
+    // also avoid case-insensitive environment-name collisions on Windows.
+    for server in stack.servers.values() {
+        if let Server::Configuration { config } = server {
+            for value in config.values() {
+                collect_references(value, names);
+            }
+            if let Some(ConfigValue::String(name)) = config.get("bearer_token_env_var") {
+                names.insert(name.to_ascii_uppercase());
+            }
+            if let Some(ConfigValue::Object(headers)) = config.get("env_http_headers") {
+                for value in headers.values() {
+                    if let ConfigValue::String(name) = value {
+                        names.insert(name.to_ascii_uppercase());
+                    }
+                }
+            }
+            if let Some(ConfigValue::Array(variables)) = config.get("env_vars") {
+                for variable in variables {
+                    let name = match variable {
+                        ConfigValue::String(name) => Some(name),
+                        ConfigValue::Object(fields) => match fields.get("name") {
+                            Some(ConfigValue::String(name)) => Some(name),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(name) = name {
+                        names.insert(name.to_ascii_uppercase());
+                    }
+                }
+            }
+        }
+    }
     for (server_name, server) in &mut stack.servers {
         if let Server::Configuration { config, .. } = server {
             for (key, value) in config {
@@ -171,11 +200,11 @@ pub(crate) fn visit_credentials(
     Ok(())
 }
 
-pub(crate) fn collect_references(value: &ConfigValue, names: &mut BTreeSet<String>) {
+fn collect_references(value: &ConfigValue, names: &mut BTreeSet<String>) {
     match value {
         ConfigValue::Object(values) => {
             if let Some(ConfigValue::String(name)) = values.get("$env") {
-                names.insert(name.clone());
+                names.insert(name.to_ascii_uppercase());
             } else {
                 for value in values.values() {
                     collect_references(value, names);
@@ -185,6 +214,20 @@ pub(crate) fn collect_references(value: &ConfigValue, names: &mut BTreeSet<Strin
         ConfigValue::Array(values) => {
             for value in values {
                 collect_references(value, names);
+            }
+        }
+        ConfigValue::String(text) => {
+            // Claude expands braced variables, including prefixed/interpolated
+            // expressions and defaults. Reserve names without expanding values.
+            for (start, _) in text.match_indices("${") {
+                if let Some((expression, _)) = text[start + 2..].split_once('}') {
+                    let name = expression
+                        .split_once(":-")
+                        .map_or(expression, |(name, _)| name);
+                    if helper_variable(name) {
+                        names.insert(name.to_ascii_uppercase());
+                    }
+                }
             }
         }
         _ => {}
@@ -753,11 +796,6 @@ command = "example"
         // objects are not valid literal Codex config fields.
         let mut stack = StackV1::from_yaml("schema_version: 1\nservers:\n  x:\n    config:\n      api-key: first-secret\n      api_key: second-secret\n      pin: 1234\n      enabled: true\n      existing: {'$env': MCPSTACK_X_API_KEY}\n").unwrap();
         let mut names = BTreeSet::new();
-        if let Server::Configuration { config, .. } = &stack.servers["x"] {
-            for value in config.values() {
-                collect_references(value, &mut names);
-            }
-        }
         visit_credentials(&mut stack, &mut names, &mut |_| Ok(false)).unwrap();
         let value = serde_json::to_value(stack).unwrap();
         let config = &value["servers"]["x"]["config"];
@@ -767,6 +805,37 @@ command = "example"
         assert_eq!(config["pin"], 1234);
         assert_eq!(config["enabled"], true);
         assert!(!value.to_string().contains("secret"));
+    }
+
+    #[test]
+    fn runtime_bindings_reserve_names_across_servers_and_case() {
+        let reference = "mcpstack_demo_api_key";
+        for binding in [
+            serde_json::json!({"existing": {"$env": reference}}),
+            serde_json::json!({"bearer_token_env_var": reference}),
+            serde_json::json!({"env_http_headers": {"Authorization": reference}}),
+            serde_json::json!({"env_vars": [reference]}),
+            serde_json::json!({"env_vars": [{"name": reference, "default": "fallback"}]}),
+            serde_json::json!({"args": [format!("prefix-${{{reference}}}-suffix")]}),
+            serde_json::json!({"args": [format!("${{{reference}:-fallback}}")]}),
+            serde_json::json!({"args": [format!("${{OUTER:-${{{reference}}}}}")]}),
+        ] {
+            let mut stack: StackV1 = serde_json::from_value(serde_json::json!({
+                "schema_version": SCHEMA_VERSION,
+                "servers": {
+                    "demo": {"config": {"api_key": "literal-fixture-secret"}},
+                    "later": {"config": binding.clone()}
+                }
+            }))
+            .unwrap();
+            visit_credentials(&mut stack, &mut BTreeSet::new(), &mut |_| Ok(false)).unwrap();
+            let value = serde_json::to_value(stack).unwrap();
+            assert_eq!(
+                value["servers"]["demo"]["config"]["api_key"]["$env"], "MCPSTACK_DEMO_API_KEY_2",
+                "{binding}"
+            );
+            assert_eq!(value["servers"]["later"]["config"], binding);
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Claude Code user-scope MCP configuration in ~/.claude.json.
 mod permissions;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write, stderr, stdin};
 use std::path::{Path, PathBuf};
 
@@ -567,20 +567,9 @@ fn as_stack(values: BTreeMap<String, Value>) -> Result<StackV1, AppError> {
     stack.validate()?;
     Ok(stack)
 }
-fn reference_names(stack: &StackV1) -> std::collections::BTreeSet<String> {
-    let mut names = std::collections::BTreeSet::new();
-    for server in stack.servers.values() {
-        if let Server::Configuration { config } = server {
-            for value in config.values() {
-                super::codex::export::collect_references(value, &mut names);
-            }
-        }
-    }
-    names
-}
 fn mask(values: BTreeMap<String, Value>) -> Result<BTreeMap<String, Value>, AppError> {
     let mut stack = as_stack(values)?;
-    let mut names = reference_names(&stack);
+    let mut names = BTreeSet::new();
     super::codex::export::visit_credentials(&mut stack, &mut names, &mut |_| Ok(false))
         .map_err(|_| Error::Config)?;
     let value = serde_json::to_value(stack).map_err(|_| Error::Config)?;
@@ -1126,7 +1115,7 @@ impl ClientAdapter for Claude {
         values.retain(|name, _| !filter.skip(name));
         let mut stack = as_stack(values)?;
         if !expose_secrets {
-            let mut names = reference_names(&stack);
+            let mut names = BTreeSet::new();
             let interactive = !non_interactive && stdin().is_terminal() && stderr().is_terminal();
             if interactive {
                 let mut total = 0;
