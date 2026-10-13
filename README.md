@@ -9,12 +9,13 @@ configurations.
 
 [Documentation](https://nuzzles.github.io/mcpstack/)
 
-> [!NOTE]
-> mcpstack is new. Dragons are expected!
+## Installation
 
-## Agent Skill
+```sh
+cargo install --locked mcpstack
+```
 
-Install the skill for your coding agent:
+You can also install the skill for your coding agent:
 
 ```sh
 npx skills add https://nuzzles.github.io/mcpstack
