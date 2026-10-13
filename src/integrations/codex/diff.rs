@@ -160,7 +160,7 @@ fn render_diff(
     output: &mut impl Write,
     colored: bool,
 ) -> Result<(), AppError> {
-    let label = path.to_string_lossy();
+    let label = super::super::diff_output::path_label(path);
     let patch = similar::TextDiff::from_lines(before, after)
         .unified_diff()
         .context_radius(2)

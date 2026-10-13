@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Subcommand};
 use thiserror::Error;
 
+use crate::cli::schema::RequiresWithSchema;
 use crate::cmd::{
     diff::Diff,
     export::{ClaudeExport, CodexExport},
@@ -194,7 +195,7 @@ pub struct StackArgs {
     #[arg(long)]
     include_permissions: bool,
     /// Use this Claude Code settings file for permission rules.
-    #[arg(long, value_name = "PATH", requires = "include_permissions")]
+    #[arg(long, value_name = "PATH", requires_with_schema(["include_permissions"]))]
     permissions_config: Option<PathBuf>,
 }
 

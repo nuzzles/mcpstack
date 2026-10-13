@@ -112,6 +112,88 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
 }
 
 #[test]
+fn schema_dependencies_match_permission_argument_validation() {
+    let schema = json(&run(&["--schema"]));
+    let dir = tempfile::tempdir().unwrap();
+    let stack = dir.path().join("stack.yaml");
+    let config = dir.path().join("config");
+    let settings = dir.path().join("settings.json");
+    std::fs::write(
+        &stack,
+        "schema_version: 1\nservers:\n  demo:\n    transport: {type: stdio, command: example}\n",
+    )
+    .unwrap();
+    for client in ["claude", "codex"] {
+        let harness = schema["command"]["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|command| command["name"] == client)
+            .unwrap();
+        for operation in ["import", "use", "diff"] {
+            let command = harness["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|command| command["name"] == operation)
+                .unwrap();
+            let option = command["options"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|arg| arg["name"] == "permissions_config")
+                .unwrap();
+            assert_eq!(
+                option["requires"],
+                serde_json::json!(["include_permissions"])
+            );
+            let mut args = vec![
+                "--non-interactive",
+                client,
+                operation,
+                stack.to_str().unwrap(),
+                "--config",
+                config.to_str().unwrap(),
+                "--permissions-config",
+                settings.to_str().unwrap(),
+            ];
+            if operation != "diff" {
+                args.extend(["--dry-run", "-y"]);
+            }
+            let invalid = run(&args);
+            assert_eq!(invalid.status.code(), Some(2), "{invalid:?}");
+            assert!(String::from_utf8_lossy(&invalid.stderr).contains("--include-permissions"));
+            assert!(invalid.stdout.is_empty());
+            args.push("--include-permissions");
+            let valid = run(&args);
+            assert!(valid.status.success(), "{valid:?}");
+            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        }
+    }
+    let claude = schema["command"]["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|command| command["name"] == "claude")
+        .unwrap();
+    for operation in ["export", "show"] {
+        let command = claude["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|command| command["name"] == operation)
+            .unwrap();
+        let option = command["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|arg| arg["name"] == "permissions_config")
+            .unwrap();
+        assert_eq!(option["requires"], serde_json::json!([]));
+    }
+}
+
+#[test]
 fn schema_examples_are_runnable() {
     let schema = json(&run(&["--schema"]));
     for example in schema["examples"].as_array().unwrap() {

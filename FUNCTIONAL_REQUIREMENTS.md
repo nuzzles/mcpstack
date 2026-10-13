@@ -151,7 +151,8 @@ prompts. Configuration-only stack switching is implemented by `use`.
 [*] `--schema` emits a versioned JSON description of every implemented command,
 argument, option, type, default, requirement, constraint, and example. An AI can
 read it without scraping help text. Generate it from the command definitions to
-avoid drift. Schema output is independent of interactive controls.
+avoid drift. Each argument's `requires` array names companion argument IDs
+required when it is supplied. Schema output is independent of interactive controls.
 
 ### Interaction
 
@@ -183,7 +184,9 @@ masked values to be available in the environment.
 user-scope `~/.claude.json` (or `--config <path>`) and preserves unrelated JSON
 settings. It supports native stdio, HTTP, SSE, and WebSocket server definitions plus
 their portable stack equivalents. Unsupported fields and
-transports fail before writes. Diff and export mask recognized credentials; import
+transports fail before writes. Native and resolved definitions use the shared
+command, environment, URL, and header validation rules before previews or writes.
+Diff and export mask recognized credentials; import
 and use create numbered backups of changed existing files before transactional
 file replacement. Supported server fields are `type`, `command`, `args`, `env`,
 `url`, `headers`, and `headersHelper`.
@@ -410,7 +413,9 @@ Native `env_vars`, `bearer_token_env_var`, and `env_http_headers` retain their r
 bindings without embedding values. Missing local runtime variables warn; remote
 bindings are not checked against the local shell. Masking does not convert literal
 fields into runtime bindings. `{env: VARIABLE}` remains a runtime binding in portable
-headers; `{value_env: VARIABLE}` restores a masked literal during import. Export
+headers and in Claude stdio arguments/environment values, including prefixed
+references; Claude export/import preserves `${VARIABLE}` without reading it.
+`{value_env: VARIABLE}` restores a masked literal during import. Export
 recognition and exposure are described under
 [Codex export](#codex-export).
 Credential recognition uses field and argument names; it does not identify every
