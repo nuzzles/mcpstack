@@ -100,6 +100,24 @@ def check_examples(binary, pages, env):
         print(f"Validated {count + 1} YAML examples and both scratch-config workflows.")
 
 
+def publish_skill():
+    source = ROOT / "skills/mcpstack/SKILL.md"
+    # Keep the two metadata fields on single lines so the build needs no YAML dependency.
+    metadata = re.match(
+        r"\A---\nname: ([a-z0-9-]+)\ndescription: ([^\n]+)\n---\n",
+        source.read_text(encoding="utf-8"),
+    )
+    if metadata is None or metadata[1] != source.parent.name:
+        raise ValueError("Expected skill frontmatter with matching name and one-line description")
+    name, description = metadata.groups()
+    discovery = SITE / ".well-known/skills"
+    destination = discovery / name
+    destination.mkdir(parents=True)
+    shutil.copyfile(source, destination / "SKILL.md")
+    index = {"skills": [{"name": name, "description": description, "files": ["SKILL.md"]}]}
+    (discovery / "index.json").write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mdbook", default="mdbook", help="mdBook executable")
@@ -205,6 +223,7 @@ def main():
     pages = [STAGING / "src" / name for name in names]
     check_examples(binary, pages, env)
     run(args.mdbook, "build", str(STAGING), "--dest-dir", str(SITE))
+    publish_skill()
 
     index = [
         f"# mcpstack {cli_version}\n",
@@ -244,6 +263,7 @@ def main():
         "\n## Machine-readable reference\n",
         f"- [Complete Markdown guide]({BASE_URL}llms-full.txt)",
         f"- [CLI schema JSON]({BASE_URL}cli-schema.json)",
+        f"- [Agent skill]({BASE_URL}.well-known/skills/mcpstack/SKILL.md)",
         "\n## Command help\n",
         *help_links,
     ])

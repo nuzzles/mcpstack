@@ -2,6 +2,20 @@
 
 [Documentation index](llms.txt) · [All Markdown](llms-full.txt) · [CLI schema](cli-schema.json)
 
+## Install the skill
+
+```sh
+npx skills add https://nuzzles.github.io/mcpstack
+```
+
+Or install from GitHub: `npx skills add nuzzles/mcpstack --skill mcpstack`.
+Add `-g` for all projects or `-a codex -a claude-code` to select agents.
+
+The [skill](https://nuzzles.github.io/mcpstack/.well-known/skills/mcpstack/SKILL.md) teaches agents the CLI workflow;
+[install mcpstack](getting-started.md) separately.
+
+## Automation
+
 ```sh
 mcpstack --schema
 mcpstack codex import work.yaml --dry-run --non-interactive -y
