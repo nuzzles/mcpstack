@@ -670,7 +670,10 @@ unnamed values or credentials embedded in URLs will be recognized.
 
 Nested fields and array indices contribute to reference names. Names are uppercase
 ASCII with punctuation replaced by underscores; collisions receive deterministic
-numeric suffixes. Existing references are preserved and their names reserved.
+numeric suffixes. Existing references are preserved and their names reserved
+across all selected servers, including Claude runtime templates and Codex bearer,
+header, and forwarded environment bindings. Reservation is case-insensitive so
+shared stacks also avoid collisions on Windows.
 Export never reads or sets environment variables. For an inline credential argument,
 the referenced environment value must contain the complete `--token=VALUE` argument.
 
