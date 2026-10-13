@@ -10,7 +10,7 @@ use super::config::{FileError, Snapshot};
 use super::import::prepare;
 use super::workflow::warn_runtime_bindings;
 use crate::error::AppError;
-use crate::integrations::secrets::SecretResolver;
+use crate::integrations::secrets::{SecretResolver, redact_resolved};
 use crate::integrations::write_no_changes;
 use crate::schema::Stack;
 
@@ -413,30 +413,6 @@ fn annotate_preview(
             }
             _ => {}
         }
-    }
-}
-
-fn redact_resolved(value: &mut serde_json::Value, secrets: &[String]) {
-    match value {
-        serde_json::Value::String(text) => {
-            if secrets
-                .iter()
-                .any(|secret| !secret.is_empty() && text.contains(secret))
-            {
-                *text = "<redacted>".into();
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                redact_resolved(value, secrets);
-            }
-        }
-        serde_json::Value::Object(values) => {
-            for value in values.values_mut() {
-                redact_resolved(value, secrets);
-            }
-        }
-        _ => {}
     }
 }
 

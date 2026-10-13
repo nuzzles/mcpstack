@@ -1,6 +1,6 @@
 # Claude Code
 
-Supports STDIO, HTTP, and SSE in user configuration.
+Supports STDIO, HTTP, SSE, and WebSocket in user configuration.
 
 ```sh
 mcpstack claude list

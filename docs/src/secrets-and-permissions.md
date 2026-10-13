@@ -20,6 +20,8 @@ servers:
 Supply the complete header through `EXAMPLE_AUTHORIZATION`. `value_env` resolves at
 import; `{env: TOKEN, prefix: "Bearer "}` preserves client runtime lookup instead.
 Native `config` entries use `{$env: VARIABLE}` for masked literals.
+Detected credentials inside header-helper commands mask the whole command with
+`{value_env: VARIABLE}`; supply the complete command when importing.
 
 ## Permissions
 

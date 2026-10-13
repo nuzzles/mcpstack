@@ -107,16 +107,22 @@ pub enum Transport {
         url: String,
         #[serde(default, deserialize_with = "unique_map")]
         headers: BTreeMap<String, ValueSource>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        headers_helper: Option<HeaderHelper>,
     },
     Sse {
         url: String,
         #[serde(default, deserialize_with = "unique_map")]
         headers: BTreeMap<String, ValueSource>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        headers_helper: Option<HeaderHelper>,
     },
     Websocket {
         url: String,
         #[serde(default, deserialize_with = "unique_map")]
         headers: BTreeMap<String, ValueSource>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        headers_helper: Option<HeaderHelper>,
     },
 }
 
@@ -143,6 +149,8 @@ enum TransportInput {
         bearer_token: Option<EnvironmentReference>,
         #[serde(default, deserialize_with = "unique_map")]
         headers: BTreeMap<String, ValueSource>,
+        #[serde(default)]
+        headers_helper: Option<HeaderHelper>,
     },
     Sse {
         url: String,
@@ -150,6 +158,8 @@ enum TransportInput {
         bearer_token: Option<EnvironmentReference>,
         #[serde(default, deserialize_with = "unique_map")]
         headers: BTreeMap<String, ValueSource>,
+        #[serde(default)]
+        headers_helper: Option<HeaderHelper>,
     },
     Websocket {
         url: String,
@@ -157,6 +167,8 @@ enum TransportInput {
         bearer_token: Option<EnvironmentReference>,
         #[serde(default, deserialize_with = "unique_map")]
         headers: BTreeMap<String, ValueSource>,
+        #[serde(default)]
+        headers_helper: Option<HeaderHelper>,
     },
 }
 
@@ -204,27 +216,57 @@ impl<'de> Deserialize<'de> for Transport {
                 url,
                 bearer_token,
                 headers,
+                headers_helper,
             } => Self::Http {
                 url,
                 headers: migrate(headers, bearer_token)?,
+                headers_helper,
             },
             TransportInput::Sse {
                 url,
                 bearer_token,
                 headers,
+                headers_helper,
             } => Self::Sse {
                 url,
                 headers: migrate(headers, bearer_token)?,
+                headers_helper,
             },
             TransportInput::Websocket {
                 url,
                 bearer_token,
                 headers,
+                headers_helper,
             } => Self::Websocket {
                 url,
                 headers: migrate(headers, bearer_token)?,
+                headers_helper,
             },
         })
+    }
+}
+
+/// Opaque shell command, executed only by the target harness. A masked command
+/// is restored as a whole at import time; shell environment syntax stays literal.
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum HeaderHelper {
+    Literal(String),
+    ResolvedEnvironment(ResolvedEnvironmentReference),
+}
+
+impl HeaderHelper {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        match self {
+            Self::Literal(command) if command.trim().is_empty() || command.contains('\0') => {
+                Err(ValidationError::InvalidHeaderHelper)
+            }
+            Self::Literal(_) => Ok(()),
+            Self::ResolvedEnvironment(reference) => EnvironmentReference {
+                env: reference.value_env.clone(),
+            }
+            .validate(),
+        }
     }
 }
 
@@ -431,9 +473,24 @@ impl Server {
                     return Err(ValidationError::InvalidEnvironment);
                 }
             }
-            Transport::Http { url, headers }
-            | Transport::Sse { url, headers }
-            | Transport::Websocket { url, headers } => {
+            Transport::Http {
+                url,
+                headers,
+                headers_helper,
+            }
+            | Transport::Sse {
+                url,
+                headers,
+                headers_helper,
+            }
+            | Transport::Websocket {
+                url,
+                headers,
+                headers_helper,
+            } => {
+                if let Some(helper) = headers_helper {
+                    helper.validate()?;
+                }
                 let endpoint =
                     url::Url::parse(url).map_err(|_| ValidationError::InvalidEndpoint)?;
                 let valid_scheme = match transport {

@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use crate::schema::v1::{
-    ApprovalMode, EnvironmentReference, PathResolution, Permissions, PrefixedEnvironmentReference,
-    ResolvedEnvironmentReference, Settings, Transport, ValueSource,
+    ApprovalMode, EnvironmentReference, HeaderHelper, PathResolution, Permissions,
+    PrefixedEnvironmentReference, ResolvedEnvironmentReference, Settings, Transport, ValueSource,
 };
 use crate::schema::{Server, StackV1};
 
@@ -189,6 +189,26 @@ fn take_array(
         .map(|v| v.unwrap_or_default())
 }
 
+fn take_helper(
+    fields: &mut Map<String, Value>,
+    key: &str,
+    name: &str,
+) -> Result<Option<HeaderHelper>, String> {
+    fields
+        .remove(key)
+        .map(|value| {
+            // Never interpret shell expressions as harness environment bindings.
+            match source(value, false) {
+                Some(ValueSource::Literal(command)) => Ok(HeaderHelper::Literal(command)),
+                Some(ValueSource::ResolvedEnvironment(reference)) => {
+                    Ok(HeaderHelper::ResolvedEnvironment(reference))
+                }
+                _ => Err(format!("{name:?}.{key:?}")),
+            }
+        })
+        .transpose()
+}
+
 fn take_map(
     fields: &mut Map<String, Value>,
     key: &str,
@@ -299,7 +319,12 @@ fn codex_transport(fields: &mut Map<String, Value>, name: &str) -> Result<Transp
                     }),
                 );
             }
-            Ok(Transport::Http { url, headers })
+            let headers_helper = take_helper(fields, "http_headers_helper", name)?;
+            Ok(Transport::Http {
+                url,
+                headers,
+                headers_helper,
+            })
         }
         _ => Err(format!("{name:?}: expected one command or URL")),
     }
@@ -318,7 +343,7 @@ fn claude_transport(fields: &mut Map<String, Value>, name: &str) -> Result<Trans
             env_vars: Vec::new(),
             cwd: None,
         }),
-        (None, Some(url), Some("http") | Some("sse")) => {
+        (None, Some(url), Some("http") | Some("sse") | Some("ws")) => {
             let mut headers = take_map(fields, "headers", name, true)?;
             if let Some(key) = headers
                 .keys()
@@ -342,10 +367,23 @@ fn claude_transport(fields: &mut Map<String, Value>, name: &str) -> Result<Trans
                     );
                 }
             }
-            Ok(if kind.as_deref() == Some("sse") {
-                Transport::Sse { url, headers }
-            } else {
-                Transport::Http { url, headers }
+            let headers_helper = take_helper(fields, "headersHelper", name)?;
+            Ok(match kind.as_deref() {
+                Some("ws") => Transport::Websocket {
+                    url,
+                    headers,
+                    headers_helper,
+                },
+                Some("sse") => Transport::Sse {
+                    url,
+                    headers,
+                    headers_helper,
+                },
+                _ => Transport::Http {
+                    url,
+                    headers,
+                    headers_helper,
+                },
             })
         }
         _ => Err(format!("{name:?}: unsupported Claude transport")),

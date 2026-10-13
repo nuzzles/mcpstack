@@ -33,6 +33,50 @@ fn parse(value: &Value) -> Result<StackV1, ValidationError> {
 }
 
 #[test]
+fn header_helpers_accept_commands_and_import_references_only_on_remote_transports() {
+    for (kind, url) in [
+        ("http", "https://example.com"),
+        ("sse", "https://example.com"),
+        ("websocket", "wss://example.com"),
+    ] {
+        let mut value = json!({"schema_version":1,"servers":{"remote":{"transport":{
+            "type":kind,"url":url,"headers":{"Authorization":"existing-token"},
+            "headers_helper":"get-token --profile work"
+        }}}});
+        for helper in [
+            json!("get-token --profile work"),
+            json!("${HELPER}"),
+            json!({"value_env":"HELPER_COMMAND"}),
+        ] {
+            value["servers"]["remote"]["transport"]["headers_helper"] = helper.clone();
+            assert_eq!(
+                serde_json::to_value(parse(&value).unwrap()).unwrap()["servers"]["remote"]["transport"]
+                    ["headers_helper"],
+                helper
+            );
+        }
+        for helper in [
+            json!(""),
+            json!(" \n\t"),
+            json!("bad\0command"),
+            json!({"env":"HELPER"}),
+            json!({"value_env":"INVALID NAME"}),
+            json!({"value_env":"HELPER", "prefix":"run "}),
+            json!(42),
+        ] {
+            value["servers"]["remote"]["transport"]["headers_helper"] = helper;
+            assert!(parse(&value).is_err());
+        }
+    }
+    assert!(
+        parse(&json!({"schema_version":1,"servers":{"local":{"transport":{
+            "type":"stdio", "command":"tool", "headers_helper":"get-token"
+        }}}}))
+        .is_err()
+    );
+}
+
+#[test]
 fn supported_fields_round_trip_without_resolving_references() {
     let stack = parse(&document()).unwrap();
     let first = serde_json::to_string_pretty(&stack).unwrap();

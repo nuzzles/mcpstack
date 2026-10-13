@@ -2,6 +2,7 @@
 mod claude;
 mod codex;
 mod diff_output;
+mod header_helpers;
 mod listing;
 mod paths;
 mod portable;

@@ -11,13 +11,13 @@ use tokio::fs;
 
 use crate::error::{AppError, ErrorCode};
 use crate::exporters::to_yaml;
-use crate::integrations::secrets::SecretResolver;
+use crate::integrations::secrets::{SecretResolver, redact_resolved};
 use crate::integrations::{Claude, ClientAdapter, ExportArgs, StackArgs};
 use crate::integrations::{
     write_dry_run, write_import_result, write_no_changes, write_switch_plan, write_switch_result,
 };
 use crate::io;
-use crate::schema::v1::{ConfigValue, Transport, ValueSource};
+use crate::schema::v1::{ConfigValue, HeaderHelper, Transport, ValueSource};
 use crate::schema::{SCHEMA_VERSION, Server, StackV1};
 
 #[derive(Debug, Error)]
@@ -106,11 +106,12 @@ fn validate(definition: &Value) -> Result<(), Error> {
     if object.keys().any(|key| {
         !matches!(
             key.as_str(),
-            "type" | "command" | "args" | "env" | "url" | "headers"
+            "type" | "command" | "args" | "env" | "url" | "headers" | "headersHelper"
         )
     }) {
         return Err(Error::Unsupported);
     }
+    super::header_helpers::validate_native(definition).map_err(|_| Error::Config)?;
     let kind = match object.get("type") {
         Some(Value::String(kind)) => kind.as_str(),
         Some(_) => return Err(Error::Config),
@@ -138,7 +139,7 @@ fn validate(definition: &Value) -> Result<(), Error> {
                 return Err(Error::Config);
             }
         }
-        "http" | "sse" => {
+        "http" | "sse" | "ws" => {
             if object
                 .get("url")
                 .and_then(Value::as_str)
@@ -154,6 +155,14 @@ fn validate(definition: &Value) -> Result<(), Error> {
                     .is_none_or(|m| m.values().any(|v| !v.is_string()))
             }) {
                 return Err(Error::Config);
+            }
+            if kind == "ws" {
+                // Apply the shared WebSocket URL/header rules to native entries
+                // as well, including after resolving masked header values.
+                let stack = as_stack(BTreeMap::from([("server".into(), definition.clone())]))
+                    .map_err(|_| Error::Config)?;
+                super::portable::normalize(stack, super::portable::Source::Claude, false)
+                    .map_err(|_| Error::Config)?;
             }
         }
         _ => return Err(Error::Unsupported),
@@ -270,6 +279,11 @@ fn add_header(
 }
 fn map_native_server(server: &str, mut definition: Value) -> Result<Value, Error> {
     let fields = definition.as_object_mut().ok_or(Error::Config)?;
+    if let Some(helper) = fields.remove("http_headers_helper")
+        && fields.insert("headersHelper".into(), helper).is_some()
+    {
+        return Err(Error::Config);
+    }
     let direct = fields.remove("http_headers");
     let environment = fields.remove("env_http_headers");
     let bearer = fields.remove("bearer_token_env_var");
@@ -328,6 +342,8 @@ fn unsupported_fields(stack: &StackV1) -> Vec<String> {
                             | "env"
                             | "url"
                             | "headers"
+                            | "headersHelper"
+                            | "http_headers_helper"
                             | "http_headers"
                             | "env_http_headers"
                             | "bearer_token_env_var"
@@ -368,8 +384,9 @@ fn unsupported_fields(stack: &StackV1) -> Vec<String> {
                             add("transport.cwd");
                         }
                     }
-                    Transport::Http { .. } | Transport::Sse { .. } => {}
-                    Transport::Websocket { .. } => add("transport.websocket"),
+                    Transport::Http { .. }
+                    | Transport::Sse { .. }
+                    | Transport::Websocket { .. } => {}
                 }
             }
         }
@@ -446,11 +463,26 @@ fn prepare(
                         }
                         definition
                     }
-                    Transport::Http { url, headers } | Transport::Sse { url, headers } => {
-                        let kind = if matches!(transport, Transport::Http { .. }) {
-                            "http"
-                        } else {
-                            "sse"
+                    Transport::Http {
+                        url,
+                        headers,
+                        headers_helper,
+                    }
+                    | Transport::Sse {
+                        url,
+                        headers,
+                        headers_helper,
+                    }
+                    | Transport::Websocket {
+                        url,
+                        headers,
+                        headers_helper,
+                    } => {
+                        let kind = match transport {
+                            Transport::Http { .. } => "http",
+                            Transport::Sse { .. } => "sse",
+                            Transport::Websocket { .. } => "ws",
+                            Transport::Stdio { .. } => unreachable!(),
                         };
                         let mut mapped_headers = Map::new();
                         for (header, value) in headers {
@@ -471,6 +503,18 @@ fn prepare(
                             add_header(&mut mapped_headers, header, Value::String(text), name)?;
                         }
                         let mut definition = serde_json::json!({"type":kind,"url":url});
+                        if let Some(helper) = headers_helper {
+                            let command = match helper {
+                                HeaderHelper::Literal(command) => command.clone(),
+                                HeaderHelper::ResolvedEnvironment(reference) => resolver
+                                    .resolve(&reference.value_env)
+                                    .ok_or(Error::Secret)?,
+                            };
+                            definition
+                                .as_object_mut()
+                                .ok_or(Error::Config)?
+                                .insert("headersHelper".into(), Value::String(command));
+                        }
                         if !mapped_headers.is_empty() {
                             definition
                                 .as_object_mut()
@@ -479,7 +523,6 @@ fn prepare(
                         }
                         definition
                     }
-                    _ => return Err(Error::Unsupported),
                 }
             }
         };
@@ -488,11 +531,13 @@ fn prepare(
     }
     Ok(values)
 }
-fn prepared(
-    stack: &StackV1,
-    dry_run: bool,
-    interactive: bool,
-) -> Result<BTreeMap<String, Value>, AppError> {
+struct Prepared {
+    definitions: BTreeMap<String, Value>,
+    secrets: Vec<String>,
+    missing: bool,
+}
+
+fn prepared(stack: &StackV1, dry_run: bool, interactive: bool) -> Result<Prepared, AppError> {
     let mut resolver = SecretResolver {
         dry_run,
         interactive,
@@ -505,9 +550,13 @@ fn prepared(
     if resolver.cancelled {
         return Err(AppError::ImportApprovalCancelled);
     }
-    result.map_err(Into::into)
+    Ok(Prepared {
+        definitions: result?,
+        secrets: resolver.values.into_values().flatten().collect(),
+        missing: resolver.missing_used,
+    })
 }
-fn prepared_preview(stack: &StackV1) -> Result<(BTreeMap<String, Value>, bool), AppError> {
+fn prepared_preview(stack: &StackV1) -> Result<Prepared, AppError> {
     let mut resolver = SecretResolver {
         dry_run: true,
         interactive: false,
@@ -516,8 +565,11 @@ fn prepared_preview(stack: &StackV1) -> Result<(BTreeMap<String, Value>, bool), 
         values: BTreeMap::new(),
         cancelled: false,
     };
-    let values = prepare(stack, &mut resolver)?;
-    Ok((values, resolver.missing_used))
+    Ok(Prepared {
+        definitions: prepare(stack, &mut resolver)?,
+        secrets: resolver.values.into_values().flatten().collect(),
+        missing: resolver.missing_used,
+    })
 }
 fn as_stack(values: BTreeMap<String, Value>) -> Result<StackV1, AppError> {
     let document = serde_json::json!({"schema_version":SCHEMA_VERSION,"servers":values.iter().map(|(k,v)| (k.clone(),serde_json::json!({"config":v}))).collect::<Map<_,_>>()});
@@ -561,7 +613,7 @@ fn mark_changed_secrets(
     before_mask: &mut Value,
     after_mask: &mut Value,
 ) {
-    if is_masked(after_mask) {
+    if is_masked(after_mask) || after_mask.as_str() == Some("<redacted>") {
         if !is_masked(before_mask) {
             *before_mask = Value::String("<redacted>".into());
         }
@@ -874,12 +926,13 @@ fn preview(
     file: &io::Snapshot,
     before: BTreeMap<String, Value>,
     after: BTreeMap<String, Value>,
+    secrets: &[String],
     colored: bool,
 ) -> Result<(), AppError> {
     if before == after {
         return Ok(());
     }
-    preview_diff(output, path, file, &before, &after, colored)?;
+    preview_diff(output, path, file, &before, &after, secrets, colored)?;
     summarize_changes(output, path, &before, &after, colored)?;
     Ok(())
 }
@@ -890,10 +943,14 @@ fn preview_diff(
     file: &io::Snapshot,
     before: &BTreeMap<String, Value>,
     after: &BTreeMap<String, Value>,
+    secrets: &[String],
     colored: bool,
 ) -> Result<(), AppError> {
     let mut before_mask = mask(before.clone())?;
     let mut after_mask = mask(after.clone())?;
+    for masked in before_mask.values_mut().chain(after_mask.values_mut()) {
+        redact_resolved(masked, secrets);
+    }
     for (name, after_value) in after {
         if let (Some(before_value), Some(before_mask), Some(after_mask)) = (
             before.get(name),
@@ -1165,10 +1222,10 @@ impl ClientAdapter for Claude {
                     .map(String::as_str),
             )?;
         }
-        let (preview_values, missing) = prepared_preview(&stack)?;
-        if missing {
+        let preliminary_input = prepared_preview(&stack)?;
+        if preliminary_input.missing {
             let mut preliminary = before.clone();
-            preliminary.extend(preview_values);
+            preliminary.extend(preliminary_input.definitions);
             preserve_equivalent_servers(&before, &mut preliminary);
             if preliminary != before {
                 writeln!(
@@ -1181,6 +1238,7 @@ impl ClientAdapter for Claude {
                     &file,
                     before.clone(),
                     preliminary,
+                    &preliminary_input.secrets,
                     colored,
                 )?;
             }
@@ -1192,7 +1250,7 @@ impl ClientAdapter for Claude {
         )?;
         let mut proposed = servers(&config);
         let before = proposed.clone();
-        proposed.extend(incoming);
+        proposed.extend(incoming.definitions);
         preserve_equivalent_servers(&before, &mut proposed);
         let servers_changed = before != proposed;
         let mut permissions_changed = false;
@@ -1210,7 +1268,15 @@ impl ClientAdapter for Claude {
             write_no_changes(output, &config_path, false)?;
             return Ok(());
         }
-        preview(output, &config_path, &file, before, proposed, colored)?;
+        preview(
+            output,
+            &config_path,
+            &file,
+            before,
+            proposed,
+            &incoming.secrets,
+            colored,
+        )?;
         if let (Some(path), Some((settings, proposed))) = (permission_path, permission_preview) {
             settings.preview(&proposed, &path, output, colored)?;
         }
@@ -1247,10 +1313,10 @@ impl ClientAdapter for Claude {
                     .map(String::as_str),
             )?;
         }
-        let (preview_values, missing) = prepared_preview(&stack)?;
-        if missing {
+        let preliminary_input = prepared_preview(&stack)?;
+        if preliminary_input.missing {
             let mut preliminary = before.clone();
-            preliminary.extend(preview_values);
+            preliminary.extend(preliminary_input.definitions);
             preserve_equivalent_servers(&before, &mut preliminary);
             if preliminary != before {
                 writeln!(
@@ -1267,7 +1333,8 @@ impl ClientAdapter for Claude {
                 && !non_interactive
                 && stdin().is_terminal()
                 && stderr().is_terminal(),
-        )?;
+        )?
+        .definitions;
         let mut all_changes = before.clone();
         all_changes.extend(incoming.clone());
         preserve_equivalent_servers(&before, &mut all_changes);
@@ -1437,8 +1504,9 @@ impl ClientAdapter for Claude {
                     .map(String::as_str),
             )?;
         }
-        let (mut preliminary, missing) = prepared_preview(&stack)?;
-        if missing {
+        let preliminary_input = prepared_preview(&stack)?;
+        let mut preliminary = preliminary_input.definitions;
+        if preliminary_input.missing {
             preserve_equivalent_servers(&before, &mut preliminary);
             if preliminary != before {
                 writeln!(
@@ -1455,7 +1523,8 @@ impl ClientAdapter for Claude {
                 && !non_interactive
                 && stdin().is_terminal()
                 && stderr().is_terminal(),
-        )?;
+        )?
+        .definitions;
         preserve_equivalent_servers(&before, &mut proposed);
         let permission_change = if let Some(path) = &permission_path {
             let settings = permissions::Snapshot::read(path).await?;
