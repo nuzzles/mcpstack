@@ -295,6 +295,7 @@ fn direct_commands_select_harnesses_and_preserve_single_stack_output() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn direct_multi_harness_import_and_use_target_isolated_configs() {
     let dir = tempfile::tempdir().unwrap();
