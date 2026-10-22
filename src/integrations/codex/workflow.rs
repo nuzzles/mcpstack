@@ -312,7 +312,7 @@ pub(crate) async fn run_export(
     reason = "CLI workflow accepts separate command flags"
 )]
 pub(crate) async fn run_import(
-    file: PathBuf,
+    file: crate::stack_source::StackSource,
     config: Option<PathBuf>,
     selection: crate::integrations::selection::Selection,
     include_permissions: bool,
@@ -534,7 +534,7 @@ pub(crate) async fn run_import(
     reason = "CLI workflow accepts separate command flags"
 )]
 pub(crate) async fn run_use(
-    file: PathBuf,
+    file: crate::stack_source::StackSource,
     config: Option<PathBuf>,
     include_permissions: bool,
     output: &mut impl Write,

@@ -15,7 +15,9 @@ pub enum ErrorCode {
     OutputError = 1,
     #[error("Invalid CLI arguments. Run mcpstack --help for usage.")]
     InvalidArgument = 2,
-    #[error("Unable to read the stack file. Check its path, permissions, and UTF-8 encoding.")]
+    #[error(
+        "Unable to read the stack source. Check its file path or URL, availability, response size, and UTF-8 encoding."
+    )]
     StackReadError = 3,
     #[error("Invalid stack. Check the schema format.")]
     InvalidStack = 4,
@@ -86,6 +88,18 @@ pub enum AppError {
     Output(#[from] io::Error),
     #[error("{code}", code = ErrorCode::StackReadError)]
     StackRead(#[source] io::Error),
+    #[error("Invalid HTTP(S) stack URL.")]
+    StackUrlInvalid,
+    #[error("Stack URLs must use HTTP or HTTPS.")]
+    StackUrlScheme,
+    #[error("Unable to fetch the stack URL. Check the network and server response.")]
+    StackRemoteRead,
+    #[error("Unable to fetch the stack URL (HTTP {0}).")]
+    StackRemoteStatus(u16),
+    #[error("Stack URL response exceeds the 4 MiB limit.")]
+    StackRemoteSize,
+    #[error("Stack URL response is not UTF-8 text.")]
+    StackRemoteUtf8,
     #[error("{code}", code = ErrorCode::StackWriteError)]
     StackWrite(#[source] crate::io::Error),
     #[error("{0}")]
@@ -94,6 +108,10 @@ pub enum AppError {
         "Cannot resolve a stack path. Use UTF-8 paths and fully qualified drive paths instead of drive-relative paths."
     )]
     StackPath,
+    #[error(
+        "Remote stacks cannot use stack-relative command or cwd paths. Use absolute paths or path_resolution: client."
+    )]
+    StackRemotePath,
     #[error("{code}", code = ErrorCode::ConfigReadError)]
     ConfigRead(#[source] io::Error),
     #[error(
@@ -121,15 +139,21 @@ impl AppError {
         match self {
             Self::Update(error) => error.code(),
             Self::Logging => ErrorCode::LoggingError,
-            Self::Arguments | Self::Selection(_) => ErrorCode::InvalidArgument,
+            Self::Arguments | Self::Selection(_) | Self::StackUrlInvalid | Self::StackUrlScheme => {
+                ErrorCode::InvalidArgument
+            }
             Self::ExportPath | Self::ExportSource | Self::ExportOverwriteRequired => {
                 ErrorCode::InvalidArgument
             }
             Self::ExportApprovalCancelled => ErrorCode::ExportError,
             Self::Output(_) => ErrorCode::OutputError,
-            Self::StackRead(_) => ErrorCode::StackReadError,
+            Self::StackRead(_)
+            | Self::StackRemoteRead
+            | Self::StackRemoteStatus(_)
+            | Self::StackRemoteSize
+            | Self::StackRemoteUtf8 => ErrorCode::StackReadError,
             Self::StackWrite(_) => ErrorCode::StackWriteError,
-            Self::Stack(_) | Self::StackPath => ErrorCode::InvalidStack,
+            Self::Stack(_) | Self::StackPath | Self::StackRemotePath => ErrorCode::InvalidStack,
             Self::ConfigRead(_) | Self::ListConfig => ErrorCode::ConfigReadError,
             Self::ImportApprovalRequired
             | Self::UseApprovalRequired

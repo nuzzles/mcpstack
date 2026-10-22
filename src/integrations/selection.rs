@@ -5,6 +5,7 @@ use clap::Args;
 use thiserror::Error;
 
 use crate::schema::StackV1;
+use crate::stack_source::StackSource;
 
 #[derive(Args, Clone, Default)]
 pub struct Selection {
@@ -16,18 +17,19 @@ pub struct Selection {
 impl Selection {
     pub async fn read_stack(
         &self,
-        file: &std::path::Path,
+        source: &StackSource,
         include_permissions: bool,
     ) -> Result<StackV1, crate::error::AppError> {
-        let document = tokio::fs::read_to_string(file)
-            .await
-            .map_err(crate::error::AppError::StackRead)?;
+        let document = source.read().await?;
         let crate::schema::Stack::V1(mut stack) = crate::schema::Stack::from_yaml(&document)?;
         self.apply(&mut stack)?;
         if !include_permissions {
             stack.exclude_permissions();
         }
-        super::paths::resolve(&mut stack, file).await?;
+        match &source {
+            StackSource::File(path) => super::paths::resolve(&mut stack, Some(path)).await?,
+            StackSource::Url(_) => super::paths::resolve(&mut stack, None).await?,
+        }
         Ok(stack)
     }
 

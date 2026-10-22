@@ -1,33 +1,34 @@
-use std::io::Write;
-use std::path::PathBuf;
-use tokio::fs;
-
 use clap::Args;
+use std::io::Write;
 
 use crate::error::AppError;
 use crate::schema::Stack;
+use crate::stack_source::StackSource;
 
 /// Validate a stack without changing configuration or resolving secrets.
 #[derive(Args)]
 pub struct Validate {
-    /// Path to a YAML stack.
-    pub file: PathBuf,
+    /// YAML stack file path or HTTP(S) URL.
+    #[arg(value_name = "SOURCE")]
+    pub file: StackSource,
 }
 
 impl Validate {
     pub async fn run(self, output: &mut impl Write) -> Result<(), AppError> {
-        let document = fs::read_to_string(&self.file)
-            .await
-            .map_err(AppError::StackRead)?;
+        let source = self.file;
+        let document = source.read().await?;
         let stack = Stack::from_yaml(&document)?;
         let Stack::V1(stack) = stack;
-        writeln!(
-            output,
-            "Stack file: {}",
-            std::path::absolute(&self.file)?
-                .to_string_lossy()
-                .escape_debug()
-        )?;
+        match &source {
+            StackSource::File(path) => writeln!(
+                output,
+                "Stack file: {}",
+                std::path::absolute(path)?.to_string_lossy().escape_debug()
+            )?,
+            StackSource::Url(url) => {
+                writeln!(output, "Stack URL: {}", url.as_str().escape_debug())?
+            }
+        }
         writeln!(
             output,
             "Valid stack (schema {}, {} server(s)).",

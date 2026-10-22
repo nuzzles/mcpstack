@@ -32,4 +32,8 @@ rules. mcpstack preserves commands verbatim without running them; use `PATH` or 
 directory. Bare commands use `PATH`. Exports use `path_resolution: client` to retain
 original runtime behavior. Arguments and environment strings are not expanded or rebased.
 
+`validate`, `diff`, `import`, and `use` also accept HTTP(S) URLs. A remote stack has no
+local directory, so stack-relative commands and `cwd` fail; use absolute paths or
+`path_resolution: client`. URL responses must be UTF-8 and at most 4 MiB.
+
 Check syntax with `mcpstack validate work.yaml`; preview against the target to check compatibility.
