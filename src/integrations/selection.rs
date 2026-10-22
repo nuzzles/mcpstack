@@ -27,7 +27,10 @@ impl Selection {
         if !include_permissions {
             stack.exclude_permissions();
         }
-        super::paths::resolve(&mut stack, source.file()).await?;
+        match &source {
+            StackSource::File(path) => super::paths::resolve(&mut stack, Some(path)).await?,
+            StackSource::Url(_) => super::paths::resolve(&mut stack, None).await?,
+        }
         Ok(stack)
     }
 

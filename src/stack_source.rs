@@ -30,13 +30,6 @@ impl StackSource {
         Ok(Self::File(input.to_path_buf()))
     }
 
-    pub(crate) fn file(&self) -> Option<&Path> {
-        match self {
-            Self::File(path) => Some(path),
-            Self::Url(_) => None,
-        }
-    }
-
     pub(crate) async fn read(&self) -> Result<String, AppError> {
         match self {
             Self::File(path) => tokio::fs::read_to_string(path)
@@ -101,17 +94,13 @@ mod tests {
 
     #[test]
     fn distinguishes_https_urls_from_windows_drive_paths() {
-        assert!(
-            StackSource::parse(Path::new("https://example.com/stack.yaml"))
-                .unwrap()
-                .file()
-                .is_none()
-        );
-        assert!(
-            StackSource::parse(Path::new("C://work/stack.yaml"))
-                .unwrap()
-                .file()
-                .is_some()
-        );
+        assert!(matches!(
+            StackSource::parse(Path::new("https://example.com/stack.yaml")).unwrap(),
+            StackSource::Url(_)
+        ));
+        assert!(matches!(
+            StackSource::parse(Path::new("C://work/stack.yaml")).unwrap(),
+            StackSource::File(_)
+        ));
     }
 }
