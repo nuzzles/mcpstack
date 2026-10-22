@@ -305,7 +305,7 @@ fn failed_backups_and_invalid_target_configs_preserve_originals() {
 }
 
 #[test]
-fn client_namespace_is_required_before_reads_or_writes_including_dry_runs() {
+fn direct_use_requires_a_harness_before_reads_or_writes_without_a_terminal() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.toml");
     let original = "[mcp_servers.keep]\ncommand='keep'\n";
@@ -321,7 +321,7 @@ fn client_namespace_is_required_before_reads_or_writes_including_dry_runs() {
             .unwrap();
         assert_eq!(output.status.code(), Some(2), "{output:?}");
         assert!(output.stdout.is_empty());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("--harness codex"));
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }

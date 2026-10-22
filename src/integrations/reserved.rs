@@ -22,6 +22,22 @@ pub struct ServerFilter {
 }
 
 impl ServerFilter {
+    pub(crate) fn for_harness(harness: super::harness::Harness) -> Self {
+        match harness {
+            super::harness::Harness::Codex => Self {
+                workspace: true,
+                claude_in_chrome: true,
+                claude_preview: true,
+                claude_browser: true,
+                ..Default::default()
+            },
+            super::harness::Harness::Claude => Self {
+                node_repl: true,
+                ..Default::default()
+            },
+        }
+    }
+
     pub fn validate<'a>(
         &self,
         names: impl Iterator<Item = &'a str>,

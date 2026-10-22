@@ -17,6 +17,13 @@ pub struct Show {
 }
 
 impl Show {
+    pub(crate) fn from_args(args: ExportArgs, expose_secrets: bool) -> Self {
+        Self {
+            expose_secrets,
+            args,
+        }
+    }
+
     pub(crate) fn config_path(&self) -> Option<&Path> {
         self.args.config_path()
     }

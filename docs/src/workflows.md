@@ -1,5 +1,14 @@
 # Everyday workflows
 
+Run `mcpstack import` to enter a stack file path or HTTP(S) URL, then choose one
+or both harnesses. Installed harnesses appear first and are marked `(installed)`;
+each group is alphabetical. `list`, `diff`, and `use` also allow multiple harnesses.
+`show` and `export` select one. Pass `--harness codex` or `--harness claude`
+to skip the prompt; repeat `--harness` to select both for multi-harness commands.
+For unattended runs, provide the source or export file and `--non-interactive`.
+With multiple harnesses, each is processed in turn; an error can leave earlier
+harnesses updated. Use the namespaced form for harness-specific options.
+
 ## Try it
 
 [Download demo.yaml](examples/demo.yaml), then preview against an unused config path:

@@ -81,7 +81,7 @@ impl From<Error> for AppError {
     }
 }
 
-fn path(config: Option<PathBuf>) -> Result<PathBuf, Error> {
+pub(super) fn path(config: Option<PathBuf>) -> Result<PathBuf, Error> {
     config
         .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".claude.json")))
         .ok_or(Error::Path)
