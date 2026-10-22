@@ -1,15 +1,58 @@
 //! Load a stack from a local file or an explicitly supplied HTTP(S) URL.
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+use clap::builder::{TypedValueParser, ValueParserFactory};
 
 use crate::error::AppError;
 
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
+#[derive(Clone, Debug)]
 pub(crate) enum StackSource {
     File(PathBuf),
     Url(url::Url),
+}
+
+#[derive(Clone)]
+pub(crate) struct StackSourceParser;
+
+impl TypedValueParser for StackSourceParser {
+    type Value = StackSource;
+
+    fn parse_ref(
+        &self,
+        command: &clap::Command,
+        arg: Option<&clap::Arg>,
+        value: &OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        let path = clap::builder::PathBufValueParser::new().parse_ref(command, arg, value)?;
+        StackSource::parse(&path).map_err(|error| {
+            let mut diagnostic =
+                clap::Error::new(clap::error::ErrorKind::ValueValidation).with_cmd(command);
+            // CLI diagnostics removes validator sources and redacts values. These
+            // parse errors have static messages, so retain one as a safe hint.
+            diagnostic.insert(
+                clap::error::ContextKind::InvalidArg,
+                clap::error::ContextValue::String(format!("SOURCE: {error}")),
+            );
+            diagnostic.insert(
+                clap::error::ContextKind::InvalidValue,
+                clap::error::ContextValue::String("<redacted>".into()),
+            );
+            diagnostic
+        })
+    }
+}
+
+impl ValueParserFactory for StackSource {
+    type Parser = StackSourceParser;
+
+    fn value_parser() -> Self::Parser {
+        StackSourceParser
+    }
 }
 
 impl StackSource {

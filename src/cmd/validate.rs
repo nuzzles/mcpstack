@@ -1,6 +1,5 @@
 use clap::Args;
 use std::io::Write;
-use std::path::PathBuf;
 
 use crate::error::AppError;
 use crate::schema::Stack;
@@ -10,12 +9,13 @@ use crate::stack_source::StackSource;
 #[derive(Args)]
 pub struct Validate {
     /// YAML stack file path or HTTP(S) URL.
-    pub file: PathBuf,
+    #[arg(value_name = "SOURCE")]
+    pub file: StackSource,
 }
 
 impl Validate {
     pub async fn run(self, output: &mut impl Write) -> Result<(), AppError> {
-        let source = StackSource::parse(&self.file)?;
+        let source = self.file;
         let document = source.read().await?;
         let stack = Stack::from_yaml(&document)?;
         let Stack::V1(stack) = stack;

@@ -27,6 +27,7 @@ use crate::cmd::{
     r#use::Use,
 };
 use crate::error::{AppError, ErrorCode};
+use crate::stack_source::StackSource;
 
 fn write_dry_run(output: &mut impl Write) -> std::io::Result<()> {
     writeln!(output, "Dry run; no configuration files were changed.")
@@ -187,7 +188,7 @@ pub struct StackArgs {
     pub(crate) selection: selection::Selection,
     /// Stack file path or HTTP(S) URL to compare, import, or use.
     #[arg(value_name = "SOURCE")]
-    file: PathBuf,
+    file: StackSource,
     /// Use this client config file instead of the default configuration.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,

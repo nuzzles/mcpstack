@@ -17,7 +17,7 @@ use crate::schema::Stack;
 use super::{Error, default_config};
 
 pub(crate) async fn run(
-    file: PathBuf,
+    file: crate::stack_source::StackSource,
     config: Option<PathBuf>,
     selection: crate::integrations::selection::Selection,
     include_permissions: bool,

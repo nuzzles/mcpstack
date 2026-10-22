@@ -17,10 +17,9 @@ pub struct Selection {
 impl Selection {
     pub async fn read_stack(
         &self,
-        input: &std::path::Path,
+        source: &StackSource,
         include_permissions: bool,
     ) -> Result<StackV1, crate::error::AppError> {
-        let source = StackSource::parse(input)?;
         let document = source.read().await?;
         let crate::schema::Stack::V1(mut stack) = crate::schema::Stack::from_yaml(&document)?;
         self.apply(&mut stack)?;

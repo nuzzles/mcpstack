@@ -187,3 +187,25 @@ fn unsupported_and_malformed_urls_are_rejected_without_echoing_values() {
         assert!(!diagnostic.contains("fixture-url-secret"));
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn local_stack_paths_can_contain_non_utf8_bytes() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir
+        .path()
+        .join(OsString::from_vec(b"stack-\xff.yaml".to_vec()));
+    std::fs::write(&file, STACK).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .arg("validate")
+        .arg(&file)
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Valid stack"));
+}
