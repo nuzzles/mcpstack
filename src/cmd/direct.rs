@@ -317,6 +317,7 @@ impl Import {
     ) -> Result<(), AppError> {
         let harnesses = self.harnesses.select(non_interactive)?;
         if harnesses.is_empty() {
+            writeln!(output, "No harnesses selected; nothing was imported.")?;
             return Ok(());
         }
         let config = self.config.for_many(&harnesses)?;

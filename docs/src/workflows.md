@@ -1,7 +1,8 @@
 # Everyday workflows
 
 Run `mcpstack import` to choose one or both harnesses, then enter a stack file
-path or HTTP(S) URL. Selecting none exits without asking for a source.
+path or HTTP(S) URL. Selecting none reports that nothing was imported and exits
+without asking for a source.
 Installed harnesses appear first and are marked `(installed)`;
 each group is alphabetical. `list`, `show`, `export`, `diff`, and `use` select
 one harness. Pass `--harness codex` or `--harness claude` to skip the prompt;
