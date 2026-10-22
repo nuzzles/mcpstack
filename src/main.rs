@@ -7,6 +7,7 @@ mod integrations;
 mod io;
 mod logging;
 mod schema;
+mod stack_source;
 mod update;
 
 use std::io::Write;

@@ -185,8 +185,8 @@ impl ExportArgs {
 pub struct StackArgs {
     #[arg(skip)]
     pub(crate) selection: selection::Selection,
-    /// Stack file to compare, import, or use.
-    #[arg(value_name = "FILE")]
+    /// Stack file path or HTTP(S) URL to compare, import, or use.
+    #[arg(value_name = "SOURCE")]
     file: PathBuf,
     /// Use this client config file instead of the default configuration.
     #[arg(long, value_name = "PATH")]

@@ -2,6 +2,7 @@ Preview a redacted import diff without writing files or running servers.
 
 ```sh
 mcpstack codex diff work.yaml --non-interactive
+mcpstack codex diff https://example.com/work.yaml --non-interactive
 ```
 
 Missing secrets fail in noninteractive mode. This previews merges;
