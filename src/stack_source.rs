@@ -57,8 +57,17 @@ impl ValueParserFactory for StackSource {
 
 impl StackSource {
     pub(crate) fn parse(input: &Path) -> Result<Self, AppError> {
+        // A later "://" can be part of a local path, not a URL scheme.
         if let Some(text) = input.to_str()
             && let Some((scheme, _)) = text.split_once("://")
+            && scheme
+                .bytes()
+                .next()
+                .is_some_and(|first| first.is_ascii_alphabetic())
+            && scheme
+                .bytes()
+                .skip(1)
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
         {
             // A Windows drive followed by two separators is still a file path.
             if scheme.len() == 1 && scheme.as_bytes()[0].is_ascii_alphabetic() {
@@ -87,6 +96,8 @@ async fn read_url(url: &url::Url) -> Result<String, AppError> {
     let client = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .user_agent(concat!("mcpstack/", env!("CARGO_PKG_VERSION")))
+        // Redirects must not forward signed URL query strings to another host.
+        .referer(false)
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if attempt.previous().len() >= 5
                 || attempt.url().scheme() != "http" && attempt.url().scheme() != "https"

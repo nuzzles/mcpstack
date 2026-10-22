@@ -15,7 +15,9 @@ pub enum ErrorCode {
     OutputError = 1,
     #[error("Invalid CLI arguments. Run mcpstack --help for usage.")]
     InvalidArgument = 2,
-    #[error("Unable to read the stack file. Check its path, permissions, and UTF-8 encoding.")]
+    #[error(
+        "Unable to read the stack source. Check its file path or URL, availability, response size, and UTF-8 encoding."
+    )]
     StackReadError = 3,
     #[error("Invalid stack. Check the schema format.")]
     InvalidStack = 4,

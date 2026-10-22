@@ -1,5 +1,5 @@
-use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -7,45 +7,62 @@ use std::time::{Duration, Instant};
 const STACK: &str =
     "schema_version: 1\nservers:\n  example:\n    transport: {type: stdio, command: tool}\n";
 
+fn accept_connection(listener: &TcpListener) -> Option<TcpStream> {
+    listener.set_nonblocking(true).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
+                return Some(stream);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("server accept failed: {error}"),
+        }
+    }
+}
+
+fn request_headers(stream: &TcpStream) -> Vec<String> {
+    let mut reader = BufReader::new(stream);
+    let mut headers = Vec::new();
+    loop {
+        let mut line = String::new();
+        assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+        if line == "\r\n" {
+            return headers;
+        }
+        headers.push(line);
+    }
+}
+
 fn serve(status: &str, body: &[u8]) -> (String, std::thread::JoinHandle<bool>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
     let status = status.to_owned();
     let body = body.to_vec();
     let thread = std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            match listener.accept() {
-                Ok((mut stream, _)) => {
-                    stream.set_nonblocking(false).unwrap();
-                    stream
-                        .set_read_timeout(Some(Duration::from_secs(2)))
-                        .unwrap();
-                    let mut request = [0; 1024];
-                    let read = stream.read(&mut request).unwrap();
-                    assert!(
-                        request[..read]
-                            .starts_with(b"GET /stack.yaml?token=fixture-url-secret HTTP/1.1")
-                    );
-                    write!(
-                        stream,
-                        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len()
-                    )
-                    .unwrap();
-                    stream.write_all(&body).unwrap_or(());
-                    return true;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
-                        return false;
-                    }
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Err(error) => panic!("server accept failed: {error}"),
-            }
-        }
+        let Some(mut stream) = accept_connection(&listener) else {
+            return false;
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut request = [0; 1024];
+        let read = stream.read(&mut request).unwrap();
+        assert!(request[..read].starts_with(b"GET /stack.yaml?token=fixture-url-secret HTTP/1.1"));
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        stream.write_all(&body).unwrap_or(());
+        true
     });
     (
         format!("http://{address}/stack.yaml?token=fixture-url-secret"),
@@ -109,6 +126,54 @@ fn http_stack_works_for_validate_diff_import_and_use_in_both_clients() {
             }
         }
     }
+}
+
+#[test]
+fn redirects_do_not_send_source_query_in_referer() {
+    let target = TcpListener::bind("127.0.0.1:0").unwrap();
+    let target_url = format!("http://{}/stack.yaml", target.local_addr().unwrap());
+    let source = TcpListener::bind("127.0.0.1:0").unwrap();
+    let source_url = format!(
+        "http://{}/stack.yaml?token=fixture-url-secret",
+        source.local_addr().unwrap()
+    );
+    let source_server = std::thread::spawn(move || {
+        let mut stream = accept_connection(&source).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let headers = request_headers(&stream);
+        assert!(headers[0].starts_with("GET /stack.yaml?token=fixture-url-secret HTTP/1.1"));
+        write!(
+            stream,
+            "HTTP/1.1 302 Found\r\nLocation: {target_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+    });
+    let target_server = std::thread::spawn(move || {
+        let mut stream = accept_connection(&target).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let headers = request_headers(&stream);
+        assert!(headers[0].starts_with("GET /stack.yaml HTTP/1.1"));
+        assert!(
+            headers
+                .iter()
+                .all(|line| !line.to_ascii_lowercase().starts_with("referer:")),
+            "redirected request must omit Referer"
+        );
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{STACK}",
+            STACK.len()
+        )
+        .unwrap();
+    });
+    let output = run(&["validate", &source_url]);
+    source_server.join().unwrap();
+    target_server.join().unwrap();
+    assert!(output.status.success(), "{output:?}");
 }
 
 #[test]
@@ -188,6 +253,27 @@ fn unsupported_and_malformed_urls_are_rejected_without_echoing_values() {
         let diagnostic = String::from_utf8_lossy(&output.stderr);
         assert!(diagnostic.contains(message), "{diagnostic}");
         assert!(!diagnostic.contains("fixture-url-secret"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn local_stack_paths_with_url_syntax_are_read_as_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("name:");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("stack.yaml"), STACK).unwrap();
+    let absolute = format!("{}/name://stack.yaml", dir.path().display());
+    for source in [&absolute, "./name://stack.yaml"] {
+        assert!(dir.path().join(source).is_file());
+        let output = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["validate", source])
+            .current_dir(dir.path())
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
     }
 }
 
