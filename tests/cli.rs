@@ -303,6 +303,41 @@ fn direct_commands_select_harnesses_and_preserve_single_stack_output() {
     assert!(!updated.contains("demo"));
 }
 
+#[test]
+fn direct_commands_do_not_print_a_harness_heading_before_config_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("invalid.toml");
+    let stack = dir.path().join("stack.yaml");
+    std::fs::write(&config, "[mcp_servers.invalid]\ncommand=[oops]\n").unwrap();
+    std::fs::write(
+        &stack,
+        "schema_version: 1\nservers:\n  added:\n    transport: {type: stdio, command: tool}\n",
+    )
+    .unwrap();
+    for operation in ["list", "diff", "import", "use"] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
+        command
+            .args([
+                "--non-interactive",
+                operation,
+                "--harness",
+                "codex",
+                "--config",
+            ])
+            .arg(&config);
+        if operation != "list" {
+            command.arg(&stack);
+        }
+        let result = command
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(!result.status.success(), "{operation}: {result:?}");
+        assert!(result.stdout.is_empty(), "{operation}: {result:?}");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn direct_multi_harness_import_targets_isolated_configs() {

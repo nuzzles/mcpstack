@@ -101,9 +101,13 @@ impl Cli {
                         .await
                 }
                 Commands::Import(inner) => {
-                    inner
+                    let outcome = inner
                         .run(output, self.non_interactive, self.logging.output_ansi())
-                        .await
+                        .await?;
+                    if matches!(outcome, direct::ImportOutcome::NoHarnesses) {
+                        return Ok(());
+                    }
+                    Ok(())
                 }
                 Commands::Use(inner) => {
                     inner

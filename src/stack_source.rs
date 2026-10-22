@@ -1,6 +1,7 @@
 //! Load a stack from a local file or an explicitly supplied HTTP(S) URL.
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use clap::builder::{TypedValueParser, ValueParserFactory};
@@ -13,7 +14,26 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 #[derive(Clone, Debug)]
 pub(crate) enum StackSource {
     File(PathBuf),
-    Url(url::Url),
+    Url(Arc<RemoteStack>),
+}
+
+#[derive(Debug)]
+pub(crate) struct RemoteStack {
+    url: url::Url,
+    document: tokio::sync::OnceCell<String>,
+}
+
+impl RemoteStack {
+    pub(crate) fn as_str(&self) -> &str {
+        self.url.as_str()
+    }
+
+    async fn read(&self) -> Result<String, AppError> {
+        self.document
+            .get_or_try_init(|| read_url(&self.url))
+            .await
+            .cloned()
+    }
 }
 
 #[derive(Clone)]
@@ -77,7 +97,10 @@ impl StackSource {
                 return Err(AppError::StackUrlScheme);
             }
             let url = url::Url::parse(text).map_err(|_| AppError::StackUrlInvalid)?;
-            return Ok(Self::Url(url));
+            return Ok(Self::Url(Arc::new(RemoteStack {
+                url,
+                document: tokio::sync::OnceCell::new(),
+            })));
         }
         Ok(Self::File(input.to_path_buf()))
     }
@@ -87,7 +110,7 @@ impl StackSource {
             Self::File(path) => tokio::fs::read_to_string(path)
                 .await
                 .map_err(AppError::StackRead),
-            Self::Url(url) => read_url(url).await,
+            Self::Url(remote) => remote.read().await,
         }
     }
 }

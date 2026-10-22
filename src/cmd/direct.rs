@@ -1,5 +1,5 @@
 //! Interactive client commands without a harness namespace.
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use clap::Args;
@@ -102,6 +102,43 @@ fn filter(harness: Harness, selection: Selection, all: bool) -> ServerFilter {
     filter
 }
 
+struct HarnessOutput<'a, W> {
+    output: &'a mut W,
+    harness: Harness,
+    labeled: bool,
+}
+
+impl<'a, W: Write> HarnessOutput<'a, W> {
+    fn new(output: &'a mut W, harness: Harness) -> Self {
+        Self {
+            output,
+            harness,
+            labeled: false,
+        }
+    }
+
+    fn finish(&mut self) -> io::Result<()> {
+        if !self.labeled {
+            writeln!(self.output, "{}:", self.harness.name())?;
+            self.labeled = true;
+        }
+        Ok(())
+    }
+}
+
+impl<W: Write> Write for HarnessOutput<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if !buf.is_empty() {
+            self.finish()?;
+        }
+        self.output.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.output.flush()
+    }
+}
+
 #[derive(Args)]
 /// List configured MCP servers in one harness.
 pub struct List {
@@ -126,20 +163,22 @@ impl List {
         let Some(harness) = self.harness.select(non_interactive)? else {
             return Ok(());
         };
-        writeln!(output, "{}:", harness.name())?;
+        let mut labeled = HarnessOutput::new(output, harness);
         let filter = filter(harness, self.selection, self.all);
         match harness {
             Harness::Claude => {
                 Claude
-                    .list(self.config.config, filter, output, colored)
+                    .list(self.config.config, filter, &mut labeled, colored)
                     .await
             }
             Harness::Codex => {
                 Codex
-                    .list(self.config.config, filter, output, colored)
+                    .list(self.config.config, filter, &mut labeled, colored)
                     .await
             }
-        }
+        }?;
+        labeled.finish()?;
+        Ok(())
     }
 }
 
@@ -268,7 +307,7 @@ impl Diff {
         let Some(harness) = self.harness.select(non_interactive)? else {
             return Ok(());
         };
-        writeln!(output, "{}:", harness.name())?;
+        let mut labeled = HarnessOutput::new(output, harness);
         let args = StackArgs::for_harnessless(
             source,
             self.config.config,
@@ -276,9 +315,19 @@ impl Diff {
             self.include_permissions,
         );
         match harness {
-            Harness::Claude => Claude.diff(args, output, non_interactive, colored).await,
-            Harness::Codex => Codex.diff(args, output, non_interactive, colored).await,
-        }
+            Harness::Claude => {
+                Claude
+                    .diff(args, &mut labeled, non_interactive, colored)
+                    .await
+            }
+            Harness::Codex => {
+                Codex
+                    .diff(args, &mut labeled, non_interactive, colored)
+                    .await
+            }
+        }?;
+        labeled.finish()?;
+        Ok(())
     }
 }
 
@@ -304,6 +353,11 @@ pub struct Import {
     include_permissions: bool,
 }
 
+pub(crate) enum ImportOutcome {
+    NoHarnesses,
+    Ran,
+}
+
 impl Import {
     pub fn is_dry_run(&self) -> bool {
         self.dry_run
@@ -314,16 +368,16 @@ impl Import {
         output: &mut impl Write,
         non_interactive: bool,
         colored: bool,
-    ) -> Result<(), AppError> {
+    ) -> Result<ImportOutcome, AppError> {
         let harnesses = self.harnesses.select(non_interactive)?;
         if harnesses.is_empty() {
             writeln!(output, "No harnesses selected; nothing was imported.")?;
-            return Ok(());
+            return Ok(ImportOutcome::NoHarnesses);
         }
         let config = self.config.for_many(&harnesses)?;
         let source = self.source.resolve(non_interactive)?;
         for harness in harnesses {
-            writeln!(output, "{}:", harness.name())?;
+            let mut labeled = HarnessOutput::new(output, harness);
             let args = StackArgs::for_harnessless(
                 source.clone(),
                 config.clone(),
@@ -335,7 +389,7 @@ impl Import {
                     Claude
                         .import(
                             args,
-                            output,
+                            &mut labeled,
                             non_interactive,
                             colored,
                             self.dry_run,
@@ -347,7 +401,7 @@ impl Import {
                     Codex
                         .import(
                             args,
-                            output,
+                            &mut labeled,
                             non_interactive,
                             colored,
                             self.dry_run,
@@ -356,8 +410,9 @@ impl Import {
                         .await?
                 }
             }
+            labeled.finish()?;
         }
-        Ok(())
+        Ok(ImportOutcome::Ran)
     }
 }
 
@@ -396,7 +451,7 @@ impl Use {
         let Some(harness) = self.harness.select(non_interactive)? else {
             return Ok(());
         };
-        writeln!(output, "{}:", harness.name())?;
+        let mut labeled = HarnessOutput::new(output, harness);
         let args = StackArgs::for_harnessless(
             source,
             self.config.config,
@@ -408,7 +463,7 @@ impl Use {
                 Claude
                     .use_stack(
                         args,
-                        output,
+                        &mut labeled,
                         non_interactive,
                         colored,
                         self.dry_run,
@@ -420,7 +475,7 @@ impl Use {
                 Codex
                     .use_stack(
                         args,
-                        output,
+                        &mut labeled,
                         non_interactive,
                         colored,
                         self.dry_run,
@@ -428,6 +483,8 @@ impl Use {
                     )
                     .await
             }
-        }
+        }?;
+        labeled.finish()?;
+        Ok(())
     }
 }
