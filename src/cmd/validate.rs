@@ -25,7 +25,9 @@ impl Validate {
                 "Stack file: {}",
                 std::path::absolute(path)?.to_string_lossy().escape_debug()
             )?,
-            StackSource::Url(_) => writeln!(output, "Stack source: HTTP(S) URL.")?,
+            StackSource::Url(url) => {
+                writeln!(output, "Stack URL: {}", url.as_str().escape_debug())?
+            }
         }
         writeln!(
             output,

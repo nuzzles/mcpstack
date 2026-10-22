@@ -8,3 +8,4 @@ mcpstack validate https://example.com/work.yaml
 A valid stack may contain unsupported target settings. Use [diff](command-diff.md)
 to check harness compatibility.
 URL validation fetches the stack but does not resolve client settings or secrets.
+Successful validation prints the source URL, including any query string.

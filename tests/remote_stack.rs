@@ -76,7 +76,10 @@ fn http_stack_works_for_validate_diff_import_and_use_in_both_clients() {
     assert!(validated.status.success(), "{validated:?}");
     assert_eq!(
         String::from_utf8(validated.stdout).unwrap(),
-        "Stack source: HTTP(S) URL.\nValid stack (schema 1, 1 server(s)).\n"
+        format!(
+            "Stack URL: {}\nValid stack (schema 1, 1 server(s)).\n",
+            url.escape_debug()
+        )
     );
     for client in ["codex", "claude"] {
         for operation in ["diff", "import", "use"] {
