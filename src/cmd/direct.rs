@@ -315,12 +315,12 @@ impl Import {
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {
-        let source = self.source.resolve(non_interactive)?;
         let harnesses = self.harnesses.select(non_interactive)?;
-        let config = self.config.for_many(&harnesses)?;
         if harnesses.is_empty() {
             return Ok(());
         }
+        let config = self.config.for_many(&harnesses)?;
+        let source = self.source.resolve(non_interactive)?;
         for harness in harnesses {
             writeln!(output, "{}:", harness.name())?;
             let args = StackArgs::for_harnessless(

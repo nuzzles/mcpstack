@@ -376,6 +376,7 @@ fn direct_multi_harness_import_targets_isolated_configs() {
 #[test]
 fn direct_commands_require_missing_inputs_without_a_terminal() {
     for (args, expected) in [
+        (vec!["import"], "--harness codex"),
         (vec!["show"], "--harness codex"),
         (vec!["list"], "--harness codex"),
         (vec!["import", "--harness", "codex"], "SOURCE"),
