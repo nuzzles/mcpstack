@@ -47,12 +47,15 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
             .iter()
             .find(|command| command["name"] == name)
             .unwrap();
-        assert!(
-            direct["options"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|option| option["long"] == "--harness")
+        let harness = direct["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|option| option["long"] == "--harness")
+            .unwrap();
+        assert_eq!(
+            harness["action"],
+            if name == "import" { "append" } else { "set" }
         );
         assert!(
             direct["description"]
@@ -293,11 +296,16 @@ fn direct_commands_select_harnesses_and_preserve_single_stack_output() {
         std::fs::read_to_string(&config).unwrap(),
         "[mcp_servers.demo]\ncommand='tool'\n"
     );
+    let switched = invoke("use", &[stack.to_str().unwrap(), "-y"]);
+    assert!(switched.status.success(), "{switched:?}");
+    let updated = std::fs::read_to_string(&config).unwrap();
+    assert!(updated.contains("added"));
+    assert!(!updated.contains("demo"));
 }
 
 #[cfg(unix)]
 #[test]
-fn direct_multi_harness_import_and_use_target_isolated_configs() {
+fn direct_multi_harness_import_targets_isolated_configs() {
     let dir = tempfile::tempdir().unwrap();
     let codex_home = dir.path().join("codex");
     std::fs::create_dir(&codex_home).unwrap();
@@ -328,28 +336,6 @@ fn direct_multi_harness_import_and_use_target_isolated_configs() {
             .output()
             .unwrap()
     };
-    let listed = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
-        .args([
-            "--non-interactive",
-            "list",
-            "--harness",
-            "codex",
-            "--harness",
-            "claude",
-        ])
-        .env("CODEX_HOME", &codex_home)
-        .env("HOME", dir.path())
-        .env_remove("RUST_LOG")
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert!(listed.status.success(), "{listed:?}");
-    let listing = String::from_utf8_lossy(&listed.stdout);
-    assert!(listing.contains("Codex:"));
-    assert!(listing.contains("Claude Code:"));
-    let diff = invoke("diff", &[]);
-    assert!(diff.status.success(), "{diff:?}");
-    assert!(String::from_utf8_lossy(&diff.stdout).contains("Claude Code:"));
     let preview = invoke("import", &["--dry-run", "-y"]);
     assert!(preview.status.success(), "{preview:?}");
     assert!(String::from_utf8_lossy(&preview.stdout).contains("Claude Code:"));
@@ -375,15 +361,13 @@ fn direct_multi_harness_import_and_use_target_isolated_configs() {
             .unwrap()
             .contains("added")
     );
-    let switched = invoke("use", &["-y"]);
-    assert!(switched.status.success(), "{switched:?}");
     assert!(
-        !std::fs::read_to_string(&codex_config)
+        std::fs::read_to_string(&codex_config)
             .unwrap()
             .contains("old")
     );
     assert!(
-        !std::fs::read_to_string(&claude_config)
+        std::fs::read_to_string(&claude_config)
             .unwrap()
             .contains("old")
     );
@@ -404,10 +388,14 @@ fn direct_commands_require_missing_inputs_without_a_terminal() {
         assert!(result.stdout.is_empty());
         assert!(String::from_utf8_lossy(&result.stderr).contains(expected));
     }
-    let result = run(&["show", "--harness", "codex", "--harness", "claude"]);
-    assert_eq!(result.status.code(), Some(2));
+    for operation in ["export", "use", "diff", "show", "list"] {
+        let result = run(&[operation, "--harness", "codex", "--harness", "claude"]);
+        assert_eq!(result.status.code(), Some(2), "{operation}: {result:?}");
+        assert!(result.stdout.is_empty());
+    }
     let result = run(&[
-        "list",
+        "import",
+        "missing.yaml",
         "--harness",
         "codex",
         "--harness",

@@ -2,7 +2,7 @@ List configured servers without running them.
 
 ```sh
 mcpstack list
-mcpstack list --harness codex --harness claude --non-interactive
+mcpstack list --harness codex --non-interactive
 mcpstack codex list
 ```
 

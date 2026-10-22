@@ -16,9 +16,9 @@ The [skill](https://nuzzles.github.io/mcpstack/.well-known/skills/mcpstack/SKILL
 
 ## Automation
 
-Direct commands need an explicit `--harness` when prompts are disabled. Repeat
-it for `list`, `diff`, `import`, or `use` to process both harnesses. `show` and
-`export` produce one stack and accept one harness.
+Direct commands need an explicit `--harness` when prompts are disabled. Only
+`import` accepts repeated `--harness` to process both harnesses; every other
+client command selects one.
 
 ```sh
 mcpstack --schema

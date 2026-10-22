@@ -71,7 +71,7 @@ pub enum AppError {
     #[error("{code}", code = ErrorCode::InvalidArgument)]
     Arguments,
     #[error(
-        "Select a harness in a terminal or pass --harness codex or --harness claude (repeat to select both). Namespaced commands also work without prompts."
+        "Select a harness in a terminal or pass --harness codex or --harness claude. Only import accepts multiple harnesses. Namespaced commands also work without prompts."
     )]
     HarnessSelectionRequired,
     #[error("Unable to complete harness selection.")]

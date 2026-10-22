@@ -103,10 +103,10 @@ fn filter(harness: Harness, selection: Selection, all: bool) -> ServerFilter {
 }
 
 #[derive(Args)]
-/// List configured MCP servers in selected harnesses.
+/// List configured MCP servers in one harness.
 pub struct List {
     #[command(flatten)]
-    harnesses: ManyHarnesses,
+    harness: OneHarness,
     #[command(flatten)]
     config: Config,
     #[command(flatten)]
@@ -123,17 +123,23 @@ impl List {
         non_interactive: bool,
         colored: bool,
     ) -> Result<(), AppError> {
-        let harnesses = self.harnesses.select(non_interactive)?;
-        let config = self.config.for_many(&harnesses)?;
-        for harness in harnesses {
-            writeln!(output, "{}:", harness.name())?;
-            let filter = filter(harness, self.selection.clone(), self.all);
-            match harness {
-                Harness::Claude => Claude.list(config.clone(), filter, output, colored).await?,
-                Harness::Codex => Codex.list(config.clone(), filter, output, colored).await?,
+        let Some(harness) = self.harness.select(non_interactive)? else {
+            return Ok(());
+        };
+        writeln!(output, "{}:", harness.name())?;
+        let filter = filter(harness, self.selection, self.all);
+        match harness {
+            Harness::Claude => {
+                Claude
+                    .list(self.config.config, filter, output, colored)
+                    .await
+            }
+            Harness::Codex => {
+                Codex
+                    .list(self.config.config, filter, output, colored)
+                    .await
             }
         }
-        Ok(())
     }
 }
 
@@ -236,10 +242,10 @@ impl Export {
 }
 
 #[derive(Args)]
-/// Preview a stack against selected harnesses.
+/// Preview a stack against one harness.
 pub struct Diff {
     #[command(flatten)]
-    harnesses: ManyHarnesses,
+    harness: OneHarness,
     #[command(flatten)]
     config: Config,
     #[command(flatten)]
@@ -259,25 +265,20 @@ impl Diff {
         colored: bool,
     ) -> Result<(), AppError> {
         let source = self.source.resolve(non_interactive)?;
-        let harnesses = self.harnesses.select(non_interactive)?;
-        let config = self.config.for_many(&harnesses)?;
-        if harnesses.is_empty() {
+        let Some(harness) = self.harness.select(non_interactive)? else {
             return Ok(());
+        };
+        writeln!(output, "{}:", harness.name())?;
+        let args = StackArgs::for_harnessless(
+            source,
+            self.config.config,
+            self.selection,
+            self.include_permissions,
+        );
+        match harness {
+            Harness::Claude => Claude.diff(args, output, non_interactive, colored).await,
+            Harness::Codex => Codex.diff(args, output, non_interactive, colored).await,
         }
-        for harness in harnesses {
-            writeln!(output, "{}:", harness.name())?;
-            let args = StackArgs::for_harnessless(
-                source.clone(),
-                config.clone(),
-                self.selection.clone(),
-                self.include_permissions,
-            );
-            match harness {
-                Harness::Claude => Claude.diff(args, output, non_interactive, colored).await?,
-                Harness::Codex => Codex.diff(args, output, non_interactive, colored).await?,
-            }
-        }
-        Ok(())
     }
 }
 
@@ -360,10 +361,10 @@ impl Import {
 }
 
 #[derive(Args)]
-/// Replace MCP servers in selected harnesses with a stack.
+/// Replace MCP servers in one harness with a stack.
 pub struct Use {
     #[command(flatten)]
-    harnesses: ManyHarnesses,
+    harness: OneHarness,
     #[command(flatten)]
     config: Config,
     #[command(flatten)]
@@ -391,46 +392,41 @@ impl Use {
         colored: bool,
     ) -> Result<(), AppError> {
         let source = self.source.resolve(non_interactive)?;
-        let harnesses = self.harnesses.select(non_interactive)?;
-        let config = self.config.for_many(&harnesses)?;
-        if harnesses.is_empty() {
+        let Some(harness) = self.harness.select(non_interactive)? else {
             return Ok(());
-        }
-        for harness in harnesses {
-            writeln!(output, "{}:", harness.name())?;
-            let args = StackArgs::for_harnessless(
-                source.clone(),
-                config.clone(),
-                Selection::default(),
-                self.include_permissions,
-            );
-            match harness {
-                Harness::Claude => {
-                    Claude
-                        .use_stack(
-                            args,
-                            output,
-                            non_interactive,
-                            colored,
-                            self.dry_run,
-                            self.auto_approve,
-                        )
-                        .await?
-                }
-                Harness::Codex => {
-                    Codex
-                        .use_stack(
-                            args,
-                            output,
-                            non_interactive,
-                            colored,
-                            self.dry_run,
-                            self.auto_approve,
-                        )
-                        .await?
-                }
+        };
+        writeln!(output, "{}:", harness.name())?;
+        let args = StackArgs::for_harnessless(
+            source,
+            self.config.config,
+            Selection::default(),
+            self.include_permissions,
+        );
+        match harness {
+            Harness::Claude => {
+                Claude
+                    .use_stack(
+                        args,
+                        output,
+                        non_interactive,
+                        colored,
+                        self.dry_run,
+                        self.auto_approve,
+                    )
+                    .await
+            }
+            Harness::Codex => {
+                Codex
+                    .use_stack(
+                        args,
+                        output,
+                        non_interactive,
+                        colored,
+                        self.dry_run,
+                        self.auto_approve,
+                    )
+                    .await
             }
         }
-        Ok(())
     }
 }

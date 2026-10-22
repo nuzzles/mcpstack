@@ -161,6 +161,7 @@ def main():
         "Use `mcpstack <command>` for interactive harness selection or "
         "`--harness codex` or `--harness claude` for unattended runs. "
         "Namespaced `mcpstack <harness> <command>` forms remain available. "
+        "Only `import` accepts multiple harnesses. "
         "`--config <PATH>` selects a configuration for one harness.\n",
         "`--non-interactive` disables prompts; `-y` approves changes. "
         "Permissions always require `--include-permissions`.\n",

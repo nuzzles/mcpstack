@@ -1,7 +1,7 @@
 Replace the entire server set. **Servers absent from the stack are removed.**
 
 ```sh
-mcpstack use work.yaml --harness codex --harness claude --dry-run --non-interactive
+mcpstack use work.yaml --harness codex --dry-run --non-interactive
 mcpstack codex use work.yaml --dry-run --non-interactive
 mcpstack codex use work.yaml --non-interactive -y
 mcpstack codex use https://example.com/work.yaml --dry-run --non-interactive

@@ -7,8 +7,8 @@ description: Manage MCP server configurations with mcpstack. Use when inspecting
 
 Use the CLI to manage server configuration; it does not install or run MCP servers.
 For client commands, use `mcpstack <command>` to select a harness interactively.
-For unattended runs, pass `--harness codex` or `--harness claude`; repeat it for `list`,
-`diff`, `import`, or `use`. `show` and `export` choose one harness. The namespaced
+For unattended runs, pass `--harness codex` or `--harness claude`; repeat it only
+for `import`. Other client commands choose one harness. The namespaced
 `mcpstack codex <command>` and `mcpstack claude <command>` forms remain available.
 Claude Desktop is unsupported.
 
