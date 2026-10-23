@@ -23,7 +23,7 @@ npx skills add https://nuzzles.github.io/mcpstack
 
 ## Harness Support
 
-| Harness | mcpstack 0.1.0 | mcpstack 0.2.0 |
+| Harness | mcpstack 0.1.0-0.2.0 | main (source) |
 | --- | --- | --- |
 | Codex | ✅ | ✅ |
 | Claude Code | ✅ | ✅ |
