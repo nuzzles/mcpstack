@@ -6,8 +6,8 @@ Changes are grouped under Added, Changed, Deprecated, Removed, Fixed, and Securi
 Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 -->
 
-The latest published mcpstack release is [0.1.0 on crates.io](https://crates.io/crates/mcpstack/0.1.0),
-released on 2026-10-12. Its changes are [documented below](#010---2026-10-12).
+The latest mcpstack release is [0.2.0](#020---2026-10-22), released on
+2026-10-22. Its changes are documented below.
 
 ## [Unreleased]
 
