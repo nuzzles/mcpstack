@@ -1,6 +1,8 @@
 Print a portable YAML stack to stdout.
 
 ```sh
+mcpstack show
+mcpstack show --harness codex --non-interactive
 mcpstack codex show --non-interactive
 ```
 

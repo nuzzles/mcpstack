@@ -1,6 +1,7 @@
 Preview a redacted import diff without writing files or running servers.
 
 ```sh
+mcpstack diff work.yaml --harness codex --non-interactive
 mcpstack codex diff work.yaml --non-interactive
 mcpstack codex diff https://example.com/work.yaml --non-interactive
 ```

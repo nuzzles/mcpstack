@@ -16,6 +16,10 @@ The [skill](https://nuzzles.github.io/mcpstack/.well-known/skills/mcpstack/SKILL
 
 ## Automation
 
+Direct commands need an explicit `--harness` when prompts are disabled. Only
+`import` accepts repeated `--harness` to process both harnesses; every other
+client command selects one.
+
 ```sh
 mcpstack --schema
 mcpstack codex import work.yaml --dry-run --non-interactive -y

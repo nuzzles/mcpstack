@@ -141,3 +141,20 @@ impl Export {
         Ok(())
     }
 }
+
+pub(crate) async fn run_with(
+    file: PathBuf,
+    overwrite: bool,
+    show: Show,
+    target: &impl ClientAdapter,
+    output: &mut impl Write,
+    non_interactive: bool,
+) -> Result<(), AppError> {
+    Export {
+        file,
+        overwrite,
+        show,
+    }
+    .run(target, output, non_interactive)
+    .await
+}

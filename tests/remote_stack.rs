@@ -84,6 +84,49 @@ fn config_text(client: &str) -> &'static str {
     if client == "codex" { "" } else { "{}" }
 }
 
+#[cfg(unix)]
+#[test]
+fn direct_import_fetches_a_multi_harness_url_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let codex_home = dir.path().join("codex");
+    std::fs::create_dir(&codex_home).unwrap();
+    let codex_config = codex_home.join("config.toml");
+    let claude_config = dir.path().join(".claude.json");
+    std::fs::write(&codex_config, "").unwrap();
+    std::fs::write(&claude_config, "{}").unwrap();
+    // The fixture closes after one response, like a one-use signed stack URL.
+    let (url, server) = serve("200 OK", STACK.as_bytes());
+    let result = Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+        .args([
+            "--non-interactive",
+            "import",
+            &url,
+            "--harness",
+            "codex",
+            "--harness",
+            "claude",
+            "-y",
+        ])
+        .env("CODEX_HOME", &codex_home)
+        .env("HOME", dir.path())
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(server.join().unwrap());
+    assert!(result.status.success(), "{result:?}");
+    assert!(
+        std::fs::read_to_string(&codex_config)
+            .unwrap()
+            .contains("example")
+    );
+    assert!(
+        std::fs::read_to_string(&claude_config)
+            .unwrap()
+            .contains("example")
+    );
+}
+
 #[test]
 fn http_stack_works_for_validate_diff_import_and_use_in_both_clients() {
     let dir = tempfile::tempdir().unwrap();

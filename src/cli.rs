@@ -1,6 +1,7 @@
 mod diagnostics;
 pub(crate) mod schema;
 
+use crate::cmd::direct;
 use crate::cmd::schema::Schema;
 use crate::cmd::update::Update;
 use crate::cmd::validate::Validate;
@@ -45,6 +46,12 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    List(direct::List),
+    Show(direct::Show),
+    Export(direct::Export),
+    Diff(direct::Diff),
+    Import(direct::Import),
+    Use(direct::Use),
     Validate(Validate),
     Update(Update),
     #[command(flatten)]
@@ -53,11 +60,18 @@ enum Commands {
 
 impl Cli {
     fn should_check_updates(&self, interactive: bool) -> bool {
+        let eligible = match &self.command {
+            Some(Commands::Client(client)) => client.allows_update_check(),
+            Some(Commands::Export(_)) => true,
+            Some(Commands::Import(args)) => !args.is_dry_run(),
+            Some(Commands::Use(args)) => !args.is_dry_run(),
+            _ => false,
+        };
         !self.skip_version_check
             && !self.non_interactive
             && !self.logging.quiet()
             && interactive
-            && matches!(&self.command, Some(Commands::Client(client)) if client.allows_update_check())
+            && eligible
     }
 
     pub async fn run(self, output: &mut impl Write) -> Result<(), AppError> {
@@ -73,19 +87,46 @@ impl Cli {
             Schema.run(output)?;
             Ok(())
         } else if let Some(command) = self.command {
-            match command {
+            let result = match command {
+                Commands::List(inner) => {
+                    inner
+                        .run(output, self.non_interactive, self.logging.output_ansi())
+                        .await
+                }
+                Commands::Show(inner) => inner.run(output, self.non_interactive).await,
+                Commands::Export(inner) => inner.run(output, self.non_interactive).await,
+                Commands::Diff(inner) => {
+                    inner
+                        .run(output, self.non_interactive, self.logging.output_ansi())
+                        .await
+                }
+                Commands::Import(inner) => {
+                    let outcome = inner
+                        .run(output, self.non_interactive, self.logging.output_ansi())
+                        .await?;
+                    if matches!(outcome, direct::ImportOutcome::NoHarnesses) {
+                        return Ok(());
+                    }
+                    Ok(())
+                }
+                Commands::Use(inner) => {
+                    inner
+                        .run(output, self.non_interactive, self.logging.output_ansi())
+                        .await
+                }
                 Commands::Validate(inner) => inner.run(output).await,
                 Commands::Update(inner) => inner.run(output, self.non_interactive).await,
                 Commands::Client(client) => {
                     client
                         .run(output, self.non_interactive, self.logging.output_ansi())
-                        .await?;
-                    if check {
-                        update::notify().await;
-                    }
-                    Ok(())
+                        .await
                 }
+            };
+            result?;
+            if check {
+                update::notify().await;
             }
+            Ok(())
         } else {
             Self::command().write_long_help(output)?;
             Ok(())
@@ -137,6 +178,22 @@ mod tests {
             vec!["mcpstack", "update", "--check"],
         ] {
             assert!(!parse(args).should_check_updates(true));
+        }
+        for operation in ["export", "import", "use"] {
+            let cli = parse(["mcpstack", operation, "stack.yaml", "--harness", "codex"]);
+            assert!(cli.should_check_updates(true));
+            assert!(!cli.should_check_updates(false));
+            if operation != "export" {
+                let cli = parse([
+                    "mcpstack",
+                    operation,
+                    "stack.yaml",
+                    "--harness",
+                    "codex",
+                    "--dry-run",
+                ]);
+                assert!(!cli.should_check_updates(true));
+            }
         }
     }
 }

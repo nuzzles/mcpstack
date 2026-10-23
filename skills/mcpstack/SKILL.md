@@ -6,12 +6,16 @@ description: Manage MCP server configurations with mcpstack. Use when inspecting
 # mcpstack
 
 Use the CLI to manage server configuration; it does not install or run MCP servers.
-Select `codex` or `claude` for the target harness. Claude Desktop is unsupported.
+For client commands, use `mcpstack <command>` to select a harness interactively.
+For unattended runs, pass `--harness codex` or `--harness claude`; repeat it only
+for `import`. Other client commands choose one harness. The namespaced
+`mcpstack codex <command>` and `mcpstack claude <command>` forms remain available.
+Claude Desktop is unsupported.
 
 ## Discover the installed interface
 
 Run `mcpstack --schema` for command arguments, defaults, dependencies, and error
-codes as JSON. Use `mcpstack <harness> <command> --help` for a focused reference.
+codes as JSON. Use `mcpstack <command> --help` for a focused reference.
 If the CLI is missing, install with `cargo install --locked mcpstack` when installation
 is within the user's request. The skill itself does not install the executable.
 

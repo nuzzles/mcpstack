@@ -1,6 +1,8 @@
 Save a portable YAML stack.
 
 ```sh
+mcpstack export
+mcpstack export work.yaml --harness codex --non-interactive
 mcpstack codex export work.yaml --non-interactive
 ```
 

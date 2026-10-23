@@ -3,6 +3,7 @@
 Show command help.
 
 ```sh
+mcpstack import --help
 mcpstack help codex import
 mcpstack claude use --help
 ```

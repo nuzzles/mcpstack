@@ -2,6 +2,7 @@
 mod claude;
 mod codex;
 mod diff_output;
+pub(crate) mod harness;
 mod header_helpers;
 mod listing;
 mod paths;
@@ -140,6 +141,7 @@ fn write_change_rows(
 pub const EXAMPLES: &[&str] = &[
     "mcpstack --schema",
     "mcpstack --help",
+    "mcpstack import --help",
     "mcpstack validate --help",
     "mcpstack codex --help",
     "mcpstack codex list --help",
@@ -170,6 +172,24 @@ pub struct ExportArgs {
 }
 
 impl ExportArgs {
+    pub(crate) fn for_harness(
+        harness: harness::Harness,
+        config: Option<PathBuf>,
+        selection: selection::Selection,
+        all: bool,
+        include_permissions: bool,
+    ) -> Self {
+        let mut server_filter = reserved::ServerFilter::for_harness(harness);
+        server_filter.selection = selection;
+        server_filter.all = all;
+        Self {
+            config,
+            include_permissions,
+            permissions_config: None,
+            server_filter,
+        }
+    }
+
     pub(crate) fn config_path(&self) -> Option<&Path> {
         self.config.as_deref()
     }
@@ -198,6 +218,23 @@ pub struct StackArgs {
     /// Use this Claude Code settings file for permission rules.
     #[arg(long, value_name = "PATH", requires_with_schema(["include_permissions"]))]
     permissions_config: Option<PathBuf>,
+}
+
+impl StackArgs {
+    pub(crate) fn for_harnessless(
+        file: StackSource,
+        config: Option<PathBuf>,
+        selection: selection::Selection,
+        include_permissions: bool,
+    ) -> Self {
+        Self {
+            selection,
+            file,
+            config,
+            include_permissions,
+            permissions_config: None,
+        }
+    }
 }
 
 #[derive(Subcommand)]

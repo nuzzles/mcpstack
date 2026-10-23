@@ -158,9 +158,11 @@ def main():
     revision = run("git", "rev-parse", "HEAD", cwd=ROOT, capture_output=True).stdout.strip()
     reference = [
         "# Commands\n",
-        "Use `mcpstack <harness> <command>`, with `codex` or `claude`. "
-        "`--config <PATH>` overrides the target configuration. "
-        "`validate` and `update` run at the top level.\n",
+        "Use `mcpstack <command>` for interactive harness selection or "
+        "`--harness codex` or `--harness claude` for unattended runs. "
+        "Namespaced `mcpstack <harness> <command>` forms remain available. "
+        "Only `import` accepts multiple harnesses. "
+        "`--config <PATH>` selects a configuration for one harness.\n",
         "`--non-interactive` disables prompts; `-y` approves changes. "
         "Permissions always require `--include-permissions`.\n",
         "## Operations\n\n| Command | Purpose |\n| --- | --- |",

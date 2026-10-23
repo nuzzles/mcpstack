@@ -70,6 +70,24 @@ pub enum AppError {
     Selection(#[from] crate::integrations::selection::Error),
     #[error("{code}", code = ErrorCode::InvalidArgument)]
     Arguments,
+    #[error(
+        "Select a harness in a terminal or pass --harness codex or --harness claude. Only import accepts multiple harnesses. Namespaced commands also work without prompts."
+    )]
+    HarnessSelectionRequired,
+    #[error("Unable to complete harness selection.")]
+    HarnessPrompt,
+    #[error(
+        "--config requires exactly one selected harness; use namespaced commands for separate config paths."
+    )]
+    ConfigHarnessAmbiguous,
+    #[error("Supply a stack SOURCE or use a terminal to enter one.")]
+    StackSourceRequired,
+    #[error("Stack source entry was cancelled or could not be completed.")]
+    StackSourcePrompt,
+    #[error("Supply an export FILE or use a terminal to enter one.")]
+    ExportDestinationRequired,
+    #[error("Export file entry was cancelled or could not be completed.")]
+    ExportDestinationPrompt,
     #[error("Export destination must end in .yml or .yaml.")]
     ExportPath,
     #[error("Export destination must differ from the client configuration file.")]
@@ -139,9 +157,17 @@ impl AppError {
         match self {
             Self::Update(error) => error.code(),
             Self::Logging => ErrorCode::LoggingError,
-            Self::Arguments | Self::Selection(_) | Self::StackUrlInvalid | Self::StackUrlScheme => {
-                ErrorCode::InvalidArgument
-            }
+            Self::Arguments
+            | Self::Selection(_)
+            | Self::HarnessSelectionRequired
+            | Self::HarnessPrompt
+            | Self::ConfigHarnessAmbiguous
+            | Self::StackSourceRequired
+            | Self::StackSourcePrompt
+            | Self::ExportDestinationRequired
+            | Self::ExportDestinationPrompt
+            | Self::StackUrlInvalid
+            | Self::StackUrlScheme => ErrorCode::InvalidArgument,
             Self::ExportPath | Self::ExportSource | Self::ExportOverwriteRequired => {
                 ErrorCode::InvalidArgument
             }

@@ -1,6 +1,7 @@
 //! CLI command execution.
 
 pub mod diff;
+pub mod direct;
 pub mod export;
 pub mod import;
 pub mod list;

@@ -29,7 +29,7 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
     assert_eq!(schema["cli_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(schema["command"]["name"], "mcpstack");
     let commands = schema["command"]["commands"].as_array().unwrap();
-    assert_eq!(commands.len(), 5); // validate, update, codex, claude, and generated help
+    assert_eq!(commands.len(), 11); // six direct commands, validate, update, two clients, help
     let validate = commands
         .iter()
         .find(|command| command["name"] == "validate")
@@ -43,7 +43,32 @@ fn schema_describes_the_executable_interface_and_is_deterministic() {
     let operations = codex["commands"].as_array().unwrap();
     for name in ["list", "use", "import", "show", "export", "diff"] {
         assert!(operations.iter().any(|operation| operation["name"] == name));
-        assert!(!commands.iter().any(|command| command["name"] == name));
+        let direct = commands
+            .iter()
+            .find(|command| command["name"] == name)
+            .unwrap();
+        let harness = direct["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|option| option["long"] == "--harness")
+            .unwrap();
+        assert_eq!(
+            harness["action"],
+            if name == "import" { "append" } else { "set" }
+        );
+        assert!(
+            direct["description"]
+                .as_str()
+                .is_some_and(|description| !description.is_empty())
+        );
+    }
+    for name in ["use", "import", "diff", "export"] {
+        let direct = commands
+            .iter()
+            .find(|command| command["name"] == name)
+            .unwrap();
+        assert_eq!(direct["arguments"][0]["required"], false);
     }
     let export = operations
         .iter()
@@ -219,6 +244,204 @@ fn schema_examples_are_runnable() {
             .unwrap();
         assert!(output.status.success(), "{example} failed: {output:?}");
     }
+}
+
+#[test]
+fn direct_commands_select_harnesses_and_preserve_single_stack_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    let stack = dir.path().join("stack.yaml");
+    let exported = dir.path().join("export.yaml");
+    std::fs::write(&config, "[mcp_servers.demo]\ncommand='tool'\n").unwrap();
+    std::fs::write(
+        &stack,
+        "schema_version: 1\nservers:\n  added:\n    transport: {type: stdio, command: tool}\n",
+    )
+    .unwrap();
+    let invoke = |operation: &str, extra: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args([
+                "--non-interactive",
+                operation,
+                "--harness",
+                "codex",
+                "--config",
+            ])
+            .arg(&config)
+            .args(extra)
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let shown = invoke("show", &[]);
+    assert!(shown.status.success(), "{shown:?}");
+    let yaml: Value = yaml_serde::from_slice(&shown.stdout).unwrap();
+    assert!(yaml["servers"]["demo"].is_object());
+    assert!(!String::from_utf8_lossy(&shown.stdout).contains("Codex:"));
+    let exported_result = invoke("export", &[exported.to_str().unwrap()]);
+    assert!(exported_result.status.success(), "{exported_result:?}");
+    assert_eq!(std::fs::read(&exported).unwrap(), shown.stdout);
+    for (operation, extra) in [
+        ("list", vec![]),
+        ("diff", vec![stack.to_str().unwrap()]),
+        ("import", vec![stack.to_str().unwrap(), "--dry-run", "-y"]),
+        ("use", vec![stack.to_str().unwrap(), "--dry-run"]),
+    ] {
+        let result = invoke(operation, &extra);
+        assert!(result.status.success(), "{operation}: {result:?}");
+        assert!(String::from_utf8_lossy(&result.stdout).starts_with("Codex:"));
+    }
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        "[mcp_servers.demo]\ncommand='tool'\n"
+    );
+    let switched = invoke("use", &[stack.to_str().unwrap(), "-y"]);
+    assert!(switched.status.success(), "{switched:?}");
+    let updated = std::fs::read_to_string(&config).unwrap();
+    assert!(updated.contains("added"));
+    assert!(!updated.contains("demo"));
+}
+
+#[test]
+fn direct_commands_do_not_print_a_harness_heading_before_config_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("invalid.toml");
+    let stack = dir.path().join("stack.yaml");
+    std::fs::write(&config, "[mcp_servers.invalid]\ncommand=[oops]\n").unwrap();
+    std::fs::write(
+        &stack,
+        "schema_version: 1\nservers:\n  added:\n    transport: {type: stdio, command: tool}\n",
+    )
+    .unwrap();
+    for operation in ["list", "diff", "import", "use"] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mcpstack"));
+        command
+            .args([
+                "--non-interactive",
+                operation,
+                "--harness",
+                "codex",
+                "--config",
+            ])
+            .arg(&config);
+        if operation != "list" {
+            command.arg(&stack);
+        }
+        let result = command
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(!result.status.success(), "{operation}: {result:?}");
+        assert!(result.stdout.is_empty(), "{operation}: {result:?}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_multi_harness_import_targets_isolated_configs() {
+    let dir = tempfile::tempdir().unwrap();
+    let codex_home = dir.path().join("codex");
+    std::fs::create_dir(&codex_home).unwrap();
+    let codex_config = codex_home.join("config.toml");
+    let claude_config = dir.path().join(".claude.json");
+    let stack = dir.path().join("stack.yaml");
+    std::fs::write(&codex_config, "[mcp_servers.old]\ncommand='tool'\n").unwrap();
+    std::fs::write(
+        &claude_config,
+        r#"{"mcpServers":{"old":{"command":"tool"}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &stack,
+        "schema_version: 1\nservers:\n  added:\n    transport: {type: stdio, command: tool}\n",
+    )
+    .unwrap();
+    let invoke = |operation: &str, flags: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_mcpstack"))
+            .args(["--non-interactive", operation])
+            .arg(&stack)
+            .args(["--harness", "codex", "--harness", "claude"])
+            .args(flags)
+            .env("CODEX_HOME", &codex_home)
+            .env("HOME", dir.path())
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let preview = invoke("import", &["--dry-run", "-y"]);
+    assert!(preview.status.success(), "{preview:?}");
+    assert!(String::from_utf8_lossy(&preview.stdout).contains("Claude Code:"));
+    assert!(
+        !std::fs::read_to_string(&codex_config)
+            .unwrap()
+            .contains("added")
+    );
+    assert!(
+        !std::fs::read_to_string(&claude_config)
+            .unwrap()
+            .contains("added")
+    );
+    let imported = invoke("import", &["-y"]);
+    assert!(imported.status.success(), "{imported:?}");
+    assert!(
+        std::fs::read_to_string(&codex_config)
+            .unwrap()
+            .contains("added")
+    );
+    assert!(
+        std::fs::read_to_string(&claude_config)
+            .unwrap()
+            .contains("added")
+    );
+    assert!(
+        std::fs::read_to_string(&codex_config)
+            .unwrap()
+            .contains("old")
+    );
+    assert!(
+        std::fs::read_to_string(&claude_config)
+            .unwrap()
+            .contains("old")
+    );
+}
+
+#[test]
+fn direct_commands_require_missing_inputs_without_a_terminal() {
+    for (args, expected) in [
+        (vec!["import"], "--harness codex"),
+        (vec!["show"], "--harness codex"),
+        (vec!["list"], "--harness codex"),
+        (vec!["import", "--harness", "codex"], "SOURCE"),
+        (vec!["use", "--harness", "codex"], "SOURCE"),
+        (vec!["diff", "--harness", "codex"], "SOURCE"),
+        (vec!["export", "--harness", "codex"], "FILE"),
+    ] {
+        let result = run(&args);
+        assert_eq!(result.status.code(), Some(2), "{args:?}: {result:?}");
+        assert!(result.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&result.stderr).contains(expected));
+    }
+    for operation in ["export", "use", "diff", "show", "list"] {
+        let result = run(&[operation, "--harness", "codex", "--harness", "claude"]);
+        assert_eq!(result.status.code(), Some(2), "{operation}: {result:?}");
+        assert!(result.stdout.is_empty());
+    }
+    let result = run(&[
+        "import",
+        "missing.yaml",
+        "--harness",
+        "codex",
+        "--harness",
+        "claude",
+        "--config",
+        "fixture-secret",
+    ]);
+    assert_eq!(result.status.code(), Some(2));
+    assert!(result.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&result.stderr).contains("fixture-secret"));
 }
 
 #[test]

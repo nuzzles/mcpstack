@@ -8,6 +8,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Run `list`, `show`, `export`, `diff`, `import`, and `use` without a harness
+  namespace. Interactive commands prompt for the target harness, and for a
+  stack source or export file when needed. Installed harnesses appear first.
+  `import` can select multiple harnesses; other commands select one. Use
+  `--harness` for noninteractive operation. Import asks for harnesses before
+  its source and reports a no-op if none are selected.
 - Load stacks from HTTP or HTTPS URLs with `validate` and the Codex and Claude
   Code `diff`, `import`, and `use` commands. Remote stacks require absolute or
   client-resolved command and working-directory paths.
