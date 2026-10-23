@@ -1,10 +1,21 @@
 # Changelog
 
-Notable changes to mcpstack are recorded here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
-follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+<!--
+This changelog follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Changes are grouped under Added, Changed, Deprecated, Removed, Fixed, and Security.
+Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+-->
+
+The latest mcpstack release is [0.2.0](#020---2026-10-22), released on
+2026-10-22. Its changes are documented below.
 
 ## [Unreleased]
+
+This release has an [MSRV][] of 1.98.
+
+## [0.2.0] - 2026-10-22
+
+This release has an [MSRV][] of 1.98.
 
 ### Added
 
@@ -18,6 +29,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Code `diff`, `import`, and `use` commands. Remote stacks require absolute or
   client-resolved command and working-directory paths.
 
-## [0.1.0]
+## [0.1.0] - 2026-10-12
 
-Initial release.
+This release has an [MSRV][] of 1.98.
+
+### Added
+
+- Initial release.
+
+[Unreleased]: https://github.com/nuzzles/mcpstack/compare/v0.2.0...main
+[0.2.0]: https://github.com/nuzzles/mcpstack/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/nuzzles/mcpstack/tree/release-0.1.0
+[MSRV]: README.md#msrv
