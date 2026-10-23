@@ -37,7 +37,7 @@ This release has an [MSRV][] of 1.98.
 
 - Initial release.
 
-[Unreleased]: https://github.com/nuzzles/mcpstack/compare/01044ce...main
-[0.2.0]: https://github.com/nuzzles/mcpstack/compare/release-0.1.0...01044ce
+[Unreleased]: https://github.com/nuzzles/mcpstack/compare/v0.2.0...main
+[0.2.0]: https://github.com/nuzzles/mcpstack/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nuzzles/mcpstack/tree/release-0.1.0
 [MSRV]: README.md#msrv
