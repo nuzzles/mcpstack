@@ -4,7 +4,9 @@ Notable changes to mcpstack are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## Unreleased
+
+## [0.2.0]
 
 ### Added
 
@@ -17,7 +19,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Load stacks from HTTP or HTTPS URLs with `validate` and the Codex and Claude
   Code `diff`, `import`, and `use` commands. Remote stacks require absolute or
   client-resolved command and working-directory paths.
+- Support WebSocket MCP servers in Claude Code and dynamic header helpers for
+  HTTP, SSE, and WebSocket transports where the harness supports them.
+- Provide an installable mcpstack skill for coding agents.
+
+### Fixed
+
+- Preserve runtime environment references and avoid collisions with generated
+  secret references when exporting and importing stacks.
+- Validate Claude Code configuration before applying changes.
 
 ## [0.1.0]
 
 Initial release.
+
+[0.2.0]: https://github.com/nuzzles/mcpstack/compare/e34e5c1...01044ce
+[0.1.0]: https://github.com/nuzzles/mcpstack/tree/e34e5c1
