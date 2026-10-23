@@ -24,5 +24,5 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Initial release.
 
-[0.2.0]: https://github.com/nuzzles/mcpstack/compare/7844342...01044ce
-[0.1.0]: https://github.com/nuzzles/mcpstack/tree/7844342
+[0.2.0]: https://github.com/nuzzles/mcpstack/compare/release-0.1.0...01044ce
+[0.1.0]: https://github.com/nuzzles/mcpstack/tree/release-0.1.0
