@@ -43,8 +43,8 @@ This crate's [Minimum Supported Rust Version (MSRV)][MSRV] is currently **1.98**
 
 | mcpstack | Minimum Rust version |
 | --- | --- |
-| 0.2.0 | 1.98 |
-| 0.1.0 | 1.98 |
+| main | 1.98 |
+| 0.1.0-0.2.0 | 1.98 |
 
 See [CONTRIBUTING.md](CONTRIBUTING.md#changing-the-msrv) for how to change
 the MSRV.
