@@ -6,7 +6,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
-## [0.2.0]
+## [0.2.0] - 2026-10-22
 
 ### Added
 
@@ -20,7 +20,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Code `diff`, `import`, and `use` commands. Remote stacks require absolute or
   client-resolved command and working-directory paths.
 
-## [0.1.0]
+## [0.1.0] - 2026-10-12
 
 Initial release.
 
